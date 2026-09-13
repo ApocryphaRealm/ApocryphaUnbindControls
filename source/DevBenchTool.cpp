@@ -6,7 +6,6 @@
 #include "Settings.h"
 #include "Unbinder.h"
 #include "utils/Logger.h"
-#include "utils/Strings.h"
 
 #include <atomic>
 #include <chrono>
@@ -39,8 +38,7 @@ namespace DevBenchTool
 			return out;
 		}
 
-		// The value of a top-level JSON member, as text: a quoted string (unescaped for \" and \\)
-		// or a bare number/word. Empty when absent.
+		// The value of a top-level JSON member, as text: a quoted string or a bare word. Empty when absent.
 		std::string Get(std::string_view a_json, const char* a_name)
 		{
 			const std::string key = std::format("\"{}\"", a_name);
@@ -66,8 +64,8 @@ namespace DevBenchTool
 			return out;
 		}
 
-		// Runs a_fn on the game's main thread and waits (the handler runs on DevBench's own
-		// thread; the ControlMap is only touched on the main thread).
+		// Runs a_fn on the game's main thread and waits (the handler runs on DevBench's own thread; the
+		// ControlMap is only touched on the main thread).
 		bool RunOnMainThread(std::function<void()> a_fn, int a_timeoutMs = 4000)
 		{
 			auto* tasks = SKSE::GetTaskInterface();
@@ -110,13 +108,6 @@ namespace DevBenchTool
 				a_write(a_sink, out.c_str());
 				return;
 			}
-			if (op == "rows")
-			{
-				const int ctx = ContextArg(args);
-				if (ctx == -2) { a_write(a_sink, R"({"ok":false,"op":"rows","error":"unknown context"})"); return; }
-				a_write(a_sink, unbinder::RowsJson(ctx).c_str());
-				return;
-			}
 			if (op == "unbind" || op == "rebind")
 			{
 				const int ctx = ContextArg(args);
@@ -133,63 +124,27 @@ namespace DevBenchTool
 					ok = op == "unbind" ? unbinder::Unbind(ctx, event, dev, why) : unbinder::Rebind(ctx, event, dev, why);
 					if (ok) { settings::Save(); }
 				});
-				if (!ran) { a_write(a_sink, std::format(R"({{"ok":false,"op":"{}","error":"main thread did not run the task in time"}})", op).c_str()); return; }
-				a_write(a_sink, std::format(R"({{"ok":{},"op":"{}","context":"{}","event":"{}","device":"{}","why":"{}"}})", ok ? "true" : "false", op,
+				if (!ran) { a_write(a_sink, std::format("{{\"ok\":false,\"op\":\"{}\",\"error\":\"main thread did not run the task in time\"}}", op).c_str()); return; }
+				a_write(a_sink, std::format("{{\"ok\":{},\"op\":\"{}\",\"context\":\"{}\",\"event\":\"{}\",\"device\":\"{}\",\"why\":\"{}\"}}", ok ? "true" : "false", op,
 											unbinder::ContextName(ctx), EscapeJson(event), unbinder::DeviceName(dev), EscapeJson(why)).c_str());
 				return;
 			}
 			if (op == "apply")
 			{
 				const bool ran = RunOnMainThread([]() { unbinder::ApplyAll("tool"); });
-				a_write(a_sink, std::format(R"({{"ok":{},"op":"apply"}})", ran ? "true" : "false").c_str());
+				a_write(a_sink, std::format("{{\"ok\":{},\"op\":\"apply\"}}", ran ? "true" : "false").c_str());
 				return;
 			}
 			if (op == "reload")
 			{
 				bool ok = false;
 				const bool ran = RunOnMainThread([&]() { unbinder::RestoreAll("tool reload"); ok = settings::Reload(); unbinder::ApplyAll("tool reload"); });
-				a_write(a_sink, std::format(R"({{"ok":{},"op":"reload"}})", (ran && ok) ? "true" : "false").c_str());
-				return;
-			}
-			if (op == "save")
-			{
-				bool ok = false;
-				const bool ran = RunOnMainThread([&]() { ok = settings::Save(); });
-				a_write(a_sink, std::format(R"({{"ok":{},"op":"save"}})", (ran && ok) ? "true" : "false").c_str());
-				return;
-			}
-			if (op == "restore")
-			{
-				const bool ran = RunOnMainThread([]() {
-					unbinder::ClearAll();
-					settings::RestoreDefaults();
-					unbinder::SetEntries(unbinder::DefaultEntries());
-					unbinder::ApplyAll("tool restore");
-					settings::Save();
-				});
-				a_write(a_sink, std::format(R"({{"ok":{},"op":"restore"}})", ran ? "true" : "false").c_str());
-				return;
-			}
-			if (op == "enable" || op == "disable")
-			{
-				const bool on = op == "enable";
-				const bool ran = RunOnMainThread([on]() {
-					settings::general::enabled = on;
-					if (on) { unbinder::ApplyAll("tool enable"); } else { unbinder::RestoreAll("tool disable"); }
-					settings::Save();
-				});
-				a_write(a_sink, std::format(R"({{"ok":{},"op":"{}"}})", ran ? "true" : "false", op).c_str());
-				return;
-			}
-			if (op == "strings")
-			{
-				a_write(a_sink, std::format(R"({{"ok":true,"op":"strings","strings":{}}})", strings::StatusJson()).c_str());
+				a_write(a_sink, std::format("{{\"ok\":{},\"op\":\"reload\"}}", (ran && ok) ? "true" : "false").c_str());
 				return;
 			}
 
 			const std::string json = std::format(
-				"{{\"ok\":true,\"op\":\"state\","
-				"\"settings\":{{\"enabled\":{},\"logLevel\":{},\"iniPath\":\"{}\"}},{}}}",
+				"{{\"ok\":true,\"op\":\"state\",\"settings\":{{\"enabled\":{},\"logLevel\":{},\"iniPath\":\"{}\"}},{}}}",
 				settings::general::enabled ? "true" : "false", settings::debug::logLevel, EscapeJson(settings::GetIniPath()), unbinder::StateJson());
 			a_write(a_sink, json.c_str());
 		}
@@ -210,12 +165,11 @@ namespace DevBenchTool
 
 		constexpr const char* descriptor =
 			"{"
-			"\"description\":\"Unbind Vanilla Controls live state and driver. op=state (default): settings, the list of unbound "
-			"controls with their remembered keys, last apply. op=dump [context]: every mapping of the live ControlMap (event, key, modifier, "
-			"index, remappable, linked, flags) per context and device. op=rows [context]: the page's snapshot. op=unbind / op=rebind with "
-			"context (name or index), event, device (keyboard|mouse|gamepad): the same calls the page's switches make, saved. op=apply re-applies "
-			"the list; op=reload restores, re-reads the INI and applies; op=save; op=restore gives every key back, then applies the shipped list (Journal, Quick Inventory, Quick Magic, Quick Map, Quick Stats, Wait on the keyboard);"
-			"op=enable / op=disable; op=strings reports the active language.\","
+			"\"description\":\"Unbind Vanilla Controls live state and driver. op=state (default): settings, the INI list with the "
+			"keys captured this session, last apply. op=dump [context]: every mapping of the live ControlMap (event, key, modifier, "
+			"remappable) per context and device. op=unbind / op=rebind with context (name or index), event, device "
+			"(keyboard|mouse|gamepad): add to or remove from the list, applied and written to the INI. op=apply re-applies the list; "
+			"op=reload gives the keys back, re-reads the INI and applies.\","
 			"\"inputSchema\":{\"type\":\"object\",\"properties\":{\"op\":{\"type\":\"string\"},\"context\":{\"type\":\"string\"},\"event\":{\"type\":\"string\"},\"device\":{\"type\":\"string\"}}},"
 			"\"readOnly\":false"
 			"}";

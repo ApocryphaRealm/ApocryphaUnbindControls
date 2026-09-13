@@ -57,34 +57,8 @@ namespace settings
 
 		bool IsSectionHeader(const std::string& a_t) { return a_t.size() >= 2 && a_t.front() == '[' && a_t.back() == ']'; }
 
-		// "0x0f/0xff,0x4f/0xff" -> pairs. A bare "0x0f" means modifier 0xff.
-		bool ParseOriginals(const std::string& a_text, std::vector<unbinder::KeyPair>& a_out)
-		{
-			a_out.clear();
-			std::string t = Trim(a_text);
-			if (t.empty()) { return true; }  // no remembered key: captured at the first apply
-			std::size_t pos = 0;
-			while (pos <= t.size())
-			{
-				auto comma = t.find(',', pos);
-				if (comma == std::string::npos) { comma = t.size(); }
-				const std::string item = Trim(t.substr(pos, comma - pos));
-				pos = comma + 1;
-				if (item.empty()) { continue; }
-				unbinder::KeyPair kp;
-				const auto slash = item.find('/');
-				try
-				{
-					kp.key = static_cast<std::uint16_t>(std::stoul(item.substr(0, slash), nullptr, 0));
-					kp.modifier = slash == std::string::npos ? 0xFF : static_cast<std::uint16_t>(std::stoul(item.substr(slash + 1), nullptr, 0));
-				}
-				catch (...) { return false; }
-				a_out.push_back(kp);
-			}
-			return true;
-		}
-
-		// Reads scalars into the key:section map and the [Unbound] lines into entries.
+		// Scalars go into the key:section map; each [Unbound] line - "Context|Control|Device", an "=..."
+		// after it is accepted and ignored - becomes an entry.
 		void ReadFile(std::map<std::string, std::string>& a_keys, std::vector<unbinder::Entry>& a_entries, int& a_badLines)
 		{
 			std::ifstream in(iniPath);
@@ -96,12 +70,9 @@ namespace settings
 				if (t.empty() || t[0] == ';' || t[0] == '#') { continue; }
 				if (IsSectionHeader(t)) { section = Lower(t.substr(1, t.size() - 2)); continue; }
 				const auto eq = t.find('=');
-				if (eq == std::string::npos) { continue; }
-				const std::string key = Trim(t.substr(0, eq));
-				const std::string value = Trim(t.substr(eq + 1));
 				if (section == "unbound")
 				{
-					// Context|Control|Device
+					const std::string key = Trim(eq == std::string::npos ? t : t.substr(0, eq));
 					const auto p1 = key.find('|');
 					const auto p2 = p1 == std::string::npos ? std::string::npos : key.find('|', p1 + 1);
 					if (p1 == std::string::npos || p2 == std::string::npos) { ++a_badLines; logger::warn("INI [Unbound] line \"{}\" is not Context|Control|Device; ignored", key); continue; }
@@ -111,13 +82,13 @@ namespace settings
 					e.device = unbinder::DeviceIndex(Trim(key.substr(p2 + 1)));
 					if (unbinder::ContextIndex(e.context) < 0) { ++a_badLines; logger::warn("INI [Unbound] line \"{}\": unknown context \"{}\"; ignored", key, e.context); continue; }
 					if (e.device < 0) { ++a_badLines; logger::warn("INI [Unbound] line \"{}\": unknown device; ignored (keyboard, mouse or gamepad)", key); continue; }
-					if (!ParseOriginals(value, e.original)) { ++a_badLines; logger::warn("INI [Unbound] line \"{}\": value \"{}\" is not a key list; the key will be captured at the next apply", key, value); e.original.clear(); }
 					const bool dup = std::any_of(a_entries.begin(), a_entries.end(), [&](const unbinder::Entry& o) { return o.device == e.device && Lower(o.context) == Lower(e.context) && Lower(o.event) == Lower(e.event); });
 					if (dup) { logger::warn("INI [Unbound] line \"{}\" repeats an earlier line; ignored", key); continue; }
 					a_entries.push_back(std::move(e));
 					continue;
 				}
-				a_keys[Lower(key) + ":" + section] = value;
+				if (eq == std::string::npos) { continue; }
+				a_keys[Lower(Trim(t.substr(0, eq))) + ":" + section] = Trim(t.substr(eq + 1));
 			}
 		}
 
@@ -139,9 +110,10 @@ namespace settings
 			};
 			get("uloglevel:debug", debug::logLevel, ParseUInt);
 			get("benabled:general", general::enabled, ParseBool);
+			const std::size_t count = entries.size();
 			unbinder::SetEntries(std::move(entries));
 			logger::info("settings loaded from {}: enabled={} logLevel={} unbound entries={}{}", iniPath, general::enabled, debug::logLevel,
-						 unbinder::GetEntries().size(), bad ? std::format(" ({} bad line(s) ignored)", bad) : "");
+						 count, bad ? std::format(" ({} bad line(s) ignored)", bad) : "");
 			return true;
 		}
 
@@ -166,39 +138,25 @@ namespace settings
 			return false;
 		}
 
-		std::string EntryLine(const unbinder::Entry& a_e)
-		{
-			std::string v;
-			for (const auto& k : a_e.original)
-			{
-				if (!v.empty()) { v += ","; }
-				v += std::format("0x{:02x}/0x{:02x}", k.key, k.modifier);
-			}
-			return std::format("{}|{}|{}={}", a_e.context, a_e.event, unbinder::DeviceName(a_e.device), v);
-		}
-
-		// Rewrites the [Unbound] section: its header and leading comment lines are kept, every old
-		// key line is dropped, the current list is written in their place. A missing section is
-		// appended.
+		// Rewrites the [Unbound] section's entry lines (used by the DevBench tool's unbind/rebind). The header
+		// and the comment block under it are kept; a missing section is appended.
 		void WriteUnbound(std::vector<std::string>& a_lines, const std::vector<unbinder::Entry>& a_entries)
 		{
+			std::vector<std::string> fresh;
+			for (const auto& e : a_entries) { fresh.push_back(std::format("{}|{}|{}", e.context, e.event, unbinder::DeviceName(e.device))); }
 			std::size_t header = a_lines.size();
 			for (std::size_t i = 0; i < a_lines.size(); ++i)
 			{
 				const std::string t = Trim(a_lines[i]);
 				if (IsSectionHeader(t) && Lower(t) == "[unbound]") { header = i; break; }
 			}
-			std::vector<std::string> fresh;
-			for (const auto& e : a_entries) { fresh.push_back(EntryLine(e)); }
 			if (header == a_lines.size())
 			{
 				if (!a_lines.empty() && !Trim(a_lines.back()).empty()) { a_lines.push_back(""); }
 				a_lines.push_back("[Unbound]");
-				a_lines.push_back("; One line per control this mod leaves without a key: Context|Control|Device = the key(s) the game had there.");
 				a_lines.insert(a_lines.end(), fresh.begin(), fresh.end());
 				return;
 			}
-			// Keep comments and blanks directly under the header; drop key lines up to the next section.
 			std::size_t keep = header + 1;
 			while (keep < a_lines.size())
 			{
@@ -221,8 +179,8 @@ namespace settings
 		iniPath = (std::filesystem::current_path() / "Data" / "SKSE" / "Plugins" / a_iniFileName).string();
 
 		defaults = { debug::logLevel, general::enabled };
-		// Compiled default list = the shipped INI's [Unbound] lines (rule 16). An INI that exists
-		// replaces it with whatever it lists, including nothing.
+		// Compiled default list = the shipped INI's [Unbound] lines (rule 16). An INI that exists replaces it
+		// with whatever it lists, including nothing.
 		unbinder::SetEntries(unbinder::DefaultEntries());
 
 		auto* collection = utils::INISettingCollection::GetSingleton();

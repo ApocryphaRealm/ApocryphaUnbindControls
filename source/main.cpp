@@ -1,15 +1,13 @@
-// Unbind Vanilla Controls - own code, MIT (2026-09-13). Leaves any of Skyrim's own controls with
-// no key at all, per device, by writing the engine's own "unmapped" value into the live control
-// map. No hooks, no ESP, no scripts, nothing written to the game's control files.
+// Unbind Vanilla Controls - own code, MIT (2026-09-13). Leaves the vanilla controls listed in its INI with
+// no key at all, by writing the engine's own "unmapped" value into the live control map. No menu, no hooks,
+// no ESP, no scripts, nothing written to the game's control files.
 #include "PCH.h"
 
 #include "DevBenchTool.h"
 #include "Settings.h"
-#include "UI.h"
 #include "Unbinder.h"
 
 #include "utils/Logger.h"
-#include "utils/Strings.h"
 
 namespace
 {
@@ -21,8 +19,6 @@ namespace
 			DevBenchTool::Init(false);
 			break;
 		case SKSE::MessagingInterface::kDataLoaded:
-			strings::Configure("ApocryphaUnbindControls");
-			UI::Register();
 			unbinder::Install();
 			unbinder::ApplyAll("data loaded");
 			DevBenchTool::Init(true);
