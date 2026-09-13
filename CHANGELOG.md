@@ -14,3 +14,4 @@ Rule 61: this mod's own history, kept beside the code it describes.
 - The original key of every unbound control is remembered in the mod's INI, so a control can be given its key back from the page at any time, even after a restart.
 - DevBench tool uvc.control: state, dump, rows, unbind, rebind, apply, reload, restore, strings.
 - Eleven languages for the page's own text; control names come from the game's own translation.
+- Ships with the keyboard shortcuts for screens the Tween Menu already opens left unbound: Journal, Quick Inventory, Quick Magic, Quick Map, Quick Stats and Wait (Tween Menu Overhaul with its Wait add-on offers every one of them). The Tween Menu key itself stays. Restore defaults returns to this list; the key each had is captured from the running game, so a player's own remap is what comes back.

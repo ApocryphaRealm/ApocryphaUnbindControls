@@ -326,12 +326,14 @@ namespace UI
 			OnMainThread([]() {
 				unbinder::ClearAll();
 				settings::RestoreDefaults();
+				unbinder::SetEntries(unbinder::DefaultEntries());
+				unbinder::ApplyAll("defaults restored");
 				settings::Save();
-				SetStatus(strings::TR("UVC_StatusRestored", "Every control has its key back and the list is empty. Saved."));
+				SetStatus(strings::TR("UVC_StatusRestored", "Back to the shipped list: the keys for screens the Tween Menu already opens have no key again, and every other control has its key back. Saved."));
 				logger::info("defaults restored from the page");
 			});
 		}
-		HelpMarker(strings::TR("UVC_HelpRestore", "Gives every control its key back, empties the list and saves."));
+		HelpMarker(strings::TR("UVC_HelpRestore", "Gives every control its key back, then unbinds only the shipped list - the keyboard keys for Journal, Inventory, Magic, Map, Skills and Wait, which the Tween Menu already opens - and saves."));
 
 		const std::string status = GetStatus();
 		if (!status.empty())

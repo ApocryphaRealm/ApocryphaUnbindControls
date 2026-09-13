@@ -160,7 +160,13 @@ namespace DevBenchTool
 			}
 			if (op == "restore")
 			{
-				const bool ran = RunOnMainThread([]() { unbinder::ClearAll(); settings::RestoreDefaults(); settings::Save(); });
+				const bool ran = RunOnMainThread([]() {
+					unbinder::ClearAll();
+					settings::RestoreDefaults();
+					unbinder::SetEntries(unbinder::DefaultEntries());
+					unbinder::ApplyAll("tool restore");
+					settings::Save();
+				});
 				a_write(a_sink, std::format(R"({{"ok":{},"op":"restore"}})", ran ? "true" : "false").c_str());
 				return;
 			}
@@ -208,7 +214,7 @@ namespace DevBenchTool
 			"controls with their remembered keys, last apply. op=dump [context]: every mapping of the live ControlMap (event, key, modifier, "
 			"index, remappable, linked, flags) per context and device. op=rows [context]: the page's snapshot. op=unbind / op=rebind with "
 			"context (name or index), event, device (keyboard|mouse|gamepad): the same calls the page's switches make, saved. op=apply re-applies "
-			"the list; op=reload restores, re-reads the INI and applies; op=save; op=restore gives every key back and empties the list; "
+			"the list; op=reload restores, re-reads the INI and applies; op=save; op=restore gives every key back, then applies the shipped list (Journal, Quick Inventory, Quick Magic, Quick Map, Quick Stats, Wait on the keyboard);"
 			"op=enable / op=disable; op=strings reports the active language.\","
 			"\"inputSchema\":{\"type\":\"object\",\"properties\":{\"op\":{\"type\":\"string\"},\"context\":{\"type\":\"string\"},\"event\":{\"type\":\"string\"},\"device\":{\"type\":\"string\"}}},"
 			"\"readOnly\":false"

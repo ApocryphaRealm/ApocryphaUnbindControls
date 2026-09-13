@@ -45,6 +45,11 @@ namespace unbinder
 	// The list (thread-safe copies).
 	std::vector<Entry> GetEntries();
 	void SetEntries(std::vector<Entry> a_entries);   // from the INI; does not apply
+	// The shipped list (the owner, 2026-09-13): the keyboard shortcuts for screens the Tween Menu already
+	// opens - Tween Menu Overhaul with its Wait add-on offers Inventory, Magic, Map, Quests, Skills and
+	// Wait. Journal, Quick Inventory, Quick Magic, Quick Map, Quick Stats, Wait. No remembered keys: the
+	// key is captured from the live map at the first apply, so a player's own remap is what comes back.
+	std::vector<Entry> DefaultEntries();
 	bool IsUnbound(int a_context, std::string_view a_event, int a_device);
 
 	// Main thread only.

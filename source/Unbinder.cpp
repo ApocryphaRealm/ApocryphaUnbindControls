@@ -211,6 +211,21 @@ namespace unbinder
 		logger::debug("unbinder: list set from the INI, {} entries", g_entries.size());
 	}
 
+	std::vector<Entry> DefaultEntries()
+	{
+		constexpr const char* kRedundantWithTween[] = { "Journal", "Quick Inventory", "Quick Magic", "Quick Map", "Quick Stats", "Wait" };
+		std::vector<Entry> out;
+		for (const char* ev : kRedundantWithTween)
+		{
+			Entry e;
+			e.context = "Gameplay";
+			e.event = ev;
+			e.device = 0;  // keyboard
+			out.push_back(std::move(e));
+		}
+		return out;
+	}
+
 	bool IsUnbound(int a_context, std::string_view a_event, int a_device)
 	{
 		std::scoped_lock l(g_lock);

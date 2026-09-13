@@ -125,7 +125,7 @@ namespace settings
 		{
 			if (!std::filesystem::exists(iniPath))
 			{
-				logger::warn("INI not found at {}; keeping compiled defaults and an empty list", iniPath);
+				logger::warn("INI not found at {}; keeping compiled defaults and the shipped list ({} entries)", iniPath, unbinder::GetEntries().size());
 				return false;
 			}
 			std::map<std::string, std::string> k;
@@ -221,6 +221,9 @@ namespace settings
 		iniPath = (std::filesystem::current_path() / "Data" / "SKSE" / "Plugins" / a_iniFileName).string();
 
 		defaults = { debug::logLevel, general::enabled };
+		// Compiled default list = the shipped INI's [Unbound] lines (rule 16). An INI that exists
+		// replaces it with whatever it lists, including nothing.
+		unbinder::SetEntries(unbinder::DefaultEntries());
 
 		auto* collection = utils::INISettingCollection::GetSingleton();
 		collection->AddSettings(
