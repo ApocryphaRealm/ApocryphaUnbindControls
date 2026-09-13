@@ -1,4 +1,4 @@
-// Unbind Vanilla Controls - own code, MIT (2026-09-13). Leaves the vanilla controls listed in its INI with
+// Unbind Vanilla Controls - own code, GPL-3.0-or-later (2026-09-13). Leaves the vanilla controls listed in its INI with
 // no key at all, by writing the engine's own "unmapped" value into the live control map. No menu, no hooks,
 // no ESP, no scripts, nothing written to the game's control files.
 #include "PCH.h"
