@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <cctype>
 #include <format>
+#include <map>
 #include <mutex>
 #include <string>
 #include <vector>
@@ -123,6 +124,147 @@ namespace unbinder
 			});
 		}
 
+		std::string Lower(std::string_view a_in)
+		{
+			std::string out(a_in);
+			for (auto& c : out) { c = static_cast<char>(std::tolower(static_cast<unsigned char>(c))); }
+			return out;
+		}
+
+		// ---- a control's default key, from controlmap.txt ---------------------------------------------------------
+		// The key controlmap.txt gives a gameplay control, read once through the game's resource system, so a loose or
+		// archived controlmap replacer wins exactly as it does for the game. The live key is no use for this: once the
+		// game has saved a control as empty in ControlMap_Custom.txt it is already 0xFF when the game starts.
+		struct DefaultKeys
+		{
+			std::uint16_t key[3]{ kUnmapped, kUnmapped, kUnmapped };  // keyboard, mouse, gamepad
+		};
+
+		// "0x14"; "0x02,0x4f" (the first key); "0x2a+0x0f" (key+modifier, the key); "!0,Wait" (a link, no key of its own).
+		std::uint16_t ParseKey(std::string_view a_field)
+		{
+			if (a_field.empty() || a_field.front() == '!') { return kUnmapped; }
+			a_field = a_field.substr(0, a_field.find_first_of(",+"));
+			try
+			{
+				return static_cast<std::uint16_t>(std::stoul(std::string(a_field), nullptr, 16));
+			}
+			catch (...)
+			{
+				return kUnmapped;
+			}
+		}
+
+		const std::map<std::string, DefaultKeys>& GameplayDefaults()
+		{
+			static std::map<std::string, DefaultKeys> s_keys;  // lower-case event name -> keys
+			static bool s_loaded = false;
+			if (s_loaded) { return s_keys; }
+			s_loaded = true;
+
+			RE::BSResourceNiBinaryStream stream("Interface\\Controls\\PC\\controlmap.txt");
+			if (!stream.good())
+			{
+				logger::warn("defaults: Interface\\Controls\\PC\\controlmap.txt could not be opened; menu actions linked to an unbound control keep the key the game gives them");
+				return s_keys;
+			}
+			// NiBinaryStream's chunked read is protected; the public read() reports only whether the whole count arrived,
+			// so the file (about 15 KB, read once) is taken a byte at a time.
+			std::string text;
+			char c = 0;
+			while (text.size() < (1u << 20) && stream.read(&c, 1)) { text.push_back(c); }
+
+			// The first input context is Main Gameplay; a blank line starts the next one.
+			bool inGameplay = false;
+			std::size_t pos = 0;
+			while (pos < text.size())
+			{
+				std::size_t eol = text.find('\n', pos);
+				if (eol == std::string::npos) { eol = text.size(); }
+				std::string_view line(text.data() + pos, eol - pos);
+				pos = eol + 1;
+				const std::size_t first = line.find_first_not_of(" \t\r");
+				if (first == std::string_view::npos)
+				{
+					if (inGameplay) { break; }
+					continue;
+				}
+				line = line.substr(first);
+				if (line.starts_with("//")) { continue; }
+				inGameplay = true;
+
+				std::vector<std::string_view> fields;
+				std::size_t f = 0;
+				while (f < line.size())
+				{
+					std::size_t tab = line.find('\t', f);
+					if (tab == std::string_view::npos) { tab = line.size(); }
+					std::string_view field = line.substr(f, tab - f);
+					while (!field.empty() && (field.back() == '\r' || field.back() == ' ')) { field.remove_suffix(1); }
+					if (!field.empty()) { fields.push_back(field); }
+					f = tab + 1;
+				}
+				if (fields.size() < 4) { continue; }
+				DefaultKeys keys;
+				for (int d = 0; d < 3; ++d) { keys.key[d] = ParseKey(fields[1 + d]); }
+				s_keys.emplace(Lower(fields[0]), keys);
+			}
+			logger::info("defaults: {} gameplay control(s) read from controlmap.txt", s_keys.size());
+			return s_keys;
+		}
+
+		int g_lastLinked = 0;  // menu actions given a key at the last apply
+
+		// A menu action controlmap.txt links to a gameplay control (the inventory's "ChargeItem !0,Wait") takes that
+		// control's key whenever the game resolves its links, so unbinding the control empties the action too - the
+		// owner chose to keep such actions working. Every action linked to a control in the list gets the control's
+		// default key back on that device. Caller holds g_lock.
+		int KeepLinkedActions(RE::ControlMap* a_map, const char* a_reason)
+		{
+			auto& links = a_map->GetRuntimeData().linkedMappings;
+			static bool s_loggedCount = false;
+			if (!s_loggedCount)
+			{
+				s_loggedCount = true;
+				logger::info("links: the control map holds {} linked menu action(s)", links.size());
+			}
+			int kept = 0;
+			for (const auto& e : g_entries)
+			{
+				const int ctx = ContextIndex(e.context);
+				if (ctx != 0 || e.device < 0 || e.device > 2) { continue; }  // controlmap.txt defaults are read for Gameplay only
+				const auto& defaults = GameplayDefaults();
+				const auto it = defaults.find(Lower(e.event));
+				if (it == defaults.end()) { continue; }
+				const std::uint16_t key = it->second.key[e.device];
+				if (key == kUnmapped) { continue; }
+				for (const auto& link : links)
+				{
+					if (static_cast<int>(link.linkFromContext) != ctx || static_cast<int>(link.device) != e.device) { continue; }
+					if (!link.linkFromName.c_str() || !IEquals(link.linkFromName.c_str(), e.event)) { continue; }
+					auto* target = MappingsFor(a_map, static_cast<int>(link.linkedMappingContext), e.device);
+					if (!target || !link.linkedMappingName.c_str()) { continue; }
+					bool changed = false;
+					for (auto* m : Find(*target, link.linkedMappingName.c_str()))
+					{
+						if (m->inputKey != key)
+						{
+							m->inputKey = key;
+							changed = true;
+							++kept;
+						}
+					}
+					if (changed)
+					{
+						SortByKey(*target);
+						logger::debug("apply ({}): {}|{}|{} is linked to {}, which is unbound - given {}", a_reason, ContextName(static_cast<int>(link.linkedMappingContext)),
+									  link.linkedMappingName.c_str(), DeviceName(e.device), e.event, Hex(key));
+					}
+				}
+			}
+			return kept;
+		}
+
 		// The journal is where the Controls menu lives; its Reset to defaults reloads the whole map and a
 		// rebind rewrites entries, so every close re-applies the list.
 		class MenuSink : public RE::BSTEventSink<RE::MenuOpenCloseEvent>
@@ -183,10 +325,10 @@ namespace unbinder
 
 	std::vector<Entry> DefaultEntries()
 	{
-		// The owner's own list (2026-09-14), picked in the game's Controls menu by pressing each control's key again:
-		// the Tween Menu's shortcuts plus the keys and buttons he wants free. Device: 0 keyboard, 2 gamepad.
-		// Favorites stays bound (hotfix 1.0.3): a player without the Tween Menu has no other way into the
-		// Favorites menu, and a user report showed favorites becoming unreachable.
+		// The Tween Menu set (the owner, 2026-09-14: "only unbind the tween menu overhaul coverd buttons and keys and
+		// leave the rest alone"): the shortcuts for screens Tween Menu Overhaul and its Wait add-on already open. On the
+		// controller only Back (Wait) is freed; Start stays on Journal, the controller's route to the system menu.
+		// Device: 0 keyboard, 2 gamepad.
 		constexpr std::pair<const char*, int> kDefaults[] = {
 			{ "Journal", 0 },
 			{ "Quick Inventory", 0 },
@@ -194,14 +336,7 @@ namespace unbinder
 			{ "Quick Map", 0 },
 			{ "Quick Stats", 0 },
 			{ "Wait", 0 },
-			{ "Quickload", 0 },
-			{ "Quicksave", 0 },
-			{ "Auto-Move", 0 },
-			{ "Toggle Always Run", 0 },
-			{ "Toggle POV", 0 },
 			{ "Wait", 2 },
-			{ "Toggle POV", 2 },
-			{ "Sneak", 2 },
 		};
 		std::vector<Entry> out;
 		for (const auto& [event, device] : kDefaults)
@@ -297,6 +432,8 @@ namespace unbinder
 			}
 		}
 		for (auto* m : dirty) { SortByKey(*m); }
+		g_lastLinked = KeepLinkedActions(map, a_reason);
+		if (g_lastLinked) { logger::info("apply ({}): {} menu action(s) linked to an unbound control given their key", a_reason, g_lastLinked); }
 		g_lastApply = a_reason;
 		++g_applyCount;
 		g_lastTouched = touched;
@@ -463,8 +600,8 @@ namespace unbinder
 	std::string StateJson()
 	{
 		std::scoped_lock l(g_lock);
-		std::string out = std::format(R"("unbinder":{{"contextCount":{},"lastApply":"{}","applyCount":{},"lastTouched":{},"sink":{},"entries":[)",
-									  ContextCount(), EscapeJson(g_lastApply), g_applyCount, g_lastTouched, g_sinkInstalled ? "true" : "false");
+		std::string out = std::format(R"("unbinder":{{"contextCount":{},"lastApply":"{}","applyCount":{},"lastTouched":{},"linkedKept":{},"sink":{},"entries":[)",
+									  ContextCount(), EscapeJson(g_lastApply), g_applyCount, g_lastTouched, g_lastLinked, g_sinkInstalled ? "true" : "false");
 		bool first = true;
 		for (const auto& e : g_entries)
 		{

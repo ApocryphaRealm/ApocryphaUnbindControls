@@ -7,6 +7,14 @@ Rule 61: this mod's own history, kept beside the code it describes.
 > number; at `.9` the MINOR rolls. The next number is LAST WORKING + 1; failed/scratch/
 > untested numbers are reused. Numbers come from version-gate.ps1.
 
+## 1.0.4 - 2026-09-14 - working
+
+### Changed
+- The shipped list is back to the Tween Menu set only (the owner: "update the mod to only unbind the tween menu overhaul coverd buttons and keys and leave the rest alone"): Journal, Quick Inventory, Quick Magic, Quick Map, Quick Stats and Wait on the keyboard, and Wait (Back) on the controller; Start stays on Journal. Quickload, Quicksave, Auto-Move, Toggle Always Run, Toggle POV and controller Toggle POV / Sneak keep their keys. Compiled defaults and the shipped INI match.
+
+### Fixed
+- A menu action the game links to an unbound gameplay control keeps a key (the owner chose "Keep Charge Item working"). controlmap.txt defines some menu actions as links (the inventory's ChargeItem is "!0,Wait"); once the game resolves those links against an unbound control, the action has no key too. After every apply the mod walks ControlMap::linkedMappings and gives each action linked to a control in the list that control's default key, read from Interface\Controls\PC\controlmap.txt through the game's resource system (so a controlmap replacer's key is used). The live key cannot be used: once the game has saved the control as empty, it is already 0xFF at startup.
+
 ## 1.0.3 - 2026-09-14 - working
 
 ### Fixed
