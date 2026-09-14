@@ -10,6 +10,11 @@
 // the list redrew this frame, whatever redrew it - the visible row clips of the Controls list (`Entry0`..,
 // `iMaxItemsShown` of them, each carrying its `itemIndex` into `EntriesA`) are read, and the key art of a row whose
 // control is unbound is hidden before the frame is drawn. A row clip reused for a bound control gets its art back.
+// The game leaves a keyless control out of the list entirely, so the controls the INI list unbinds on the device
+// family being shown (keyboard and mouse, or gamepad - read from the button names the game sent) are first put back
+// into the list's entries as rows with no key, in controlmap.txt order (the owner: "for both the controller and the
+// keyboard I want the rows to be shown but blank in the key area"). A row is blank when its control has no key on the
+// shown family on the live map.
 // Only reads and visibility changes: no ActionScript function is called, because invoking one by a path through a
 // function object (`X.__proto__.SetEntry.call`) crashed the game in 1.0.2's first build (logic library).
 // Both journal families' art members are covered (`ButtonArt` vanilla, `buttonArt` SkyUI).

@@ -12,6 +12,7 @@
 #include <mutex>
 #include <set>
 #include <string>
+#include <vector>
 
 namespace controlslist
 {
@@ -38,15 +39,23 @@ namespace controlslist
 
 		std::atomic<bool> g_hooked{ false };
 		std::atomic<bool> g_journalOpen{ false };
-		std::atomic<int> g_blankFrames{ 0 };  // frames that hid at least one key, this open
-		std::atomic<int> g_rowsBlankNow{ 0 }; // rows drawn blank in the latest frame
-		bool g_searchFailedLogged = false;    // main thread
-		std::set<std::string> g_loggedRows;   // main thread; rows already logged as blank this open
+		std::atomic<bool> g_showsGamepad{ false };  // what the list showed in the latest frame
+		std::atomic<int> g_blankFrames{ 0 };        // frames that hid at least one key, this open
+		std::atomic<int> g_rowsBlankNow{ 0 };       // rows drawn blank in the latest frame
+		std::atomic<int> g_rowsAdded{ 0 };          // rows put back into the list, this open
+		bool g_searchFailedLogged = false;          // main thread
+		std::set<std::string> g_loggedRows;         // main thread; rows already logged this open
 
 		void SetResult(std::string a_text)
 		{
 			std::scoped_lock l(g_lock);
 			g_lastResult = std::move(a_text);
+		}
+
+		std::string ListPathCopy()
+		{
+			std::scoped_lock l(g_lock);
+			return g_listPath;
 		}
 
 		std::string EscapeJson(std::string_view a_in)
@@ -75,31 +84,65 @@ namespace controlslist
 			return (menu && menu->uiMovie) ? menu->uiMovie.get() : nullptr;
 		}
 
+		std::string StringMember(const RE::GFxValue& a_obj, const char* a_name)
+		{
+			RE::GFxValue v;
+			return (a_obj.GetMember(a_name, &v) && v.IsString() && v.GetString()) ? std::string(v.GetString()) : std::string();
+		}
+
+		bool NumberMember(const RE::GFxValue& a_obj, const char* a_name, double& a_out)
+		{
+			RE::GFxValue v;
+			if (!a_obj.GetMember(a_name, &v) || !v.IsNumber()) { return false; }
+			a_out = v.GetNumber();
+			return true;
+		}
+
+		bool IsGamepadButtonName(std::string_view a_name)
+		{
+			return a_name.starts_with("360_") || a_name.starts_with("PS3_") || a_name.starts_with("PS4_") || a_name.starts_with("PS5_");
+		}
+
+		// The list shows one device family at a time; the button names the game sent say which. (The input manager's
+		// gamepad flag does not: 1.0.2's first AdvanceMovie build trusted it and blanked Start and Back while the list
+		// showed the controller.)
+		bool ListShowsGamepad(const RE::GFxValue& a_entries)
+		{
+			for (std::uint32_t i = 0; i < a_entries.GetArraySize(); ++i)
+			{
+				RE::GFxValue entry;
+				if (!a_entries.GetElement(i, &entry) || !entry.IsObject()) { continue; }
+				const std::string name = StringMember(entry, "buttonName");
+				if (name.empty()) { continue; }
+				return IsGamepadButtonName(name);
+			}
+			return false;
+		}
+
 		struct RowFacts
 		{
 			std::string text;        // the user event, e.g. "Quick Inventory"
 			std::string buttonName;  // what the game sent for the key's art
 			double buttonID = -1.0;  // the key code the game sent, -1 when absent
-			bool unbound = false;
-			const char* why = "bound";
+			double sortIndex = -1.0;
+			bool added = false;      // put back by this mod
+			bool blank = false;
+			const char* why = "has a key on this device";
 		};
 
-		RowFacts ReadRow(const RE::GFxValue& a_entry)
+		RowFacts ReadRow(const RE::GFxValue& a_entry, bool a_gamepad)
 		{
 			RowFacts f;
-			RE::GFxValue v;
-			if (a_entry.GetMember("text", &v) && v.IsString() && v.GetString()) { f.text = v.GetString(); }
-			if (a_entry.GetMember("buttonName", &v) && v.IsString() && v.GetString()) { f.buttonName = v.GetString(); }
-			if (a_entry.GetMember("buttonID", &v) && v.IsNumber()) { f.buttonID = v.GetNumber(); }
-			if (f.buttonID == static_cast<double>(kUnmappedID))
+			f.text = StringMember(a_entry, "text");
+			f.buttonName = StringMember(a_entry, "buttonName");
+			NumberMember(a_entry, "buttonID", f.buttonID);
+			NumberMember(a_entry, "sortIndex", f.sortIndex);
+			RE::GFxValue added;
+			f.added = a_entry.GetMember("_uvcAdded", &added) && added.IsBool() && added.GetBool();
+			if (!f.text.empty() && unbinder::KeylessOnFamily(f.text, a_gamepad))
 			{
-				f.unbound = true;
-				f.why = "the game sent key 0xff";
-			}
-			else if (!f.text.empty() && unbinder::IsUnboundNow(f.text))
-			{
-				f.unbound = true;
-				f.why = "in the INI list and keyless on the live map";
+				f.blank = true;
+				f.why = a_gamepad ? "no gamepad button on the live map" : "no keyboard or mouse key on the live map";
 			}
 			return f;
 		}
@@ -157,7 +200,7 @@ namespace controlslist
 							g_listPath = candidate;
 						}
 						SetResult(std::format("Controls list found at \"{}\"", candidate));
-						logger::info("controls list: found at \"{}\"; unbound controls draw with no key", candidate);
+						logger::info("controls list: found at \"{}\"; unbound controls are listed with no key", candidate);
 						return true;
 					}
 				}
@@ -165,7 +208,85 @@ namespace controlslist
 			return false;
 		}
 
-		// After the movie advanced: every visible row clip, matched to its entry through itemIndex.
+		// The game leaves a control with no key out of the list altogether. Every control the INI list unbinds on the
+		// device family being shown is put back as a row with no key, where controlmap.txt orders it, with a sortIndex
+		// between its neighbours' so the list's own re-sorts (after a remap) keep it there. Returns true when rows were
+		// added (the caller redraws the list).
+		bool AddMissingRows(RE::GFxMovieView* a_movie, RE::GFxValue& a_entries, bool a_gamepad)
+		{
+			const auto missing = unbinder::ListedKeylessOnFamily(a_gamepad);
+			if (missing.empty()) { return false; }
+
+			struct Row
+			{
+				RE::GFxValue value;
+				std::string text;
+				int order = -1;
+				double sortIndex = 0.0;
+				bool hasSort = false;
+			};
+			std::vector<Row> rows;
+			const std::uint32_t count = a_entries.GetArraySize();
+			rows.reserve(count + missing.size());
+			for (std::uint32_t i = 0; i < count; ++i)
+			{
+				Row r;
+				if (!a_entries.GetElement(i, &r.value)) { continue; }
+				if (r.value.IsObject())
+				{
+					r.text = StringMember(r.value, "text");
+					r.order = r.text.empty() ? -1 : unbinder::OrderInContext(r.text);
+					r.hasSort = NumberMember(r.value, "sortIndex", r.sortIndex);
+				}
+				rows.push_back(std::move(r));
+			}
+
+			int added = 0;
+			for (const auto& control : missing)
+			{
+				const bool present = std::any_of(rows.begin(), rows.end(), [&](const Row& a_row) { return a_row.text == control.event; });
+				if (present) { continue; }
+
+				std::size_t pos = rows.size();
+				for (std::size_t i = 0; i < rows.size(); ++i)
+				{
+					if (rows[i].order > control.order) { pos = i; break; }
+				}
+
+				Row r;
+				r.text = control.event;
+				r.order = control.order;
+				a_movie->CreateObject(&r.value);
+				r.value.SetMember("text", RE::GFxValue(control.event.c_str()));
+				r.value.SetMember("buttonName", RE::GFxValue(""));
+				r.value.SetMember("buttonID", RE::GFxValue(static_cast<double>(kUnmappedID)));
+				r.value.SetMember("_uvcAdded", RE::GFxValue(true));
+				const bool hasPrev = pos > 0 && rows[pos - 1].hasSort;
+				const bool hasNext = pos < rows.size() && rows[pos].hasSort;
+				if (hasPrev || hasNext)
+				{
+					r.sortIndex = hasPrev && hasNext ? (rows[pos - 1].sortIndex + rows[pos].sortIndex) / 2.0 :
+					              hasPrev            ? rows[pos - 1].sortIndex + 0.5 :
+					                                   rows[pos].sortIndex - 0.5;
+					r.hasSort = true;
+					r.value.SetMember("sortIndex", RE::GFxValue(r.sortIndex));
+				}
+				logger::debug("controls list: \"{}\" put back as a row with no key at position {} of {} (order {}, sortIndex {})",
+							  control.event, pos, rows.size() + 1, control.order, r.hasSort ? r.sortIndex : -1.0);
+				rows.insert(rows.begin() + static_cast<std::ptrdiff_t>(pos), std::move(r));
+				++added;
+			}
+			if (!added) { return false; }
+
+			a_entries.SetArraySize(static_cast<std::uint32_t>(rows.size()));
+			for (std::uint32_t i = 0; i < rows.size(); ++i) { a_entries.SetElement(i, rows[i].value); }
+			g_rowsAdded.fetch_add(added);
+			logger::info("controls list: {} unbound control(s) put back into the {} list with no key", added, a_gamepad ? "gamepad" : "keyboard");
+			return true;
+		}
+
+		// After the movie advanced: put back missing rows, then every visible row clip, matched to its entry through
+		// itemIndex, shows its key or none.
 		void FixRows(RE::GFxMovieView* a_movie)
 		{
 			RE::GFxValue list;
@@ -181,9 +302,19 @@ namespace controlslist
 
 			RE::GFxValue entries;
 			if (!list.GetMember("EntriesA", &entries) || !entries.IsArray()) { return; }
-			const std::uint32_t count = entries.GetArraySize();
-			if (count == 0) { return; }  // the list fills when CONTROLS is pressed
+			if (entries.GetArraySize() == 0) { return; }  // the list fills when CONTROLS is pressed
 
+			const bool gamepad = ListShowsGamepad(entries);
+			if (g_showsGamepad.exchange(gamepad) != gamepad) { logger::debug("controls list: now showing the {}", gamepad ? "gamepad" : "keyboard and mouse"); }
+
+			if (AddMissingRows(a_movie, entries, gamepad))
+			{
+				// InvalidateData is a method of the list object, the call shape that is safe (logic library).
+				const std::string path = ListPathCopy();
+				a_movie->Invoke((path + ".InvalidateData").c_str(), nullptr, nullptr, 0);
+			}
+
+			const std::uint32_t count = entries.GetArraySize();
 			RE::GFxValue shownValue;
 			int shown = kMaxRowClips;
 			if (list.GetMember("iMaxItemsShown", &shownValue) && shownValue.IsNumber())
@@ -198,36 +329,35 @@ namespace controlslist
 				if (!list.GetMember(std::format("Entry{}", i).c_str(), &clip) || !clip.IsDisplayObject()) { break; }
 				if (!IsVisible(clip)) { continue; }
 
-				RE::GFxValue itemIndex;
-				if (!clip.GetMember("itemIndex", &itemIndex) || !itemIndex.IsNumber()) { continue; }
-				const double idx = itemIndex.GetNumber();
-				if (idx < 0 || idx >= count) { continue; }
+				double idx = -1.0;
+				if (!NumberMember(clip, "itemIndex", idx) || idx < 0 || idx >= count) { continue; }
 				RE::GFxValue entry;
 				if (!entries.GetElement(static_cast<std::uint32_t>(idx), &entry) || !entry.IsObject()) { continue; }
 
-				const RowFacts row = ReadRow(entry);
+				const RowFacts row = ReadRow(entry, gamepad);
 				RE::GFxValue mark;
 				const bool wasBlank = clip.GetMember("_uvcBlank", &mark) && mark.IsBool() && mark.GetBool();
-				if (row.unbound)
+				if (row.blank)
 				{
 					const int art = SetArtVisible(clip, false);
 					if (!wasBlank) { clip.SetMember("_uvcBlank", RE::GFxValue(true)); }
 					++blankNow;
-					if (g_loggedRows.insert(row.text).second)
+					if (g_loggedRows.insert(std::format("{}|{}", gamepad ? "gamepad" : "keyboard", row.text)).second)
 					{
 						if (art == 0)
 						{
-							logger::warn("controls list: \"{}\" is unbound but its row has no ButtonArt/buttonArt member; this journal draws the key some other way", row.text);
+							logger::warn("controls list: \"{}\" has no key but its row has no ButtonArt/buttonArt member; this journal draws the key some other way", row.text);
 						}
 						else
 						{
-							logger::debug("controls list: \"{}\" drawn blank ({}; the game sent buttonName \"{}\", buttonID {})", row.text, row.why, row.buttonName, row.buttonID);
+							logger::debug("controls list: \"{}\" drawn with no key ({}; the game sent buttonName \"{}\", buttonID {}{})", row.text, row.why, row.buttonName,
+										  row.buttonID, row.added ? "; row put back by this mod" : "");
 						}
 					}
 				}
 				else if (wasBlank)
 				{
-					// The clip now shows another control after a scroll: its key comes back.
+					// The clip now shows a control that has a key (a scroll reused it, or the control was just bound).
 					SetArtVisible(clip, true);
 					clip.SetMember("_uvcBlank", RE::GFxValue(false));
 				}
@@ -264,6 +394,7 @@ namespace controlslist
 		g_searchFailedLogged = false;
 		g_blankFrames.store(0);
 		g_rowsBlankNow.store(0);
+		g_rowsAdded.store(0);
 		{
 			std::scoped_lock l(g_lock);
 			g_listPath.clear();
@@ -278,7 +409,7 @@ namespace controlslist
 			std::scoped_lock l(g_lock);
 			g_listPath.clear();
 		}
-		logger::debug("controls list: journal closed ({} frame(s) drew a blank key this open)", g_blankFrames.load());
+		logger::debug("controls list: journal closed ({} row(s) put back, {} frame(s) drew a row with no key this open)", g_rowsAdded.load(), g_blankFrames.load());
 	}
 
 	std::string RowsJson()
@@ -289,22 +420,20 @@ namespace controlslist
 		if (!FindList(movie, list)) { return R"({"ok":false,"op":"rows","error":"no Controls list in this journal"})"; }
 		RE::GFxValue entries;
 		if (!list.GetMember("EntriesA", &entries) || !entries.IsArray()) { return R"({"ok":false,"op":"rows","error":"the list has no EntriesA array"})"; }
-		std::string path;
-		{
-			std::scoped_lock l(g_lock);
-			path = g_listPath;
-		}
-		std::string out = std::format(R"({{"ok":true,"op":"rows","listPath":"{}","count":{},"rows":[)", EscapeJson(path), entries.GetArraySize());
+		const bool gamepad = ListShowsGamepad(entries);
+		std::string out = std::format(R"({{"ok":true,"op":"rows","listPath":"{}","showing":"{}","count":{},"rows":[)", EscapeJson(ListPathCopy()),
+									  gamepad ? "gamepad" : "keyboard", entries.GetArraySize());
 		bool first = true;
 		for (std::uint32_t i = 0; i < entries.GetArraySize(); ++i)
 		{
 			RE::GFxValue entry;
 			if (!entries.GetElement(i, &entry) || !entry.IsObject()) { continue; }
-			const RowFacts row = ReadRow(entry);
+			const RowFacts row = ReadRow(entry, gamepad);
 			if (!first) { out += ","; }
 			first = false;
-			out += std::format(R"({{"text":"{}","buttonName":"{}","buttonID":{},"blank":{},"why":"{}"}})",
-							   EscapeJson(row.text), EscapeJson(row.buttonName), row.buttonID, row.unbound ? "true" : "false", row.why);
+			out += std::format(R"({{"text":"{}","buttonName":"{}","buttonID":{},"sortIndex":{},"added":{},"blank":{},"why":"{}"}})",
+							   EscapeJson(row.text), EscapeJson(row.buttonName), row.buttonID, row.sortIndex, row.added ? "true" : "false",
+							   row.blank ? "true" : "false", row.why);
 		}
 		out += "]}";
 		return out;
@@ -313,8 +442,8 @@ namespace controlslist
 	std::string StateJson()
 	{
 		std::scoped_lock l(g_lock);
-		return std::format(R"("controlsList":{{"hooked":{},"journalOpen":{},"listPath":"{}","rowsBlankInLatestFrame":{},"blankFramesThisOpen":{},"lastResult":"{}"}})",
-						   g_hooked.load() ? "true" : "false", g_journalOpen.load() ? "true" : "false", EscapeJson(g_listPath), g_rowsBlankNow.load(),
-						   g_blankFrames.load(), EscapeJson(g_lastResult));
+		return std::format(R"("controlsList":{{"hooked":{},"journalOpen":{},"listPath":"{}","showing":"{}","rowsAddedThisOpen":{},"rowsBlankInLatestFrame":{},"blankFramesThisOpen":{},"lastResult":"{}"}})",
+						   g_hooked.load() ? "true" : "false", g_journalOpen.load() ? "true" : "false", EscapeJson(g_listPath),
+						   g_showsGamepad.load() ? "gamepad" : "keyboard", g_rowsAdded.load(), g_rowsBlankNow.load(), g_blankFrames.load(), EscapeJson(g_lastResult));
 	}
 }

@@ -50,9 +50,19 @@ namespace unbinder
 	bool Rebind(int a_context, std::string_view a_event, int a_device, std::string& a_why);  // removes, gives the key back
 	void ApplyAll(const char* a_reason);   // honours settings::general::enabled
 	void RestoreAll(const char* a_reason); // every entry -> its captured key; the list is kept
-	// True when a_event is in the list for the device family the Controls list is showing (gamepad, or keyboard and
-	// mouse) and every mapping it has there is keyless on the live map. False when the list is switched off.
-	bool IsUnboundNow(std::string_view a_event);
+	// The game's Controls list shows either the keyboard AND mouse keys or the gamepad buttons, for the Gameplay context.
+	// KeylessOnFamily: a_event has at least one mapping on that family and every one is 0xFF on the live map; a_order
+	// gets its indexInContext (the order controlmap.txt lists it in). OrderInContext: that index on any device, -1 when
+	// the event is not in Gameplay. ListedKeylessOnFamily: the INI list's Gameplay controls for that family that are
+	// keyless right now (empty when the list is switched off).
+	struct KeylessControl
+	{
+		std::string event;
+		int order = -1;
+	};
+	bool KeylessOnFamily(std::string_view a_event, bool a_gamepad, int* a_order = nullptr);
+	int OrderInContext(std::string_view a_event);
+	std::vector<KeylessControl> ListedKeylessOnFamily(bool a_gamepad);
 	void Install();                        // the journal open/close sink; call at kDataLoaded
 
 	// For the DevBench tool.

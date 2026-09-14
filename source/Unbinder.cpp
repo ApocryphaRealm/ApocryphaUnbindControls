@@ -285,27 +285,60 @@ namespace unbinder
 		if (missing) { logger::warn("apply ({}): {} entr{} could not be applied (see above)", a_reason, missing, missing == 1 ? "y" : "ies"); }
 	}
 
-	bool IsUnboundNow(std::string_view a_event)
+	bool KeylessOnFamily(std::string_view a_event, bool a_gamepad, int* a_order)
 	{
 		auto* map = RE::ControlMap::GetSingleton();
-		if (!map) { return false; }
-		// The Controls list shows the keyboard and mouse keys, or the gamepad buttons when a gamepad is in use.
-		auto* devices = RE::BSInputDeviceManager::GetSingleton();
-		const bool gamepad = devices && devices->IsGamepadEnabled();
-		std::scoped_lock l(g_lock);
-		if (!settings::general::enabled) { return false; }
-		for (const auto& e : g_entries)
+		auto* ctx = map ? Context(map, 0) : nullptr;  // Gameplay (index 0 on every runtime): the context the Controls list shows
+		if (!ctx) { return false; }
+		int found = 0;
+		int order = -1;
+		const int first = a_gamepad ? 2 : 0;  // the list shows keyboard AND mouse together, or the gamepad
+		const int last = a_gamepad ? 2 : 1;
+		for (int d = first; d <= last; ++d)
 		{
-			if (!IEquals(e.event, a_event)) { continue; }
-			if (gamepad ? e.device != 2 : e.device == 2) { continue; }
-			const int ctx = ContextIndex(e.context);
-			auto* mappings = ctx >= 0 ? MappingsFor(map, ctx, e.device) : nullptr;
-			if (!mappings) { continue; }
-			auto found = Find(*mappings, e.event);
-			if (found.empty()) { continue; }
-			if (std::all_of(found.begin(), found.end(), [](const RE::ControlMap::UserEventMapping* a_m) { return a_m->inputKey == kUnmapped; })) { return true; }
+			for (auto* m : Find(ctx->deviceMappings[d], a_event))
+			{
+				++found;
+				if (order < 0) { order = m->indexInContext; }
+				if (m->inputKey != kUnmapped) { return false; }
+			}
 		}
-		return false;
+		if (a_order) { *a_order = order; }
+		return found > 0;
+	}
+
+	int OrderInContext(std::string_view a_event)
+	{
+		auto* map = RE::ControlMap::GetSingleton();
+		auto* ctx = map ? Context(map, 0) : nullptr;
+		if (!ctx) { return -1; }
+		for (int d = 0; d < 3; ++d)
+		{
+			auto found = Find(ctx->deviceMappings[d], a_event);
+			if (!found.empty()) { return found.front()->indexInContext; }
+		}
+		return -1;
+	}
+
+	std::vector<KeylessControl> ListedKeylessOnFamily(bool a_gamepad)
+	{
+		std::vector<std::string> events;
+		{
+			std::scoped_lock l(g_lock);
+			if (!settings::general::enabled) { return {}; }
+			for (const auto& e : g_entries)
+			{
+				if (!IEquals(e.context, "Gameplay") || a_gamepad != (e.device == 2)) { continue; }
+				if (std::none_of(events.begin(), events.end(), [&](const std::string& a_have) { return IEquals(a_have, e.event); })) { events.push_back(e.event); }
+			}
+		}
+		std::vector<KeylessControl> out;
+		for (const auto& ev : events)
+		{
+			int order = -1;
+			if (KeylessOnFamily(ev, a_gamepad, &order)) { out.push_back({ ev, order }); }
+		}
+		return out;
 	}
 
 	void RestoreAll(const char* a_reason)
