@@ -185,6 +185,8 @@ namespace unbinder
 	{
 		// The owner's own list (2026-09-14), picked in the game's Controls menu by pressing each control's key again:
 		// the Tween Menu's shortcuts plus the keys and buttons he wants free. Device: 0 keyboard, 2 gamepad.
+		// Favorites stays bound (hotfix 1.0.3): a player without the Tween Menu has no other way into the
+		// Favorites menu, and a user report showed favorites becoming unreachable.
 		constexpr std::pair<const char*, int> kDefaults[] = {
 			{ "Journal", 0 },
 			{ "Quick Inventory", 0 },
@@ -194,7 +196,6 @@ namespace unbinder
 			{ "Wait", 0 },
 			{ "Quickload", 0 },
 			{ "Quicksave", 0 },
-			{ "Favorites", 0 },
 			{ "Auto-Move", 0 },
 			{ "Toggle Always Run", 0 },
 			{ "Toggle POV", 0 },

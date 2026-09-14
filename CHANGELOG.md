@@ -7,6 +7,11 @@ Rule 61: this mod's own history, kept beside the code it describes.
 > number; at `.9` the MINOR rolls. The next number is LAST WORKING + 1; failed/scratch/
 > untested numbers are reused. Numbers come from version-gate.ps1.
 
+## 1.0.3 - 2026-09-14 - working
+
+### Fixed
+- Hotfix: Favorites is no longer in the shipped unbound list, so the Favorites key (Q) stays bound on the keyboard. A user report showed that a player without the Tween Menu had no way into the Favorites menu with it unbound (the owner: "for now just add the favorites key back in as a bound key as a hotfix"). The Favorites row stays in the Controls menu as a normal bound key (the owner: "the favorites row shouldnt be removed, it should go back to being a bound key"). A player whose game already saved Favorites with no key (ControlMap_Custom.txt, written by the game after any Controls-menu change under 1.0.2) deletes that file and launches the game; no repair code (the owner: "we dont need a repair function, they can just delete the control custom txt and launch the game"). Compiled defaults and the shipped INI both drop the line; an INI saved by an earlier version keeps its own list until the player deletes that line. The wider fix (the game saving unbound keys into ControlMap_Custom.txt, and the Controls-menu crash report) is still open.
+
 ## 1.0.2 - 2026-09-14 - untested
 
 ### Fixed
