@@ -6,21 +6,21 @@
 // (2026-09-14): "unbind vanilla buttons needs to leave the unbound button entry blank on the controls area of the
 // pause menu".
 //
-// How: every time the journal opens, the Controls list's SetEntry (the function that draws one row) is replaced on
-// the list INSTANCE by a native function. It forwards the call to the class's own SetEntry through
-// `<list>.__proto__.SetEntry.call(list, clip, entry)` - reading the ActionScript function out into C++ does not
-// work in this engine (GetVariable returns no functions; AMF's System row found that first) - and then hides the
-// row's key art when the row's control is unbound. The art members of both journal families are covered
-// (`ButtonArt` vanilla, `buttonArt` SkyUI), so any journal built on either draws the row blank. A probe call proves
-// the forward reaches the class function before anything is replaced; if it does not, the list is left exactly as
-// the game draws it.
+// How: the Journal Menu's AdvanceMovie (IMenu vfunc 5) is wrapped. After the movie has advanced - so after every row
+// the list redrew this frame, whatever redrew it - the visible row clips of the Controls list (`Entry0`..,
+// `iMaxItemsShown` of them, each carrying its `itemIndex` into `EntriesA`) are read, and the key art of a row whose
+// control is unbound is hidden before the frame is drawn. A row clip reused for a bound control gets its art back.
+// Only reads and visibility changes: no ActionScript function is called, because invoking one by a path through a
+// function object (`X.__proto__.SetEntry.call`) crashed the game in 1.0.2's first build (logic library).
+// Both journal families' art members are covered (`ButtonArt` vanilla, `buttonArt` SkyUI).
 //
-// Every function here runs on the game's main (UI) thread.
+// Every function here runs on the game's main (UI) thread, except StateJson.
 
 #include <string>
 
 namespace controlslist
 {
+	void Install();          // the AdvanceMovie wrap; call once at plugin load
 	void OnJournalOpen();    // from the MenuOpenCloseEvent sink
 	void OnJournalClose();
 
