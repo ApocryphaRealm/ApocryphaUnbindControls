@@ -50,7 +50,10 @@ namespace unbinder
 	bool Rebind(int a_context, std::string_view a_event, int a_device, std::string& a_why);  // removes, gives the key back
 	void ApplyAll(const char* a_reason);   // honours settings::general::enabled
 	void RestoreAll(const char* a_reason); // every entry -> its captured key; the list is kept
-	void Install();                        // the journal-close sink; call at kDataLoaded
+	// True when a_event is in the list for the device family the Controls list is showing (gamepad, or keyboard and
+	// mouse) and every mapping it has there is keyless on the live map. False when the list is switched off.
+	bool IsUnboundNow(std::string_view a_event);
+	void Install();                        // the journal open/close sink; call at kDataLoaded
 
 	// For the DevBench tool.
 	std::string DumpJson(int a_context);   // -1 = every context

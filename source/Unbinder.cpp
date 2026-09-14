@@ -2,6 +2,7 @@
 
 #include "Unbinder.h"
 
+#include "ControlsList.h"
 #include "Settings.h"
 #include "utils/Logger.h"
 
@@ -131,8 +132,14 @@ namespace unbinder
 
 			RE::BSEventNotifyControl ProcessEvent(const RE::MenuOpenCloseEvent* a_event, RE::BSTEventSource<RE::MenuOpenCloseEvent>*) override
 			{
-				if (!a_event || a_event->opening) { return RE::BSEventNotifyControl::kContinue; }
-				if (std::string_view(a_event->menuName.c_str()) != RE::JournalMenu::MENU_NAME) { return RE::BSEventNotifyControl::kContinue; }
+				if (!a_event || std::string_view(a_event->menuName.c_str()) != RE::JournalMenu::MENU_NAME) { return RE::BSEventNotifyControl::kContinue; }
+				if (a_event->opening)
+				{
+					// The Controls list draws an unbound control's row with no key (ControlsList.h).
+					controlslist::OnJournalOpen();
+					return RE::BSEventNotifyControl::kContinue;
+				}
+				controlslist::OnJournalClose();
 				if (auto* tasks = SKSE::GetTaskInterface()) { tasks->AddTask([]() { ApplyAll("journal closed"); }); }
 				return RE::BSEventNotifyControl::kContinue;
 			}
@@ -276,6 +283,29 @@ namespace unbinder
 		g_lastTouched = touched;
 		logger::info("apply ({}): {} entr{}, {} key(s) cleared in {} device list(s)", a_reason, g_entries.size(), g_entries.size() == 1 ? "y" : "ies", touched, dirty.size());
 		if (missing) { logger::warn("apply ({}): {} entr{} could not be applied (see above)", a_reason, missing, missing == 1 ? "y" : "ies"); }
+	}
+
+	bool IsUnboundNow(std::string_view a_event)
+	{
+		auto* map = RE::ControlMap::GetSingleton();
+		if (!map) { return false; }
+		// The Controls list shows the keyboard and mouse keys, or the gamepad buttons when a gamepad is in use.
+		auto* devices = RE::BSInputDeviceManager::GetSingleton();
+		const bool gamepad = devices && devices->IsGamepadEnabled();
+		std::scoped_lock l(g_lock);
+		if (!settings::general::enabled) { return false; }
+		for (const auto& e : g_entries)
+		{
+			if (!IEquals(e.event, a_event)) { continue; }
+			if (gamepad ? e.device != 2 : e.device == 2) { continue; }
+			const int ctx = ContextIndex(e.context);
+			auto* mappings = ctx >= 0 ? MappingsFor(map, ctx, e.device) : nullptr;
+			if (!mappings) { continue; }
+			auto found = Find(*mappings, e.event);
+			if (found.empty()) { continue; }
+			if (std::all_of(found.begin(), found.end(), [](const RE::ControlMap::UserEventMapping* a_m) { return a_m->inputKey == kUnmapped; })) { return true; }
+		}
+		return false;
 	}
 
 	void RestoreAll(const char* a_reason)

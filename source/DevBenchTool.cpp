@@ -3,6 +3,7 @@
 #include "DevBenchTool.h"
 
 #include "DevBench/DevBenchAPI.h"
+#include "ControlsList.h"
 #include "Settings.h"
 #include "Unbinder.h"
 #include "utils/Logger.h"
@@ -129,6 +130,13 @@ namespace DevBenchTool
 											unbinder::ContextName(ctx), EscapeJson(event), unbinder::DeviceName(dev), EscapeJson(why)).c_str());
 				return;
 			}
+			if (op == "rows")
+			{
+				std::string out;
+				if (!RunOnMainThread([&]() { out = controlslist::RowsJson(); })) { a_write(a_sink, R"({"ok":false,"op":"rows","error":"main thread did not run the task in time"})"); return; }
+				a_write(a_sink, out.c_str());
+				return;
+			}
 			if (op == "apply")
 			{
 				const bool ran = RunOnMainThread([]() { unbinder::ApplyAll("tool"); });
@@ -144,8 +152,8 @@ namespace DevBenchTool
 			}
 
 			const std::string json = std::format(
-				"{{\"ok\":true,\"op\":\"state\",\"settings\":{{\"enabled\":{},\"logLevel\":{},\"iniPath\":\"{}\"}},{}}}",
-				settings::general::enabled ? "true" : "false", settings::debug::logLevel, EscapeJson(settings::GetIniPath()), unbinder::StateJson());
+				"{{\"ok\":true,\"op\":\"state\",\"settings\":{{\"enabled\":{},\"logLevel\":{},\"iniPath\":\"{}\"}},{},{}}}",
+				settings::general::enabled ? "true" : "false", settings::debug::logLevel, EscapeJson(settings::GetIniPath()), unbinder::StateJson(), controlslist::StateJson());
 			a_write(a_sink, json.c_str());
 		}
 	}
@@ -169,7 +177,7 @@ namespace DevBenchTool
 			"keys captured this session, last apply. op=dump [context]: every mapping of the live ControlMap (event, key, modifier, "
 			"remappable) per context and device. op=unbind / op=rebind with context (name or index), event, device "
 			"(keyboard|mouse|gamepad): add to or remove from the list, applied and written to the INI. op=apply re-applies the list; "
-			"op=reload gives the keys back, re-reads the INI and applies.\","
+			"op=reload gives the keys back, re-reads the INI and applies. op=rows (journal open): every row of the game's Controls list - event, the buttonName and buttonID the game sent, whether this mod draws it blank and why.\","
 			"\"inputSchema\":{\"type\":\"object\",\"properties\":{\"op\":{\"type\":\"string\"},\"context\":{\"type\":\"string\"},\"event\":{\"type\":\"string\"},\"device\":{\"type\":\"string\"}}},"
 			"\"readOnly\":false"
 			"}";

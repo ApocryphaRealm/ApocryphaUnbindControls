@@ -7,6 +7,11 @@ Rule 61: this mod's own history, kept beside the code it describes.
 > number; at `.9` the MINOR rolls. The next number is LAST WORKING + 1; failed/scratch/
 > untested numbers are reused. Numbers come from version-gate.ps1.
 
+## 1.0.2 - 2026-09-14 - untested
+
+### Fixed
+- The game's Controls list (Journal > System > Controls) now draws an unbound control's row with no key. It used to show a leftover badge instead - an 'unknown key' code such as 0xff or '???' in a vanilla-style journal, or the raw button name in a SkyUI-style one. The list's row drawing is wrapped each time the journal opens and forwards to the journal's own code, so any journal built on either style works; if the wrap cannot be made safely, the list is left exactly as the game draws it. The control map itself is handled as before. DevBench uvc.control gains op=rows (every row of the Controls list with what the game sent and whether it is drawn blank) and state.controlsList.
+
 ## 1.0.0 - 2026-09-13 - untested
 
 ### Added
