@@ -183,14 +183,32 @@ namespace unbinder
 
 	std::vector<Entry> DefaultEntries()
 	{
-		constexpr const char* kRedundantWithTween[] = { "Journal", "Quick Inventory", "Quick Magic", "Quick Map", "Quick Stats", "Wait" };
+		// The owner's own list (2026-09-14), picked in the game's Controls menu by pressing each control's key again:
+		// the Tween Menu's shortcuts plus the keys and buttons he wants free. Device: 0 keyboard, 2 gamepad.
+		constexpr std::pair<const char*, int> kDefaults[] = {
+			{ "Journal", 0 },
+			{ "Quick Inventory", 0 },
+			{ "Quick Magic", 0 },
+			{ "Quick Map", 0 },
+			{ "Quick Stats", 0 },
+			{ "Wait", 0 },
+			{ "Quickload", 0 },
+			{ "Quicksave", 0 },
+			{ "Favorites", 0 },
+			{ "Auto-Move", 0 },
+			{ "Toggle Always Run", 0 },
+			{ "Toggle POV", 0 },
+			{ "Wait", 2 },
+			{ "Toggle POV", 2 },
+			{ "Sneak", 2 },
+		};
 		std::vector<Entry> out;
-		for (const char* ev : kRedundantWithTween)
+		for (const auto& [event, device] : kDefaults)
 		{
 			Entry e;
 			e.context = "Gameplay";
-			e.event = ev;
-			e.device = 0;  // keyboard
+			e.event = event;
+			e.device = device;
 			out.push_back(std::move(e));
 		}
 		return out;

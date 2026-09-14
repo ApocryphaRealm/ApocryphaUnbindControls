@@ -41,8 +41,10 @@ namespace unbinder
 
 	std::vector<Entry> GetEntries();
 	void SetEntries(std::vector<Entry> a_entries);   // from the INI; does not apply
-	// The shipped list (the owner, 2026-09-13): the keyboard shortcuts for screens the Tween Menu already
-	// opens - Tween Menu Overhaul with its Wait add-on offers Inventory, Magic, Map, Quests, Skills and Wait.
+	// The shipped list (the owner, 2026-09-14): the fifteen controls he unbound himself in the game's Controls menu -
+	// the Tween Menu's shortcuts (Journal, Quick Inventory, Quick Magic, Quick Map, Quick Stats, Wait) and Quickload,
+	// Quicksave, Favorites, Auto-Move, Toggle Always Run and Toggle POV on the keyboard; Wait, Toggle POV and Sneak on
+	// the gamepad. Matches the shipped INI's [Unbound] lines.
 	std::vector<Entry> DefaultEntries();
 
 	// Main thread only.
