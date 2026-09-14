@@ -22,6 +22,7 @@ namespace
 			break;
 		case SKSE::MessagingInterface::kDataLoaded:
 			unbinder::Install();
+			controlslist::InstallInputSink();
 			unbinder::ApplyAll("data loaded");
 			DevBenchTool::Init(true);
 			break;

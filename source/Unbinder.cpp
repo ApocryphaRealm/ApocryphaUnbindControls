@@ -320,6 +320,32 @@ namespace unbinder
 		return -1;
 	}
 
+	std::vector<std::uint16_t> LiveKeys(std::string_view a_event, int a_device)
+	{
+		std::vector<std::uint16_t> out;
+		auto* map = RE::ControlMap::GetSingleton();
+		auto* mappings = map ? MappingsFor(map, 0, a_device) : nullptr;
+		if (!mappings) { return out; }
+		for (auto* m : Find(*mappings, a_event)) { out.push_back(m->inputKey); }
+		return out;
+	}
+
+	bool IsListed(std::string_view a_event, int a_device)
+	{
+		std::scoped_lock l(g_lock);
+		return FindEntry(0, a_event, a_device) != g_entries.end();
+	}
+
+	bool Forget(int a_context, std::string_view a_event, int a_device)
+	{
+		std::scoped_lock l(g_lock);
+		auto it = FindEntry(a_context, a_event, a_device);
+		if (it == g_entries.end()) { return false; }
+		g_entries.erase(it);
+		logger::info("forget {}|{}|{}: removed from the list; the control keeps the key it has now", ContextName(a_context), a_event, DeviceName(a_device));
+		return true;
+	}
+
 	std::vector<KeylessControl> ListedKeylessOnFamily(bool a_gamepad)
 	{
 		std::vector<std::string> events;

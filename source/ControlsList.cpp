@@ -7,6 +7,7 @@
 #include "utils/Logger.h"
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <format>
 #include <mutex>
@@ -35,9 +36,12 @@ namespace controlslist
 
 		std::mutex g_lock;       // the strings below; the DevBench thread reads them
 		std::string g_listPath;  // this open's list, empty until found
+		std::string g_pagePath;  // the System page that owns it
 		std::string g_lastResult = "the journal has not been opened yet";
+		std::string g_lastRemap = "no remap watched yet";
 
 		std::atomic<bool> g_hooked{ false };
+		std::atomic<bool> g_sinkInstalled{ false };
 		std::atomic<bool> g_journalOpen{ false };
 		std::atomic<bool> g_showsGamepad{ false };  // what the list showed in the latest frame
 		std::atomic<int> g_blankFrames{ 0 };        // frames that hid at least one key, this open
@@ -46,16 +50,42 @@ namespace controlslist
 		bool g_searchFailedLogged = false;          // main thread
 		std::set<std::string> g_loggedRows;         // main thread; rows already logged this open
 
+		// ---- the remap watch ----------------------------------------------------------------------------------
+		struct PressedKey
+		{
+			int device = -1;         // 0 keyboard, 1 mouse, 2 gamepad
+			std::uint32_t code = 0;  // DirectInput scan code, mouse button, or XInput mask - the ControlMap's own values
+		};
+		std::atomic<bool> g_remapArmed{ false };  // the sink records only while a remap is on
+		std::atomic<bool> g_remapActive{ false };
+		std::mutex g_pressLock;
+		PressedKey g_pressed;  // g_pressLock
+		bool g_hasPress = false;  // g_pressLock
+		std::string g_remapEvent;                       // main thread
+		std::array<std::vector<std::uint16_t>, 3> g_before;  // main thread: the control's keys when the remap began
+
 		void SetResult(std::string a_text)
 		{
 			std::scoped_lock l(g_lock);
 			g_lastResult = std::move(a_text);
 		}
 
+		void SetRemapResult(std::string a_text)
+		{
+			std::scoped_lock l(g_lock);
+			g_lastRemap = std::move(a_text);
+		}
+
 		std::string ListPathCopy()
 		{
 			std::scoped_lock l(g_lock);
 			return g_listPath;
+		}
+
+		std::string PagePathCopy()
+		{
+			std::scoped_lock l(g_lock);
+			return g_pagePath;
 		}
 
 		std::string EscapeJson(std::string_view a_in)
@@ -72,6 +102,18 @@ namespace controlslist
 				case '\r': break;
 				default: out += c; break;
 				}
+			}
+			return out;
+		}
+
+		std::string KeysText(const std::vector<std::uint16_t>& a_keys)
+		{
+			if (a_keys.empty()) { return "-"; }
+			std::string out;
+			for (const auto k : a_keys)
+			{
+				if (!out.empty()) { out += ","; }
+				out += std::format("0x{:02x}", k);
 			}
 			return out;
 		}
@@ -104,8 +146,8 @@ namespace controlslist
 		}
 
 		// The list shows one device family at a time; the button names the game sent say which. (The input manager's
-		// gamepad flag does not: 1.0.2's first AdvanceMovie build trusted it and blanked Start and Back while the list
-		// showed the controller.)
+		// gamepad flag does not: an earlier 1.0.2 build trusted it and blanked Start and Back while the list showed the
+		// controller.)
 		bool ListShowsGamepad(const RE::GFxValue& a_entries)
 		{
 			for (std::uint32_t i = 0; i < a_entries.GetArraySize(); ++i)
@@ -198,6 +240,7 @@ namespace controlslist
 						{
 							std::scoped_lock l(g_lock);
 							g_listPath = candidate;
+							g_pagePath = page;
 						}
 						SetResult(std::format("Controls list found at \"{}\"", candidate));
 						logger::info("controls list: found at \"{}\"; unbound controls are listed with no key", candidate);
@@ -285,8 +328,135 @@ namespace controlslist
 			return true;
 		}
 
-		// After the movie advanced: put back missing rows, then every visible row clip, matched to its entry through
-		// itemIndex, shows its key or none.
+		// Records the first key pressed while a remap is on. Runs on the main thread when the game dispatches input,
+		// before the menus handle it.
+		class InputSink : public RE::BSTEventSink<RE::InputEvent*>
+		{
+		public:
+			static InputSink* GetSingleton()
+			{
+				static InputSink s;
+				return &s;
+			}
+
+			RE::BSEventNotifyControl ProcessEvent(RE::InputEvent* const* a_event, RE::BSTEventSource<RE::InputEvent*>*) override
+			{
+				if (!a_event || !g_remapArmed.load()) { return RE::BSEventNotifyControl::kContinue; }
+				for (auto* e = *a_event; e; e = e->next)
+				{
+					if (e->GetEventType() != RE::INPUT_EVENT_TYPE::kButton) { continue; }
+					auto* button = e->AsButtonEvent();
+					if (!button || !button->IsDown()) { continue; }
+					std::scoped_lock l(g_pressLock);
+					if (!g_hasPress)
+					{
+						g_pressed = { static_cast<int>(e->GetDevice()), button->GetIDCode() };
+						g_hasPress = true;
+					}
+				}
+				return RE::BSEventNotifyControl::kContinue;
+			}
+		};
+
+		// The remap ended: decide what the press meant.
+		void EvaluateRemap()
+		{
+			const std::string event = g_remapEvent;
+			PressedKey pressed;
+			bool hasPress = false;
+			{
+				std::scoped_lock l(g_pressLock);
+				pressed = g_pressed;
+				hasPress = g_hasPress;
+			}
+			if (event.empty())
+			{
+				SetRemapResult("a remap ended, but its row was not known");
+				logger::debug("controls list: remap ended for an unknown row; nothing done");
+				return;
+			}
+
+			std::array<std::vector<std::uint16_t>, 3> after;
+			for (int d = 0; d < 3; ++d) { after[d] = unbinder::LiveKeys(event, d); }
+			const std::string pressedText = hasPress ? std::format("{} 0x{:02x}", unbinder::DeviceName(pressed.device), pressed.code) : std::string("nothing recorded");
+
+			// 1. A control the INI list unbinds was given a key: the player bound it, so it leaves the list.
+			int forgotten = 0;
+			for (int d = 0; d < 3; ++d)
+			{
+				const bool gotKey = std::any_of(after[d].begin(), after[d].end(), [](std::uint16_t a_k) { return a_k != kUnmappedID; });
+				if (after[d] != g_before[d] && gotKey && unbinder::IsListed(event, d) && unbinder::Forget(0, event, d)) { ++forgotten; }
+			}
+			if (forgotten)
+			{
+				settings::Save();
+				const std::string text = std::format("\"{}\" was given a key ({} pressed): removed from the INI list for {} device(s)", event, pressedText, forgotten);
+				SetRemapResult(text);
+				logger::info("controls list: {}", text);
+				return;
+			}
+
+			// 2. The key pressed is one the control already had, and the game changed nothing: unbind it on that device.
+			if (hasPress && pressed.device >= 0 && pressed.device <= 2 && after[pressed.device] == g_before[pressed.device])
+			{
+				const auto& keys = g_before[pressed.device];
+				const bool same = std::any_of(keys.begin(), keys.end(), [&](std::uint16_t a_k) { return a_k == pressed.code; });
+				if (same)
+				{
+					std::string why;
+					const bool ok = unbinder::Unbind(0, event, pressed.device, why);
+					if (ok) { settings::Save(); }
+					const std::string text = ok ? std::format("\"{}\": its own key pressed again ({}); unbound on the {} and added to the INI list", event, pressedText, unbinder::DeviceName(pressed.device)) :
+					                              std::format("\"{}\": its own key pressed again ({}), but unbinding failed: {}", event, pressedText, why);
+					SetRemapResult(text);
+					if (ok) { logger::info("controls list: {}", text); }
+					else { logger::warn("controls list: {}", text); }
+					return;
+				}
+			}
+
+			const std::string text = std::format("\"{}\": remap ended ({} pressed; keyboard {} -> {}, mouse {} -> {}, gamepad {} -> {}); the game's result is kept", event, pressedText,
+												 KeysText(g_before[0]), KeysText(after[0]), KeysText(g_before[1]), KeysText(after[1]), KeysText(g_before[2]), KeysText(after[2]));
+			SetRemapResult(text);
+			logger::debug("controls list: {}", text);
+		}
+
+		// bRemapMode is the System page's own flag: set when a row is pressed, cleared 200 ms after the game reports the
+		// remap finished.
+		void WatchRemap(RE::GFxMovieView* a_movie, const RE::GFxValue& a_list, const RE::GFxValue& a_entries)
+		{
+			const std::string page = PagePathCopy();
+			RE::GFxValue flag;
+			const bool remap = !page.empty() && a_movie->GetVariable(&flag, (page + ".bRemapMode").c_str()) && flag.IsBool() && flag.GetBool();
+			if (remap && !g_remapActive.load())
+			{
+				double selected = -1.0;
+				std::string event;
+				RE::GFxValue entry;
+				if (NumberMember(a_list, "iSelectedIndex", selected) && selected >= 0 && a_entries.GetElement(static_cast<std::uint32_t>(selected), &entry) && entry.IsObject())
+				{
+					event = StringMember(entry, "text");
+				}
+				g_remapEvent = event;
+				for (int d = 0; d < 3; ++d) { g_before[d] = unbinder::LiveKeys(event, d); }
+				{
+					std::scoped_lock l(g_pressLock);
+					g_hasPress = false;
+				}
+				g_remapActive.store(true);
+				g_remapArmed.store(true);
+				logger::debug("controls list: remap started for \"{}\" (keyboard {}, mouse {}, gamepad {})", event, KeysText(g_before[0]), KeysText(g_before[1]), KeysText(g_before[2]));
+			}
+			else if (!remap && g_remapActive.load())
+			{
+				g_remapArmed.store(false);
+				g_remapActive.store(false);
+				EvaluateRemap();
+			}
+		}
+
+		// After the movie advanced: the remap watch, missing rows put back, then every visible row clip, matched to its
+		// entry through itemIndex, shows its key or none.
 		void FixRows(RE::GFxMovieView* a_movie)
 		{
 			RE::GFxValue list;
@@ -304,10 +474,12 @@ namespace controlslist
 			if (!list.GetMember("EntriesA", &entries) || !entries.IsArray()) { return; }
 			if (entries.GetArraySize() == 0) { return; }  // the list fills when CONTROLS is pressed
 
+			WatchRemap(a_movie, list, entries);
+
 			const bool gamepad = ListShowsGamepad(entries);
 			if (g_showsGamepad.exchange(gamepad) != gamepad) { logger::debug("controls list: now showing the {}", gamepad ? "gamepad" : "keyboard and mouse"); }
 
-			if (AddMissingRows(a_movie, entries, gamepad))
+			if (!g_remapActive.load() && AddMissingRows(a_movie, entries, gamepad))
 			{
 				// InvalidateData is a method of the list object, the call shape that is safe (logic library).
 				const std::string path = ListPathCopy();
@@ -376,6 +548,13 @@ namespace controlslist
 			}
 			static inline REL::Relocation<decltype(thunk)> func;
 		};
+
+		void ResetRemapWatch()
+		{
+			g_remapArmed.store(false);
+			g_remapActive.store(false);
+			g_remapEvent.clear();
+		}
 	}
 
 	void Install()
@@ -387,6 +566,20 @@ namespace controlslist
 		logger::info("hook: JournalMenu::AdvanceMovie (vtable {:X}, slot 5) wrapped; the Controls list is checked after each journal frame", vtbl.address());
 	}
 
+	void InstallInputSink()
+	{
+		if (g_sinkInstalled.load()) { return; }
+		auto* devices = RE::BSInputDeviceManager::GetSingleton();
+		if (!devices)
+		{
+			logger::warn("controls list: the input device manager is null at kDataLoaded; pressing a control's own key in the Controls menu will not unbind it this session");
+			return;
+		}
+		devices->AddEventSink(InputSink::GetSingleton());
+		g_sinkInstalled.store(true);
+		logger::info("sink registered: input events (records the key pressed during a Controls-menu remap)");
+	}
+
 	void OnJournalOpen()
 	{
 		g_journalOpen.store(true);
@@ -395,9 +588,11 @@ namespace controlslist
 		g_blankFrames.store(0);
 		g_rowsBlankNow.store(0);
 		g_rowsAdded.store(0);
+		ResetRemapWatch();
 		{
 			std::scoped_lock l(g_lock);
 			g_listPath.clear();
+			g_pagePath.clear();
 		}
 		logger::debug("controls list: journal opened");
 	}
@@ -405,9 +600,12 @@ namespace controlslist
 	void OnJournalClose()
 	{
 		g_journalOpen.store(false);
+		if (g_remapActive.load()) { logger::debug("controls list: the journal closed during a remap of \"{}\"; nothing decided", g_remapEvent); }
+		ResetRemapWatch();
 		{
 			std::scoped_lock l(g_lock);
 			g_listPath.clear();
+			g_pagePath.clear();
 		}
 		logger::debug("controls list: journal closed ({} row(s) put back, {} frame(s) drew a row with no key this open)", g_rowsAdded.load(), g_blankFrames.load());
 	}
@@ -442,8 +640,9 @@ namespace controlslist
 	std::string StateJson()
 	{
 		std::scoped_lock l(g_lock);
-		return std::format(R"("controlsList":{{"hooked":{},"journalOpen":{},"listPath":"{}","showing":"{}","rowsAddedThisOpen":{},"rowsBlankInLatestFrame":{},"blankFramesThisOpen":{},"lastResult":"{}"}})",
-						   g_hooked.load() ? "true" : "false", g_journalOpen.load() ? "true" : "false", EscapeJson(g_listPath),
-						   g_showsGamepad.load() ? "gamepad" : "keyboard", g_rowsAdded.load(), g_rowsBlankNow.load(), g_blankFrames.load(), EscapeJson(g_lastResult));
+		return std::format(R"("controlsList":{{"hooked":{},"inputSink":{},"journalOpen":{},"listPath":"{}","showing":"{}","rowsAddedThisOpen":{},"rowsBlankInLatestFrame":{},"blankFramesThisOpen":{},"remapActive":{},"lastRemap":"{}","lastResult":"{}"}})",
+						   g_hooked.load() ? "true" : "false", g_sinkInstalled.load() ? "true" : "false", g_journalOpen.load() ? "true" : "false", EscapeJson(g_listPath),
+						   g_showsGamepad.load() ? "gamepad" : "keyboard", g_rowsAdded.load(), g_rowsBlankNow.load(), g_blankFrames.load(),
+						   g_remapActive.load() ? "true" : "false", EscapeJson(g_lastRemap), EscapeJson(g_lastResult));
 	}
 }

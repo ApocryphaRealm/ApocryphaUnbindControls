@@ -63,6 +63,12 @@ namespace unbinder
 	bool KeylessOnFamily(std::string_view a_event, bool a_gamepad, int* a_order = nullptr);
 	int OrderInContext(std::string_view a_event);
 	std::vector<KeylessControl> ListedKeylessOnFamily(bool a_gamepad);
+	// Gameplay context helpers for the Controls list's remap watch (main thread). LiveKeys: every key a_event has on
+	// a_device right now, in array order. IsListed: the INI list holds Gameplay|a_event|a_device. Forget: remove that
+	// line from the list WITHOUT touching the live map (a key the player just gave the control stays); the caller saves.
+	std::vector<std::uint16_t> LiveKeys(std::string_view a_event, int a_device);
+	bool IsListed(std::string_view a_event, int a_device);
+	bool Forget(int a_context, std::string_view a_event, int a_device);
 	void Install();                        // the journal open/close sink; call at kDataLoaded
 
 	// For the DevBench tool.
