@@ -2,6 +2,8 @@
 
 #include "Settings.h"
 
+#include "SystemMenu.h"
+
 #include "Unbinder.h"
 #include "utils/INISettingCollection.h"
 #include "utils/Logger.h"
@@ -60,8 +62,9 @@ namespace settings
 		// Scalars go into the key:section map; each [Unbound] line - "Context|Control|Device", an "=..."
 		// after it is accepted and ignored - becomes an entry.
 		// Each [Bound] line - "Context|Control|Device|Button" - becomes a bind; a_sawBound says the section exists.
-		void ReadFile(std::map<std::string, std::string>& a_keys, std::vector<unbinder::Entry>& a_entries, std::vector<unbinder::Bind>& a_binds, bool& a_sawBound, int& a_badLines)
+		void ReadFile(std::map<std::string, std::string>& a_keys, std::vector<unbinder::Entry>& a_entries, std::vector<unbinder::Bind>& a_binds, bool& a_sawBound, std::vector<std::string>& a_rows, bool& a_sawSystemMenu, int& a_badLines)
 		{
+			std::vector<std::string> a_seenRows;  // tokens of every [SystemMenu] row already read
 			std::ifstream in(iniPath);
 			if (!in) { return; }
 			std::string line, section;
@@ -73,6 +76,7 @@ namespace settings
 				{
 					section = Lower(t.substr(1, t.size() - 2));
 					if (section == "bound") { a_sawBound = true; }
+					if (section == "systemmenu") { a_sawSystemMenu = true; }
 					continue;
 				}
 				const auto eq = t.find('=');
@@ -99,6 +103,19 @@ namespace settings
 					const bool dup = std::any_of(a_binds.begin(), a_binds.end(), [&](const unbinder::Bind& o) { return o.device == b.device && Lower(o.context) == Lower(b.context) && Lower(o.event) == Lower(b.event); });
 					if (dup) { logger::warn("INI [Bound] line \"{}\" repeats an earlier line; ignored", t); continue; }
 					a_binds.push_back(std::move(b));
+					continue;
+				}
+				if (section == "systemmenu")
+				{
+					// Row=1 shows the row, Row=0 hides it.
+					const std::string row = Trim(eq == std::string::npos ? t : t.substr(0, eq));
+					if (systemmenu::TokenFor(row).empty()) { ++a_badLines; logger::warn("INI [SystemMenu] line \"{}\": \"{}\" is not a System row (Quicksave, Save, Load, Installed Content, Creations, Settings, Mod Configuration, Controls, Help, Quit); ignored", t, row); continue; }
+					bool visible = true;
+					if (eq == std::string::npos || !ParseBool(t.substr(eq + 1), visible)) { ++a_badLines; logger::warn("INI [SystemMenu] line \"{}\" is not Row=1 or Row=0; ignored", t); continue; }
+					const std::string token = systemmenu::TokenFor(row);
+					if (std::find(a_seenRows.begin(), a_seenRows.end(), token) != a_seenRows.end()) { logger::warn("INI [SystemMenu] line \"{}\" repeats an earlier row; ignored", t); continue; }
+					a_seenRows.push_back(token);
+					if (!visible) { a_rows.push_back(row); }
 					continue;
 				}
 				if (section == "unbound")
@@ -134,8 +151,10 @@ namespace settings
 			std::vector<unbinder::Entry> entries;
 			std::vector<unbinder::Bind> binds;
 			bool sawBound = false;
+			std::vector<std::string> rows;
+			bool sawSystemMenu = false;
 			int bad = 0;
-			ReadFile(k, entries, binds, sawBound, bad);
+			ReadFile(k, entries, binds, sawBound, rows, sawSystemMenu, bad);
 			auto get = [&](const char* a_key, auto& a_out, auto a_parse) {
 				const auto it = k.find(a_key);
 				if (it == k.end()) { logger::debug("INI key {} missing; keeping current value", a_key); return; }
@@ -148,6 +167,9 @@ namespace settings
 			// An INI from before 1.0.5 has no [Bound] section: it keeps the shipped binds rather than losing them.
 			const std::size_t bindCount = sawBound ? binds.size() : unbinder::GetBinds().size();
 			if (sawBound) { unbinder::SetBinds(std::move(binds)); }
+			// An INI from before 1.0.6 has no [SystemMenu] section: it gets the shipped hidden rows.
+			if (sawSystemMenu) { systemmenu::SetHidden(std::move(rows)); }
+			logger::info("System tab rows hidden: {}{}", systemmenu::GetHidden().size(), sawSystemMenu ? "" : " (no [SystemMenu] section - shipped rows kept)");
 			logger::info("settings loaded from {}: enabled={} logLevel={} unbound entries={} binds={}{}{}", iniPath, general::enabled, debug::logLevel,
 						 count, bindCount, sawBound ? "" : " (no [Bound] section - shipped binds kept)", bad ? std::format(" ({} bad line(s) ignored)", bad) : "");
 			return true;
@@ -219,6 +241,7 @@ namespace settings
 		// with whatever it lists, including nothing.
 		unbinder::SetEntries(unbinder::DefaultEntries());
 		unbinder::SetBinds(unbinder::DefaultBinds());
+		systemmenu::SetHidden(systemmenu::DefaultHidden());
 
 		auto* collection = utils::INISettingCollection::GetSingleton();
 		collection->AddSettings(

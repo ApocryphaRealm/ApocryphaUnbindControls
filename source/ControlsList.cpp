@@ -3,6 +3,7 @@
 #include "ControlsList.h"
 
 #include "Settings.h"
+#include "SystemMenu.h"
 #include "Unbinder.h"
 #include "utils/Logger.h"
 
@@ -641,6 +642,7 @@ namespace controlslist
 			{
 				func(a_this, a_interval, a_currentTime);
 				if (!a_this || !a_this->uiMovie || !settings::general::enabled) { return; }
+				systemmenu::OnFrame(a_this->uiMovie.get());  // [SystemMenu] rows (SystemMenu.h)
 				FixRows(a_this->uiMovie.get());
 			}
 			static inline REL::Relocation<decltype(thunk)> func;

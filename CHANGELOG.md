@@ -7,6 +7,11 @@ Rule 61: this mod's own history, kept beside the code it describes.
 > number; at `.9` the MINOR rolls. The next number is LAST WORKING + 1; failed/scratch/
 > untested numbers are reused. Numbers come from version-gate.ps1.
 
+## 1.0.6 - 2026-09-14 - untested
+
+### Added
+- System tab rows can be hidden from the INI (the owner: 'lets make it so that the different menu rows can be removed from the system tab from the ini, I dont want the help or creations rows', 'i also want quick save hidden by default', 'we dont have to remove them, just hide them with the ini at visible=0', 'I don't want to see the installed content row either'). A new [SystemMenu] section lists every row as Row=1 (shown) or Row=0 (hidden): Quicksave, Save, Load, Installed Content, Creations, Settings, Mod Configuration, Controls, Help, Quit. Shipped hidden: Quicksave, Installed Content, Creations and Help. A hidden row's entry gets filterFlag 0, so the System list's own filterer (Shared.CenteredScrollingList with Shared.ListFilterer) skips it while drawing, centring and moving the highlight; the row list and every index the page and the game read (presses, SetSaveDisabled, SetShowMod) stay unchanged, so every other row keeps its action. Rows the game adds later are checked every journal frame. Works with the game's journal and journals built on it (SkyUI's); Quest Journal Overhaul - Entire Journal Redesigned hides its rows from its own MCM settings and is left alone. An INI with no [SystemMenu] section gets the shipped rows. DevBench uvc.control op=systemrows lists every row with its filterFlag. Found on the way: removing rows through Journal Redesigned's canonical list did not stick (falsification 36), and moving row clips pushed the centred list off centre with the highlight on nothing (38); the filter design is episode 39, resolved.
+
 ## 1.0.5 - 2026-09-14 - working
 
 ### Added

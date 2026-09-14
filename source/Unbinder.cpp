@@ -4,6 +4,7 @@
 
 #include "ControlsList.h"
 #include "Settings.h"
+#include "SystemMenu.h"
 #include "utils/Logger.h"
 
 #include "REX/W32/KERNEL32.h"
@@ -384,6 +385,7 @@ namespace unbinder
 				{
 					// The Controls list draws an unbound control's row with no key (ControlsList.h).
 					controlslist::OnJournalOpen();
+					systemmenu::OnJournalOpen();  // [SystemMenu] rows are looked for again in this open
 					return RE::BSEventNotifyControl::kContinue;
 				}
 				controlslist::OnJournalClose();
