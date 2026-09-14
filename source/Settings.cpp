@@ -59,7 +59,8 @@ namespace settings
 
 		// Scalars go into the key:section map; each [Unbound] line - "Context|Control|Device", an "=..."
 		// after it is accepted and ignored - becomes an entry.
-		void ReadFile(std::map<std::string, std::string>& a_keys, std::vector<unbinder::Entry>& a_entries, int& a_badLines)
+		// Each [Bound] line - "Context|Control|Device|Button" - becomes a bind; a_sawBound says the section exists.
+		void ReadFile(std::map<std::string, std::string>& a_keys, std::vector<unbinder::Entry>& a_entries, std::vector<unbinder::Bind>& a_binds, bool& a_sawBound, int& a_badLines)
 		{
 			std::ifstream in(iniPath);
 			if (!in) { return; }
@@ -68,8 +69,38 @@ namespace settings
 			{
 				const std::string t = Trim(line);
 				if (t.empty() || t[0] == ';' || t[0] == '#') { continue; }
-				if (IsSectionHeader(t)) { section = Lower(t.substr(1, t.size() - 2)); continue; }
+				if (IsSectionHeader(t))
+				{
+					section = Lower(t.substr(1, t.size() - 2));
+					if (section == "bound") { a_sawBound = true; }
+					continue;
+				}
 				const auto eq = t.find('=');
+				if (section == "bound")
+				{
+					std::vector<std::string> parts;
+					std::size_t from = 0;
+					while (true)
+					{
+						const auto bar = t.find('|', from);
+						parts.push_back(Trim(t.substr(from, bar == std::string::npos ? std::string::npos : bar - from)));
+						if (bar == std::string::npos) { break; }
+						from = bar + 1;
+					}
+					if (parts.size() != 4) { ++a_badLines; logger::warn("INI [Bound] line \"{}\" is not Context|Control|Device|Button; ignored", t); continue; }
+					unbinder::Bind b;
+					b.context = parts[0];
+					b.event = parts[1];
+					b.device = unbinder::DeviceIndex(parts[2]);
+					if (unbinder::ContextIndex(b.context) < 0) { ++a_badLines; logger::warn("INI [Bound] line \"{}\": unknown context \"{}\"; ignored", t, b.context); continue; }
+					if (b.device < 0) { ++a_badLines; logger::warn("INI [Bound] line \"{}\": unknown device; ignored (keyboard, mouse or gamepad)", t); continue; }
+					b.key = unbinder::ParseButton(parts[3], b.device);
+					if (b.key == 0xFF) { ++a_badLines; logger::warn("INI [Bound] line \"{}\": \"{}\" is not a button name or code; ignored", t, parts[3]); continue; }
+					const bool dup = std::any_of(a_binds.begin(), a_binds.end(), [&](const unbinder::Bind& o) { return o.device == b.device && Lower(o.context) == Lower(b.context) && Lower(o.event) == Lower(b.event); });
+					if (dup) { logger::warn("INI [Bound] line \"{}\" repeats an earlier line; ignored", t); continue; }
+					a_binds.push_back(std::move(b));
+					continue;
+				}
 				if (section == "unbound")
 				{
 					const std::string key = Trim(eq == std::string::npos ? t : t.substr(0, eq));
@@ -101,8 +132,10 @@ namespace settings
 			}
 			std::map<std::string, std::string> k;
 			std::vector<unbinder::Entry> entries;
+			std::vector<unbinder::Bind> binds;
+			bool sawBound = false;
 			int bad = 0;
-			ReadFile(k, entries, bad);
+			ReadFile(k, entries, binds, sawBound, bad);
 			auto get = [&](const char* a_key, auto& a_out, auto a_parse) {
 				const auto it = k.find(a_key);
 				if (it == k.end()) { logger::debug("INI key {} missing; keeping current value", a_key); return; }
@@ -112,8 +145,11 @@ namespace settings
 			get("benabled:general", general::enabled, ParseBool);
 			const std::size_t count = entries.size();
 			unbinder::SetEntries(std::move(entries));
-			logger::info("settings loaded from {}: enabled={} logLevel={} unbound entries={}{}", iniPath, general::enabled, debug::logLevel,
-						 count, bad ? std::format(" ({} bad line(s) ignored)", bad) : "");
+			// An INI from before 1.0.5 has no [Bound] section: it keeps the shipped binds rather than losing them.
+			const std::size_t bindCount = sawBound ? binds.size() : unbinder::GetBinds().size();
+			if (sawBound) { unbinder::SetBinds(std::move(binds)); }
+			logger::info("settings loaded from {}: enabled={} logLevel={} unbound entries={} binds={}{}{}", iniPath, general::enabled, debug::logLevel,
+						 count, bindCount, sawBound ? "" : " (no [Bound] section - shipped binds kept)", bad ? std::format(" ({} bad line(s) ignored)", bad) : "");
 			return true;
 		}
 
@@ -138,22 +174,22 @@ namespace settings
 			return false;
 		}
 
-		// Rewrites the [Unbound] section's entry lines (used by the DevBench tool's unbind/rebind). The header
-		// and the comment block under it are kept; a missing section is appended.
-		void WriteUnbound(std::vector<std::string>& a_lines, const std::vector<unbinder::Entry>& a_entries)
+		// Rewrites a list section's entry lines ([Unbound] or [Bound]; used by the DevBench tool's unbind/rebind and the
+		// Controls menu's remap watch). The header and the comment block under it are kept; a missing section is appended.
+		void WriteSection(std::vector<std::string>& a_lines, const char* a_header, const std::vector<std::string>& a_fresh)
 		{
-			std::vector<std::string> fresh;
-			for (const auto& e : a_entries) { fresh.push_back(std::format("{}|{}|{}", e.context, e.event, unbinder::DeviceName(e.device))); }
+			const std::vector<std::string>& fresh = a_fresh;
+			const std::string wantHeader = Lower(a_header);
 			std::size_t header = a_lines.size();
 			for (std::size_t i = 0; i < a_lines.size(); ++i)
 			{
 				const std::string t = Trim(a_lines[i]);
-				if (IsSectionHeader(t) && Lower(t) == "[unbound]") { header = i; break; }
+				if (IsSectionHeader(t) && Lower(t) == wantHeader) { header = i; break; }
 			}
 			if (header == a_lines.size())
 			{
 				if (!a_lines.empty() && !Trim(a_lines.back()).empty()) { a_lines.push_back(""); }
-				a_lines.push_back("[Unbound]");
+				a_lines.push_back(a_header);
 				a_lines.insert(a_lines.end(), fresh.begin(), fresh.end());
 				return;
 			}
@@ -182,6 +218,7 @@ namespace settings
 		// Compiled default list = the shipped INI's [Unbound] lines (rule 16). An INI that exists replaces it
 		// with whatever it lists, including nothing.
 		unbinder::SetEntries(unbinder::DefaultEntries());
+		unbinder::SetBinds(unbinder::DefaultBinds());
 
 		auto* collection = utils::INISettingCollection::GetSingleton();
 		collection->AddSettings(
@@ -212,7 +249,16 @@ namespace settings
 		ok &= WriteKey(lines, "Debug", "uLogLevel", std::to_string(debug::logLevel));
 		ok &= WriteKey(lines, "General", "bEnabled", general::enabled ? "1" : "0");
 		const auto entries = unbinder::GetEntries();
-		WriteUnbound(lines, entries);
+		std::vector<std::string> unboundLines;
+		for (const auto& e : entries) { unboundLines.push_back(std::format("{}|{}|{}", e.context, e.event, unbinder::DeviceName(e.device))); }
+		WriteSection(lines, "[Unbound]", unboundLines);
+		std::vector<std::string> boundLines;
+		for (const auto& b : unbinder::GetBinds())
+		{
+			const char* name = unbinder::ButtonName(b.key, b.device);
+			boundLines.push_back(std::format("{}|{}|{}|{}", b.context, b.event, unbinder::DeviceName(b.device), name[0] ? std::string(name) : std::format("0x{:02x}", b.key)));
+		}
+		WriteSection(lines, "[Bound]", boundLines);
 
 		std::ofstream out(iniPath, std::ios::trunc);
 		if (!out) { logger::error("Save: could not open {} for writing", iniPath); return false; }

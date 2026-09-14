@@ -35,6 +35,7 @@ namespace controlslist
 {
 	void Install();          // the AdvanceMovie wrap; call once at plugin load
 	void InstallInputSink(); // the remap watch's key recorder; call at kDataLoaded
+	void Listen(int a_seconds); // diagnostic: log every button event (device, code, user event) for a_seconds (1-120)
 	void OnJournalOpen();    // from the MenuOpenCloseEvent sink
 	void OnJournalClose();
 

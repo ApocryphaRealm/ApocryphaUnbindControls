@@ -43,6 +43,12 @@ namespace controlslist
 		std::atomic<bool> g_hooked{ false };
 		std::atomic<bool> g_sinkInstalled{ false };
 		std::atomic<bool> g_journalOpen{ false };
+		// A controller press that carries "Pause" (System Tab) opens the journal on the engine's SAVED tab, while keyboard Esc
+		// always gets System; the owner wants the controller to behave like Esc ("i want it to always open system"). The sink
+		// notes the press, OnJournalOpen arms a switch when that press opened the journal, and the first frames switch tab.
+		std::atomic<long long> g_pauseDownMs{ 0 };      // steady-clock ms of the latest controller "Pause" press, 0 = none
+		std::atomic<bool> g_systemTabPending{ false };  // this open came from that press
+		int g_systemTabFrames = 0;                      // main thread: frames left to confirm the switch
 		std::atomic<bool> g_showsGamepad{ false };  // what the list showed in the latest frame
 		std::atomic<int> g_blankFrames{ 0 };        // frames that hid at least one key, this open
 		std::atomic<int> g_rowsBlankNow{ 0 };       // rows drawn blank in the latest frame
@@ -58,6 +64,14 @@ namespace controlslist
 		};
 		std::atomic<bool> g_remapArmed{ false };  // the sink records only while a remap is on
 		std::atomic<bool> g_remapActive{ false };
+		// Diagnostic (DevBench op=listen): until this steady-clock time in ms, every button event is logged with the user
+		// event the game attached to it - the way to see what a controller button actually sends.
+		std::atomic<long long> g_listenUntilMs{ 0 };
+
+		long long SteadyNowMs()
+		{
+			return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+		}
 		std::mutex g_pressLock;
 		PressedKey g_pressed;  // g_pressLock
 		bool g_hasPress = false;  // g_pressLock
@@ -341,12 +355,28 @@ namespace controlslist
 
 			RE::BSEventNotifyControl ProcessEvent(RE::InputEvent* const* a_event, RE::BSTEventSource<RE::InputEvent*>*) override
 			{
-				if (!a_event || !g_remapArmed.load()) { return RE::BSEventNotifyControl::kContinue; }
+				if (!a_event) { return RE::BSEventNotifyControl::kContinue; }
+				const bool listening = SteadyNowMs() < g_listenUntilMs.load();
+				const bool journalOpen = g_journalOpen.load();
 				for (auto* e = *a_event; e; e = e->next)
 				{
 					if (e->GetEventType() != RE::INPUT_EVENT_TYPE::kButton) { continue; }
 					auto* button = e->AsButtonEvent();
-					if (!button || !button->IsDown()) { continue; }
+					if (!button) { continue; }
+					if (!journalOpen && button->IsDown() && e->GetDevice() == RE::INPUT_DEVICE::kGamepad)
+					{
+						const auto* userEvents = RE::UserEvents::GetSingleton();
+						if (userEvents && button->QUserEvent() == userEvents->pause) { g_pauseDownMs.store(SteadyNowMs()); }
+					}
+					if (!g_remapArmed.load() && !listening) { continue; }
+					if (listening && (button->IsDown() || button->IsUp()))
+					{
+						const auto& user = button->QUserEvent();
+						logger::info("listen: device {} ({}) code 0x{:X} userEvent \"{}\" value {} held {:.2f}s{}", static_cast<int>(e->GetDevice()),
+									 unbinder::DeviceName(static_cast<int>(e->GetDevice())), button->GetIDCode(), user.c_str() ? user.c_str() : "", button->Value(),
+									 button->HeldDuration(), button->IsDown() ? " DOWN" : " UP");
+					}
+					if (!g_remapArmed.load() || !button->IsDown()) { continue; }
 					std::scoped_lock l(g_pressLock);
 					if (!g_hasPress)
 					{
@@ -380,12 +410,30 @@ namespace controlslist
 			for (int d = 0; d < 3; ++d) { after[d] = unbinder::LiveKeys(event, d); }
 			const std::string pressedText = hasPress ? std::format("{} 0x{:02x}", unbinder::DeviceName(pressed.device), pressed.code) : std::string("nothing recorded");
 
-			// 1. A control the INI list unbinds was given a key: the player bound it, so it leaves the list.
+			// 1. A control the INI list unbinds was given a key: the player bound it, so it leaves the list. A control a [Bound]
+			// line gives a key was given ANOTHER key: the line follows the player's choice, or closing the journal would put
+			// the old key back (the owner, 2026-09-14, remapped System Tab to Back and it returned to Start).
 			int forgotten = 0;
+			int rebound = 0;
+			std::string reboundText;
 			for (int d = 0; d < 3; ++d)
 			{
-				const bool gotKey = std::any_of(after[d].begin(), after[d].end(), [](std::uint16_t a_k) { return a_k != kUnmappedID; });
+				const auto newKey = std::find_if(after[d].begin(), after[d].end(), [](std::uint16_t a_k) { return a_k != kUnmappedID; });
+				const bool gotKey = newKey != after[d].end();
 				if (after[d] != g_before[d] && gotKey && unbinder::IsListed(event, d) && unbinder::Forget(0, event, d)) { ++forgotten; }
+				if (after[d] != g_before[d] && gotKey && unbinder::UpdateBind(0, event, d, *newKey))
+				{
+					++rebound;
+					reboundText = std::format("{} 0x{:02x}", unbinder::DeviceName(d), *newKey);
+				}
+			}
+			if (rebound && !forgotten)
+			{
+				settings::Save();
+				const std::string text = std::format("\"{}\" was given another key ({}): its [Bound] line follows it", event, reboundText);
+				SetRemapResult(text);
+				logger::info("controls list: {}", text);
+				return;
 			}
 			if (forgotten)
 			{
@@ -404,6 +452,7 @@ namespace controlslist
 				if (same)
 				{
 					std::string why;
+					unbinder::RemoveBind(0, event, pressed.device);  // a bound control unbound here keeps no bind, or the next apply would give the key back
 					const bool ok = unbinder::Unbind(0, event, pressed.device, why);
 					if (ok) { settings::Save(); }
 					const std::string text = ok ? std::format("\"{}\": its own key pressed again ({}); unbound on the {} and added to the INI list", event, pressedText, unbinder::DeviceName(pressed.device)) :
@@ -457,8 +506,56 @@ namespace controlslist
 
 		// After the movie advanced: the remap watch, missing rows put back, then every visible row clip, matched to its
 		// entry through itemIndex, shows its key or none.
+		// The journal was opened by a controller "Pause" press: show the System tab, the way keyboard Esc opens it. The journal
+		// movie picks its first tab in RestoreSavedSettings(aiSavedTab, abTabsDisabled), which the engine calls with its saved
+		// tab; calling that method again (a method of the menu object - the safe call shape) with the last tab switches to
+		// System in vanilla, SkyUI and Quest Journal Overhaul journals alike. Retried for a few frames in case the engine's own
+		// call lands after the first frame. Returns true while the switch is still being confirmed.
+		bool ShowSystemTab(RE::GFxMovieView* a_movie)
+		{
+			constexpr const char* kMenuCandidates[] = { "_root.QuestJournalFader.Menu_mc", "_root.Menu_mc", "_level0.QuestJournalFader.Menu_mc" };
+			for (const char* path : kMenuCandidates)
+			{
+				RE::GFxValue tab;
+				if (!a_movie->GetVariable(&tab, (std::string(path) + ".iCurrentTab").c_str()) || !tab.IsNumber()) { continue; }
+				RE::GFxValue count;
+				const int tabs = a_movie->GetVariable(&count, (std::string(path) + ".TabButtonGroup.length").c_str()) && count.IsNumber() ? static_cast<int>(count.GetNumber()) : 3;
+				const int system = tabs > 0 ? tabs - 1 : 2;
+				const int current = static_cast<int>(tab.GetNumber());
+				if (current == system)
+				{
+					if (--g_systemTabFrames <= 0)
+					{
+						logger::debug("system tab: the journal shows the System tab ({} of {}), opened by a controller Pause press", system, tabs);
+						return false;
+					}
+					return true;
+				}
+				RE::GFxValue disabled;
+				const bool tabsDisabled = a_movie->GetVariable(&disabled, (std::string(path) + ".bTabsDisabled").c_str()) && disabled.IsBool() && disabled.GetBool();
+				RE::GFxValue args[2];
+				args[0].SetNumber(static_cast<double>(system));
+				args[1].SetBoolean(tabsDisabled);
+				a_movie->Invoke((std::string(path) + ".RestoreSavedSettings").c_str(), nullptr, args, 2);
+				RE::GFxValue after;
+				const bool read = a_movie->GetVariable(&after, (std::string(path) + ".iCurrentTab").c_str()) && after.IsNumber();
+				logger::info("system tab: the journal opened on tab {} from a controller Pause press; switched to the System tab ({}): now tab {}", current, system,
+							 read ? std::to_string(static_cast<int>(after.GetNumber())) : std::string("unknown"));
+				g_systemTabFrames = 3;
+				return true;
+			}
+			if (--g_systemTabFrames <= -10)
+			{
+				logger::warn("system tab: no journal menu object found (tried QuestJournalFader.Menu_mc and Menu_mc); the journal keeps its saved tab");
+				return false;
+			}
+			return true;
+		}
+
 		void FixRows(RE::GFxMovieView* a_movie)
 		{
+			if (g_systemTabPending.load() && !ShowSystemTab(a_movie)) { g_systemTabPending.store(false); }
+
 			RE::GFxValue list;
 			if (!FindList(a_movie, list))
 			{
@@ -580,9 +677,24 @@ namespace controlslist
 		logger::info("sink registered: input events (records the key pressed during a Controls-menu remap)");
 	}
 
+	void Listen(int a_seconds)
+	{
+		const int seconds = a_seconds < 1 ? 1 : (a_seconds > 120 ? 120 : a_seconds);
+		g_listenUntilMs.store(SteadyNowMs() + seconds * 1000LL);
+		logger::info("listen: logging every button event for {} s (sink installed: {})", seconds, g_sinkInstalled.load());
+	}
+
 	void OnJournalOpen()
 	{
 		g_journalOpen.store(true);
+		{
+			const long long pressed = g_pauseDownMs.exchange(0);
+			const long long since = pressed ? SteadyNowMs() - pressed : -1;
+			const bool fromPause = since >= 0 && since < 1000;
+			g_systemTabPending.store(fromPause);
+			g_systemTabFrames = 0;
+			if (fromPause) { logger::debug("controls list: journal opened by a controller Pause press {} ms ago; the System tab will be shown", since); }
+		}
 		g_loggedRows.clear();
 		g_searchFailedLogged = false;
 		g_blankFrames.store(0);
@@ -600,6 +712,7 @@ namespace controlslist
 	void OnJournalClose()
 	{
 		g_journalOpen.store(false);
+		g_systemTabPending.store(false);
 		if (g_remapActive.load()) { logger::debug("controls list: the journal closed during a remap of \"{}\"; nothing decided", g_remapEvent); }
 		ResetRemapWatch();
 		{

@@ -32,16 +32,17 @@ OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
 
 MIT - the notice is `include/DevBench/DevBenchAPI.LICENSE.txt`, kept with the files.
 
-## Notes carried from the previous licence file
+## controlmap.txt - Controlmap.txt Fixed and Cleaned - Updated 1.3 (optional files in the installer)
 
-Third-party components, each under its own permissive licence:
+https://www.nexusmods.com/skyrimspecialedition/mods/175609 by DEEJMASTER333 and others. The author's permissions on that
+page: "I don't care what you do with this." The two `controlmap.txt` builds this mod's installer offers (pre-1.6.1130 and
+1.6.1130+) are that mod's files with two lines changed: System Tab (the Pause control) gets the controller's Start button
+and can be remapped on the controller, and Journal has no controller button.
 
-* Dear ImGui (MIT) - https://github.com/ocornut/imgui
-* CommonLibSSE-NG (MIT) - https://github.com/CharmedBaryon/CommonLibSSE-NG
-* DevBenchAPI header/source (MIT) - the consumer API of DevBench, vendored so the framework can
-  register its DevBench driving tools; devbench.dll itself is a separate, optional, GPL program
-  that this framework only talks to over its REST API.
+Credits carried from that page: DavidJCobb for the original Cobb Controlmap Fix, and mistaabushido for Controlmap.txt Fixed
+and Cleaned, which were the basis of that mod; Hawkbar for Skyrim Control Mapper.
 
-Compatibility note: Apocrypha Menu Framework exports an API compatible with the PUBLIC consumer
-header of SKSE Menu Framework so that mods written against that header can register with it. It
-is an original implementation and contains no code from SKSE Menu Framework.
+## Notes
+
+* This mod ships no code from any other mod: the DLL is original code built on CommonLibSSE-NG (above).
+* devbench.dll is a separate, optional program this mod only talks to through the DevBench consumer API.

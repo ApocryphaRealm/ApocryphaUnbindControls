@@ -41,11 +41,36 @@ namespace unbinder
 
 	std::vector<Entry> GetEntries();
 	void SetEntries(std::vector<Entry> a_entries);   // from the INI; does not apply
-	// The shipped list (the owner, 2026-09-14): the fifteen controls he unbound himself in the game's Controls menu -
-	// the Tween Menu's shortcuts (Journal, Quick Inventory, Quick Magic, Quick Map, Quick Stats, Wait) and Quickload,
-	// Quicksave, Favorites, Auto-Move, Toggle Always Run and Toggle POV on the keyboard; Wait, Toggle POV and Sneak on
-	// the gamepad. Matches the shipped INI's [Unbound] lines.
+	// The shipped list (the owner's own picks, 2026-09-14): Journal, Quick Inventory, Quick Magic, Quick Map, Quick Stats,
+	// Wait, Favorites, Quicksave, Quickload, Auto-Move and Toggle Always Run on the keyboard; Wait and Journal on the gamepad
+	// (Start opens the System tab instead, see DefaultBinds). Matches the shipped INI's [Unbound] lines.
 	std::vector<Entry> DefaultEntries();
+
+	// [Bound]: a control GIVEN a key or button on a device, including one controlmap.txt gives nothing there and the
+	// Controls menu cannot remap there (System Tab, the Pause control, has no gamepad button and is not
+	// gamepad-remappable). Applied after the unbinds on every apply; a key another control on that device holds is not
+	// taken, and on the keyboard AMF's reserved keys are refused.
+	struct Bind
+	{
+		std::string context;    // e.g. "Gameplay"
+		std::string event;      // e.g. "Pause"
+		int device = 0;         // 0 keyboard, 1 mouse, 2 gamepad
+		std::uint16_t key = 0xFF;
+	};
+	std::vector<Bind> GetBinds();
+	void SetBinds(std::vector<Bind> a_binds);        // from the INI; does not apply
+	// The shipped binds (the owner, 2026-09-14: "add a system tab button to the controller control layout and unbind
+	// the journal button"): Gameplay|Pause|gamepad|Start. Matches the shipped INI's [Bound] lines.
+	std::vector<Bind> DefaultBinds();
+	// A button name (gamepad: A, B, X, Y, LB, RB, LT, RT, Start, Back, LeftStick, RightStick, DPadUp/Down/Left/Right)
+	// or a number (0x0010); 0xFF when neither. ButtonName: the gamepad name for a code, "" when it has none.
+	std::uint16_t ParseButton(std::string_view a_text, int a_device);
+	const char* ButtonName(std::uint16_t a_key, int a_device);
+	// The Controls menu's remap watch (main thread; the caller saves). UpdateBind: a bound control was given another key
+	// by the player - its bind now holds that key (true when a bind changed). RemoveBind: the bind is dropped (the player
+	// unbound the control by pressing its own key).
+	bool UpdateBind(int a_context, std::string_view a_event, int a_device, std::uint16_t a_key);
+	bool RemoveBind(int a_context, std::string_view a_event, int a_device);
 
 	// Main thread only.
 	bool Unbind(int a_context, std::string_view a_event, int a_device, std::string& a_why);  // adds to the list

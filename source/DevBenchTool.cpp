@@ -130,6 +130,14 @@ namespace DevBenchTool
 											unbinder::ContextName(ctx), EscapeJson(event), unbinder::DeviceName(dev), EscapeJson(why)).c_str());
 				return;
 			}
+			if (op == "listen")
+			{
+				int seconds = 20;
+				try { const std::string s = Get(args, "seconds"); if (!s.empty()) { seconds = std::stoi(s); } } catch (...) {}
+				controlslist::Listen(seconds);
+				a_write(a_sink, std::format("{{\"ok\":true,\"op\":\"listen\",\"seconds\":{},\"log\":\"ApocryphaUnbindControls.log, lines starting listen:\"}}", seconds).c_str());
+				return;
+			}
 			if (op == "rows")
 			{
 				std::string out;
@@ -177,8 +185,8 @@ namespace DevBenchTool
 			"keys captured this session, last apply. op=dump [context]: every mapping of the live ControlMap (event, key, modifier, "
 			"remappable) per context and device. op=unbind / op=rebind with context (name or index), event, device "
 			"(keyboard|mouse|gamepad): add to or remove from the list, applied and written to the INI. op=apply re-applies the list; "
-			"op=reload gives the keys back, re-reads the INI and applies. op=rows (journal open): every row of the game's Controls list - event, the buttonName and buttonID the game sent, whether this mod draws it blank and why.\","
-			"\"inputSchema\":{\"type\":\"object\",\"properties\":{\"op\":{\"type\":\"string\"},\"context\":{\"type\":\"string\"},\"event\":{\"type\":\"string\"},\"device\":{\"type\":\"string\"}}},"
+			"op=reload gives the keys back, re-reads the INI and applies. op=rows (journal open): every row of the game's Controls list - event, the buttonName and buttonID the game sent, whether this mod draws it blank and why. op=listen [seconds, default 20, 1-120]: log every button event - device, code, the user event the game attached, value, held time - to the mod's log.\","
+			"\"inputSchema\":{\"type\":\"object\",\"properties\":{\"op\":{\"type\":\"string\"},\"context\":{\"type\":\"string\"},\"event\":{\"type\":\"string\"},\"device\":{\"type\":\"string\"},\"seconds\":{\"type\":\"string\"}}},"
 			"\"readOnly\":false"
 			"}";
 

@@ -6,6 +6,8 @@
 #include "Settings.h"
 #include "utils/Logger.h"
 
+#include "REX/W32/KERNEL32.h"
+
 #include <algorithm>
 #include <cctype>
 #include <format>
@@ -26,6 +28,16 @@ namespace unbinder
 		int g_applyCount = 0;
 		int g_lastTouched = 0;
 		bool g_sinkInstalled = false;
+		std::vector<Bind> g_binds;
+		int g_lastBound = 0;  // binds that changed a key at the last apply
+
+		// XInput masks, as controlmap.txt writes gamepad buttons (Journal 0x0010 = Start, Wait 0x0020 = Back ...).
+		constexpr std::pair<const char*, std::uint16_t> kPadButtons[] = {
+			{ "DPadUp", 0x0001 }, { "DPadDown", 0x0002 }, { "DPadLeft", 0x0004 }, { "DPadRight", 0x0008 },
+			{ "Start", 0x0010 }, { "Back", 0x0020 }, { "LeftStick", 0x0040 }, { "RightStick", 0x0080 },
+			{ "LB", 0x0100 }, { "RB", 0x0200 }, { "A", 0x1000 }, { "B", 0x2000 }, { "X", 0x4000 }, { "Y", 0x8000 },
+			{ "LT", 0x0009 }, { "RT", 0x000a },
+		};
 
 		// The context names, in the engine's index order. SE and AE before 1.6.1130 have 17; AE 1.6.1130+
 		// inserts Marketplace at 16 and Favor becomes 17 (RE/U/UserEvents.h).
@@ -104,14 +116,16 @@ namespace unbinder
 			return out;
 		}
 
-		// The engine's button -> event lookup is a binary search on inputKey (CommonLibSSE's
-		// ControlMap::GetUserEventName mirrors it with std::equal_range), so the array must be sorted by key
-		// again after any edit.
+		// The engine's button -> event lookup (SE ID 67242) is a binary search with comparator 67264, which orders by
+		// inputKey and then by modifier (CommonLibSSE's GetUserEventName only mirrors the inputKey half), so the array is
+		// re-sorted the same way after any edit - key first, modifier as the tie-break.
 		void SortByKey(Mappings& a_mappings)
 		{
 			if (a_mappings.size() < 2) { return; }
 			std::stable_sort(a_mappings.begin(), a_mappings.end(),
-							 [](const RE::ControlMap::UserEventMapping& a_l, const RE::ControlMap::UserEventMapping& a_r) { return a_l.inputKey < a_r.inputKey; });
+							 [](const RE::ControlMap::UserEventMapping& a_l, const RE::ControlMap::UserEventMapping& a_r) {
+								 return a_l.inputKey != a_r.inputKey ? a_l.inputKey < a_r.inputKey : a_l.modifier < a_r.modifier;
+							 });
 		}
 
 		std::string Hex(std::uint16_t a_v) { return std::format("0x{:02x}", a_v); }
@@ -265,6 +279,97 @@ namespace unbinder
 			return kept;
 		}
 
+		// AMF's reserved keys (DEFAULT-KEYS.md, runtime check 1): the framework's live menu key and its navigation keys,
+		// all keyboard scan codes. Asked at every apply so the answer follows AMF's current configuration.
+		bool IsAmfReserved(std::uint16_t a_key)
+		{
+			using func_t = std::uint32_t (*)(std::int32_t*, std::uint32_t);
+			for (const char* dll : { "ApocryphaMenuFramework.dll", "SKSEMenuFramework.dll" })
+			{
+				const auto module = REX::W32::GetModuleHandleA(dll);
+				if (!module) { continue; }
+				const auto func = static_cast<func_t>(REX::W32::GetProcAddress(module, "SMF_GetReservedKeyCodes"));
+				if (!func) { continue; }
+				std::int32_t codes[32]{};
+				const std::uint32_t count = func(codes, static_cast<std::uint32_t>(std::size(codes)));
+				for (std::uint32_t i = 0; i < count && i < std::size(codes); ++i)
+				{
+					if (codes[i] == static_cast<std::int32_t>(a_key)) { return true; }
+				}
+				return false;
+			}
+			return false;
+		}
+
+		// [Bound]: give each listed control its key. Runs after the unbinds, so a key the list just freed (Journal's Start
+		// on the gamepad) is free for the bind. One key, one action: a key another control on that device still holds is
+		// not taken, and the holder is named. A control with no mapping on that device at all gets one, copied from its
+		// mapping on another device (same event, order and flags) with the new key. Caller holds g_lock.
+		int ApplyBinds(RE::ControlMap* a_map, const char* a_reason)
+		{
+			int bound = 0;
+			for (const auto& b : g_binds)
+			{
+				const int ctx = ContextIndex(b.context);
+				auto* mappings = ctx >= 0 ? MappingsFor(a_map, ctx, b.device) : nullptr;
+				if (!mappings || b.key == kUnmapped) { continue; }
+				const std::string keyText = ButtonName(b.key, b.device)[0] ? std::format("{} ({})", ButtonName(b.key, b.device), Hex(b.key)) : Hex(b.key);
+				if (b.device == 0 && IsAmfReserved(b.key))
+				{
+					logger::warn("bind ({}): {}|{}|{} -> {} refused: AMF reserves that key", a_reason, b.context, b.event, DeviceName(b.device), keyText);
+					continue;
+				}
+				auto found = Find(*mappings, b.event);
+				if (!found.empty() && found.front()->inputKey == b.key) { continue; }  // already there
+				const RE::ControlMap::UserEventMapping* holder = nullptr;
+				for (const auto& m : *mappings)
+				{
+					if (m.inputKey == b.key && !(m.eventID.c_str() && IEquals(m.eventID.c_str(), b.event))) { holder = &m; break; }
+				}
+				if (holder)
+				{
+					logger::warn("bind ({}): {}|{}|{} -> {} not applied: \"{}\" already holds it on that device", a_reason, b.context, b.event, DeviceName(b.device), keyText,
+								 holder->eventID.c_str() ? holder->eventID.c_str() : "?");
+					continue;
+				}
+				if (found.empty())
+				{
+					RE::ControlMap::UserEventMapping copy{};
+					bool have = false;
+					for (int d = 0; d < 3 && !have; ++d)
+					{
+						if (d == b.device) { continue; }
+						auto* other = MappingsFor(a_map, ctx, d);
+						if (!other) { continue; }
+						auto theirs = Find(*other, b.event);
+						if (!theirs.empty()) { copy = *theirs.front(); have = true; }
+					}
+					if (!have)
+					{
+						logger::warn("bind ({}): {}|{}|{} -> {} not applied: the game has no such control in that context", a_reason, b.context, b.event, DeviceName(b.device), keyText);
+						continue;
+					}
+					copy.inputKey = b.key;
+					// 0 = no modifier. The engine's button -> user event lookup (SE ID 67242) binary-searches this array for
+					// (inputKey, modifier) with comparator 67264, which orders and matches on BOTH; a press builds its search key
+					// with modifier 0 (idCode's upper bits), so a mapping stored with modifier 0xFF is never found and the press
+					// gets no user event (1.0.5 listen test: code 0x10 userEvent ""). Adversarial contest 2026-09-14.
+					copy.modifier = 0;
+					copy.linked = false;
+					mappings->push_back(copy);
+					logger::info("bind ({}): {}|{}|{} had no mapping on that device; created one on {}", a_reason, b.context, b.event, DeviceName(b.device), keyText);
+				}
+				else
+				{
+					logger::info("bind ({}): {}|{}|{} {} -> {}", a_reason, b.context, b.event, DeviceName(b.device), Hex(found.front()->inputKey), keyText);
+					found.front()->inputKey = b.key;
+				}
+				SortByKey(*mappings);
+				++bound;
+			}
+			return bound;
+		}
+
 		// The journal is where the Controls menu lives; its Reset to defaults reloads the whole map and a
 		// rebind rewrites entries, so every close re-applies the list.
 		class MenuSink : public RE::BSTEventSink<RE::MenuOpenCloseEvent>
@@ -325,10 +430,10 @@ namespace unbinder
 
 	std::vector<Entry> DefaultEntries()
 	{
-		// The Tween Menu set (the owner, 2026-09-14: "only unbind the tween menu overhaul coverd buttons and keys and
-		// leave the rest alone"): the shortcuts for screens Tween Menu Overhaul and its Wait add-on already open. On the
-		// controller only Back (Wait) is freed; Start stays on Journal, the controller's route to the system menu.
-		// Device: 0 keyboard, 2 gamepad.
+		// The owner's own list for 1.0.5 (2026-09-14, picked in the Controls menu with the fixed control map installed: "let's
+		// ship it with my current unbound keys as the default"): the Tween Menu's shortcuts plus Favorites, Quicksave,
+		// Quickload, Auto-Move and Toggle Always Run on the keyboard; Wait and Journal on the controller, where Start opens the
+		// System tab instead (DefaultBinds). Device: 0 keyboard, 2 gamepad.
 		constexpr std::pair<const char*, int> kDefaults[] = {
 			{ "Journal", 0 },
 			{ "Quick Inventory", 0 },
@@ -337,6 +442,12 @@ namespace unbinder
 			{ "Quick Stats", 0 },
 			{ "Wait", 0 },
 			{ "Wait", 2 },
+			{ "Journal", 2 },
+			{ "Favorites", 0 },
+			{ "Quicksave", 0 },
+			{ "Quickload", 0 },
+			{ "Auto-Move", 0 },
+			{ "Toggle Always Run", 0 },
 		};
 		std::vector<Entry> out;
 		for (const auto& [event, device] : kDefaults)
@@ -348,6 +459,90 @@ namespace unbinder
 			out.push_back(std::move(e));
 		}
 		return out;
+	}
+
+	std::vector<Bind> GetBinds()
+	{
+		std::scoped_lock l(g_lock);
+		return g_binds;
+	}
+
+	void SetBinds(std::vector<Bind> a_binds)
+	{
+		std::scoped_lock l(g_lock);
+		g_binds = std::move(a_binds);
+		logger::debug("unbinder: binds set, {} entries", g_binds.size());
+	}
+
+	std::vector<Bind> DefaultBinds()
+	{
+		// System Tab (the Pause control) on Start, where the unbound controller Journal was.
+		Bind b;
+		b.context = "Gameplay";
+		b.event = "Pause";
+		b.device = 2;
+		b.key = 0x0010;
+		return { b };
+	}
+
+	std::uint16_t ParseButton(std::string_view a_text, int a_device)
+	{
+		if (a_device == 2)
+		{
+			for (const auto& [name, code] : kPadButtons)
+			{
+				if (IEquals(name, a_text)) { return code; }
+			}
+		}
+		try
+		{
+			std::size_t used = 0;
+			const auto value = std::stoul(std::string(a_text), &used, 0);
+			if (used != a_text.size() || value >= 0xFF && a_device != 2 || value > 0xFFFF) { return kUnmapped; }
+			return static_cast<std::uint16_t>(value);
+		}
+		catch (...)
+		{
+			return kUnmapped;
+		}
+	}
+
+	const char* ButtonName(std::uint16_t a_key, int a_device)
+	{
+		if (a_device != 2) { return ""; }
+		for (const auto& [name, code] : kPadButtons)
+		{
+			if (code == a_key) { return name; }
+		}
+		return "";
+	}
+
+	bool UpdateBind(int a_context, std::string_view a_event, int a_device, std::uint16_t a_key)
+	{
+		std::scoped_lock l(g_lock);
+		const char* context = ContextName(a_context);
+		for (auto& b : g_binds)
+		{
+			if (b.device != a_device || !IEquals(b.context, context) || !IEquals(b.event, a_event)) { continue; }
+			if (b.key == a_key) { return false; }
+			logger::info("bind {}|{}|{}: follows the Controls menu, {} -> {}", b.context, b.event, DeviceName(a_device), Hex(b.key), Hex(a_key));
+			b.key = a_key;
+			return true;
+		}
+		return false;
+	}
+
+	bool RemoveBind(int a_context, std::string_view a_event, int a_device)
+	{
+		std::scoped_lock l(g_lock);
+		const char* context = ContextName(a_context);
+		const auto it = std::find_if(g_binds.begin(), g_binds.end(), [&](const Bind& b) {
+			return b.device == a_device && IEquals(b.context, context) && IEquals(b.event, a_event);
+		});
+		if (it == g_binds.end()) { return false; }
+		logger::info("bind {}|{}|{}: removed (unbound in the Controls menu)", it->context, it->event, DeviceName(a_device));
+		g_binds.erase(it);
+		return true;
 	}
 
 	bool Unbind(int a_context, std::string_view a_event, int a_device, std::string& a_why)
@@ -432,6 +627,7 @@ namespace unbinder
 			}
 		}
 		for (auto* m : dirty) { SortByKey(*m); }
+		g_lastBound = ApplyBinds(map, a_reason);
 		g_lastLinked = KeepLinkedActions(map, a_reason);
 		if (g_lastLinked) { logger::info("apply ({}): {} menu action(s) linked to an unbound control given their key", a_reason, g_lastLinked); }
 		g_lastApply = a_reason;
@@ -611,6 +807,15 @@ namespace unbinder
 			bool f2 = true;
 			for (const auto& k : e.original) { if (!f2) { out += ","; } f2 = false; out += std::format(R"({{"key":"{}"}})", Hex(k.key)); }
 			out += "]}";
+		}
+		out += std::format(R"(],"lastBound":{},"binds":[)", g_lastBound);
+		first = true;
+		for (const auto& b : g_binds)
+		{
+			if (!first) { out += ","; }
+			first = false;
+			out += std::format(R"({{"context":"{}","event":"{}","device":"{}","key":"{}","button":"{}"}})", EscapeJson(b.context), EscapeJson(b.event), DeviceName(b.device),
+							   Hex(b.key), ButtonName(b.key, b.device));
 		}
 		out += "]}";
 		return out;

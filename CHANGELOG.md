@@ -7,6 +7,18 @@ Rule 61: this mod's own history, kept beside the code it describes.
 > number; at `.9` the MINOR rolls. The next number is LAST WORKING + 1; failed/scratch/
 > untested numbers are reused. Numbers come from version-gate.ps1.
 
+## 1.0.5 - 2026-09-14 - working
+
+### Added
+- System Tab on the controller (the owner: "add a system tab button to the controller control layout and unbind the journal button"). A new [Bound] INI section gives a control a key or button - Context|Control|Device|Button, with controller button names or hex codes - including one controlmap.txt gives nothing on that device and the Controls menu cannot remap there (Pause, the System Tab control, has no gamepad button and is not gamepad-remappable). Shipped: Gameplay|Pause|gamepad|Start, and Gameplay|Journal|gamepad added to [Unbound], so Start opens the System tab instead of the journal (the Tween Menu's Quests still opens the journal). Binds are applied after the unbinds on every apply; a key another control on that device holds is not taken (the log names the holder), AMF's reserved keys are refused on the keyboard, and a control with no mapping on that device gets one copied from another device. An INI with no [Bound] section keeps the shipped binds. DevBench state gains binds and lastBound.
+
+### Fixed
+- System Tab on the controller always opens the System tab, like keyboard Esc (the owner: "i want it to always open system"). The engine opens the journal on its SAVED tab for a controller Pause press (MenuOpenHandler passes the same flag for Pause from any device; JournalMenu takes the tab from its saved-tab global), while Esc gets System; test: after a reload Esc opened System and controller Back (bound to Pause) opened Quests. The input sink now notes a controller press whose user event is Pause while the journal is closed; when that press opens the journal (within 1 s), the first journal frames call the menu's RestoreSavedSettings(last tab, bTabsDisabled) until the System tab shows. Keyboard J, Esc and the Tween Menu's Quests entry are unaffected. No game address is used, so SE and AE behave the same.
+- A bound control remapped in the game's Controls menu keeps the player's key (the owner remapped System Tab to Back on the controller and closing the journal put it back on Start). The remap watch now updates the control's [Bound] line to the new key and saves the INI, which writes the [Bound] section as well as [Unbound]; pressing a bound control's own key there unbinds it and drops its bind. Also fixed during this version's test: the created gamepad Pause mapping carried modifier 0xFF, and the engine's lookup (SE ID 67242, comparator 67264) matches key AND modifier exactly, so Start resolved to no user event; it is created with modifier 0 and the device arrays are sorted key-then-modifier like the engine (falsification episodes 33/34, adversarial contest won by the advocate with both guards applied).
+
+### Changed
+- The shipped list is the owner's own picks, made in the Controls menu with the fixed control map installed (the owner: "the system tab works properly so let's ship it with my current unbound keys as the default"): Journal, Quick Inventory, Quick Magic, Quick Map, Quick Stats, Wait, Favorites, Quicksave, Quickload, Auto-Move and Toggle Always Run on the keyboard; Wait and Journal on the controller; [Bound] Gameplay|Pause|gamepad|Start. Toggle POV and every other control keep their keys. Favorites is unbound again: with the installer's control map the inventory's favorite action no longer borrows a gameplay key, and the owner confirmed favoriting still works. Compiled defaults and the shipped INI match.
+
 ## 1.0.4 - 2026-09-14 - working
 
 ### Changed
