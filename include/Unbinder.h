@@ -12,6 +12,7 @@
 //
 // Every function that touches the ControlMap runs on the game's main thread.
 
+#include <array>
 #include <cstdint>
 #include <string>
 #include <string_view>
@@ -96,6 +97,29 @@ namespace unbinder
 	std::vector<std::uint16_t> LiveKeys(std::string_view a_event, int a_device);
 	bool IsListed(std::string_view a_event, int a_device);
 	bool Forget(int a_context, std::string_view a_event, int a_device);
+	// Remaps owned by the INI (1.0.7; the owner, 2026-09-15: "include the control map file in the mod and instead of it
+	// generating a file each time, it writes back to our mods included file and nothing goes to the overwrite"). The game
+	// saves a Controls-menu remap in ControlMap_Custom.txt in its working folder, which MO2's Root Builder syncs into
+	// overwrite\Root. With bKeepRemapsInIni=1 this mod records the change in its own [Unbound] and [Bound] lists instead -
+	// MO2 writes the INI back into this mod's folder - and removes that file. Main thread only.
+	//   SnapshotGameplay: every Gameplay control's live keys per device.
+	//   RecordChanges: controls whose keys differ from a_before get INI lines (no key -> [Unbound]; another key -> [Bound];
+	//     back to the controlmap.txt key -> both lines dropped). Returns the lines changed; the caller saves.
+	//   ImportLiveRemaps: the same for every Gameplay control with no INI line whose live keys differ from controlmap.txt -
+	//     what a ControlMap_Custom.txt loaded at startup changed. The caller saves.
+	//   OwnRemapsAtDataLoad: when bKeepRemapsInIni=1, bEnabled=1 and the file exists - import, save, remove.
+	struct GameplaySnapshot
+	{
+		std::vector<std::string> events;
+		std::vector<std::array<std::vector<std::uint16_t>, 3>> keys;  // parallel to events: keyboard, mouse, gamepad
+	};
+	GameplaySnapshot SnapshotGameplay();
+	int RecordChanges(const GameplaySnapshot& a_before, const char* a_reason);
+	int ImportLiveRemaps(const char* a_reason);
+	std::uint16_t DefaultKey(std::string_view a_event, int a_device);  // 0xFF when controlmap.txt gives none
+	std::string CustomMapPath();                                        // "" when the working folder is unknown
+	bool RemoveCustomMap(const char* a_reason);                         // true when a file was removed
+	void OwnRemapsAtDataLoad();
 	void Install();                        // the journal open/close sink; call at kDataLoaded
 
 	// For the DevBench tool.

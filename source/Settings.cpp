@@ -28,6 +28,7 @@ namespace settings
 		{
 			std::uint32_t logLevel;
 			bool enabled;
+			bool keepRemapsInIni;
 		} defaults{};
 
 		std::string Lower(std::string a_s)
@@ -162,6 +163,7 @@ namespace settings
 			};
 			get("uloglevel:debug", debug::logLevel, ParseUInt);
 			get("benabled:general", general::enabled, ParseBool);
+			get("bkeepremapsinini:general", general::keepRemapsInIni, ParseBool);
 			const std::size_t count = entries.size();
 			unbinder::SetEntries(std::move(entries));
 			// An INI from before 1.0.5 has no [Bound] section: it keeps the shipped binds rather than losing them.
@@ -170,7 +172,7 @@ namespace settings
 			// An INI from before 1.0.6 has no [SystemMenu] section: it gets the shipped hidden rows.
 			if (sawSystemMenu) { systemmenu::SetHidden(std::move(rows)); }
 			logger::info("System tab rows hidden: {}{}", systemmenu::GetHidden().size(), sawSystemMenu ? "" : " (no [SystemMenu] section - shipped rows kept)");
-			logger::info("settings loaded from {}: enabled={} logLevel={} unbound entries={} binds={}{}{}", iniPath, general::enabled, debug::logLevel,
+			logger::info("settings loaded from {}: enabled={} keepRemapsInIni={} logLevel={} unbound entries={} binds={}{}{}", iniPath, general::enabled, general::keepRemapsInIni, debug::logLevel,
 						 count, bindCount, sawBound ? "" : " (no [Bound] section - shipped binds kept)", bad ? std::format(" ({} bad line(s) ignored)", bad) : "");
 			return true;
 		}
@@ -192,7 +194,19 @@ namespace settings
 					return true;
 				}
 			}
-			logger::warn("Save: key {} not found in [{}]", a_key, a_section);
+			// A key an older INI does not have yet (bKeepRemapsInIni before 1.0.7) is added at the end of its section.
+			for (std::size_t h = 0; h < a_lines.size(); ++h)
+			{
+				const std::string t = Trim(a_lines[h]);
+				if (!IsSectionHeader(t) || Lower(t.substr(1, t.size() - 2)) != wantSection) { continue; }
+				std::size_t end = h + 1;
+				while (end < a_lines.size() && !IsSectionHeader(Trim(a_lines[end]))) { ++end; }
+				while (end > h + 1 && Trim(a_lines[end - 1]).empty()) { --end; }
+				a_lines.insert(a_lines.begin() + static_cast<std::ptrdiff_t>(end), std::string(a_key) + "=" + a_value);
+				logger::info("Save: {} was not in [{}]; added", a_key, a_section);
+				return true;
+			}
+			logger::warn("Save: section [{}] not found; {} not written", a_section, a_key);
 			return false;
 		}
 
@@ -236,7 +250,7 @@ namespace settings
 	{
 		iniPath = (std::filesystem::current_path() / "Data" / "SKSE" / "Plugins" / a_iniFileName).string();
 
-		defaults = { debug::logLevel, general::enabled };
+		defaults = { debug::logLevel, general::enabled, general::keepRemapsInIni };
 		// Compiled default list = the shipped INI's [Unbound] lines (rule 16). An INI that exists replaces it
 		// with whatever it lists, including nothing.
 		unbinder::SetEntries(unbinder::DefaultEntries());
@@ -246,7 +260,8 @@ namespace settings
 		auto* collection = utils::INISettingCollection::GetSingleton();
 		collection->AddSettings(
 			utils::MakeSetting("uLogLevel:Debug", static_cast<unsigned int>(debug::logLevel)),
-			utils::MakeSetting("bEnabled:General", general::enabled));
+			utils::MakeSetting("bEnabled:General", general::enabled),
+			utils::MakeSetting("bKeepRemapsInIni:General", general::keepRemapsInIni));
 
 		LoadFileValues();
 	}
@@ -271,6 +286,7 @@ namespace settings
 		bool ok = true;
 		ok &= WriteKey(lines, "Debug", "uLogLevel", std::to_string(debug::logLevel));
 		ok &= WriteKey(lines, "General", "bEnabled", general::enabled ? "1" : "0");
+		ok &= WriteKey(lines, "General", "bKeepRemapsInIni", general::keepRemapsInIni ? "1" : "0");
 		const auto entries = unbinder::GetEntries();
 		std::vector<std::string> unboundLines;
 		for (const auto& e : entries) { unboundLines.push_back(std::format("{}|{}|{}", e.context, e.event, unbinder::DeviceName(e.device))); }
@@ -294,6 +310,7 @@ namespace settings
 	{
 		debug::logLevel = defaults.logLevel;
 		general::enabled = defaults.enabled;
+		general::keepRemapsInIni = defaults.keepRemapsInIni;
 		ApplyLogLevel();
 	}
 

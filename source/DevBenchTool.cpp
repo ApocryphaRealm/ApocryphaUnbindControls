@@ -153,6 +153,19 @@ namespace DevBenchTool
 				a_write(a_sink, out.c_str());
 				return;
 			}
+			if (op == "own")
+			{
+				int imported = 0;
+				bool removed = false;
+				const bool ran = RunOnMainThread([&]() {
+					imported = unbinder::ImportLiveRemaps("tool");
+					if (imported > 0) { settings::Save(); }
+					removed = unbinder::RemoveCustomMap("tool");
+				});
+				a_write(a_sink, std::format("{{\"ok\":{},\"op\":\"own\",\"imported\":{},\"customMapRemoved\":{},\"path\":\"{}\"}}", ran ? "true" : "false", imported,
+											removed ? "true" : "false", EscapeJson(unbinder::CustomMapPath())).c_str());
+				return;
+			}
 			if (op == "apply")
 			{
 				const bool ran = RunOnMainThread([]() { unbinder::ApplyAll("tool"); });
@@ -168,8 +181,8 @@ namespace DevBenchTool
 			}
 
 			const std::string json = std::format(
-				"{{\"ok\":true,\"op\":\"state\",\"settings\":{{\"enabled\":{},\"logLevel\":{},\"iniPath\":\"{}\"}},{},{},{}}}",
-				settings::general::enabled ? "true" : "false", settings::debug::logLevel, EscapeJson(settings::GetIniPath()), unbinder::StateJson(), controlslist::StateJson(), systemmenu::StateJson());
+				"{{\"ok\":true,\"op\":\"state\",\"settings\":{{\"enabled\":{},\"keepRemapsInIni\":{},\"logLevel\":{},\"iniPath\":\"{}\"}},{},{},{}}}",
+				settings::general::enabled ? "true" : "false", settings::general::keepRemapsInIni ? "true" : "false", settings::debug::logLevel, EscapeJson(settings::GetIniPath()), unbinder::StateJson(), controlslist::StateJson(), systemmenu::StateJson());
 			a_write(a_sink, json.c_str());
 		}
 	}
@@ -193,7 +206,7 @@ namespace DevBenchTool
 			"keys captured this session, last apply. op=dump [context]: every mapping of the live ControlMap (event, key, modifier, "
 			"remappable) per context and device. op=unbind / op=rebind with context (name or index), event, device "
 			"(keyboard|mouse|gamepad): add to or remove from the list, applied and written to the INI. op=apply re-applies the list; "
-			"op=reload gives the keys back, re-reads the INI and applies. op=rows (journal open): every row of the game's Controls list - event, the buttonName and buttonID the game sent, whether this mod draws it blank and why. op=listen [seconds, default 20, 1-120]: log every button event - device, code, the user event the game attached, value, held time - to the mod's log. op=systemrows (journal open): the System page - whether it picks rows by name, every row it knows (canonical), the rows it shows, the [SystemMenu] list and the rows removed this open.\","
+			"op=reload gives the keys back, re-reads the INI and applies. op=rows (journal open): every row of the game's Controls list - event, the buttonName and buttonID the game sent, whether this mod draws it blank and why. op=listen [seconds, default 20, 1-120]: log every button event - device, code, the user event the game attached, value, held time - to the mod's log. op=systemrows (journal open): the System page - whether it picks rows by name, every row it knows (canonical), the rows it shows, the [SystemMenu] list and the rows removed this open. op=own: controls with no INI line whose live keys differ from controlmap.txt are written into the INI, and ControlMap_Custom.txt is removed from the game folder; op=state reports customMap, lastOwn and ownLines.\","
 			"\"inputSchema\":{\"type\":\"object\",\"properties\":{\"op\":{\"type\":\"string\"},\"context\":{\"type\":\"string\"},\"event\":{\"type\":\"string\"},\"device\":{\"type\":\"string\"},\"seconds\":{\"type\":\"string\"}}},"
 			"\"readOnly\":false"
 			"}";

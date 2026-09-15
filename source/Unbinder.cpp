@@ -11,6 +11,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <filesystem>
 #include <format>
 #include <map>
 #include <mutex>
@@ -31,6 +32,9 @@ namespace unbinder
 		bool g_sinkInstalled = false;
 		std::vector<Bind> g_binds;
 		int g_lastBound = 0;  // binds that changed a key at the last apply
+		std::string g_lastOwn = "nothing recorded yet";  // g_lock: the latest remap written into the INI lists
+		int g_ownLines = 0;                               // g_lock: INI lines changed by recorded remaps this session
+		bool g_customMapRemoved = false;                  // g_lock: a ControlMap_Custom.txt was removed this session
 
 		// XInput masks, as controlmap.txt writes gamepad buttons (Journal 0x0010 = Start, Wait 0x0020 = Back ...).
 		constexpr std::pair<const char*, std::uint16_t> kPadButtons[] = {
@@ -389,7 +393,14 @@ namespace unbinder
 					return RE::BSEventNotifyControl::kContinue;
 				}
 				controlslist::OnJournalClose();
-				if (auto* tasks = SKSE::GetTaskInterface()) { tasks->AddTask([]() { ApplyAll("journal closed"); }); }
+				if (auto* tasks = SKSE::GetTaskInterface())
+				{
+					tasks->AddTask([]() {
+						ApplyAll("journal closed");
+						// The game writes ControlMap_Custom.txt when a remap is saved; the remap is already in the INI (ControlsList).
+						if (settings::general::keepRemapsInIni && settings::general::enabled) { RemoveCustomMap("journal closed"); }
+					});
+				}
 				return RE::BSEventNotifyControl::kContinue;
 			}
 		};
@@ -700,6 +711,229 @@ namespace unbinder
 		return true;
 	}
 
+	namespace
+	{
+		std::string PathText(const std::filesystem::path& a_path)
+		{
+			const auto u8 = a_path.u8string();
+			return std::string(u8.begin(), u8.end());
+		}
+
+		std::filesystem::path PathFromText(const std::string& a_text)
+		{
+			return std::filesystem::path(std::u8string(a_text.begin(), a_text.end()));
+		}
+
+		std::vector<std::uint16_t> Sorted(std::vector<std::uint16_t> a_keys)
+		{
+			std::sort(a_keys.begin(), a_keys.end());
+			return a_keys;
+		}
+
+		// Caller holds g_lock. Gameplay|a_event on a_device now has a_live keys: make the INI lists say so.
+		int RecordLocked(std::string_view a_event, int a_device, const std::vector<std::uint16_t>& a_live, const char* a_reason)
+		{
+			const std::uint16_t def = DefaultKey(a_event, a_device);
+			const auto real = std::find_if(a_live.begin(), a_live.end(), [](std::uint16_t a_k) { return a_k != kUnmapped; });
+			const bool hasKey = real != a_live.end();
+			const char* context = ContextName(0);
+			auto entry = FindEntry(0, a_event, a_device);
+			auto bind = std::find_if(g_binds.begin(), g_binds.end(), [&](const Bind& b) {
+				return b.device == a_device && IEquals(b.context, context) && IEquals(b.event, a_event);
+			});
+			int changed = 0;
+			if (!hasKey)
+			{
+				if (bind != g_binds.end()) { g_binds.erase(bind); ++changed; }
+				if (entry == g_entries.end() && def != kUnmapped)
+				{
+					Entry e;
+					e.context = context;
+					e.event = std::string(a_event);
+					e.device = a_device;
+					e.original.push_back({ def, 0 });  // a rebind gives the controlmap.txt key back (modifier 0: see ApplyBinds)
+					g_entries.push_back(std::move(e));
+					++changed;
+				}
+				if (changed) { logger::info("own remaps ({}): {}|{}|{} has no key - written to [Unbound]", a_reason, context, a_event, DeviceName(a_device)); }
+				return changed;
+			}
+			if (entry != g_entries.end()) { g_entries.erase(entry); ++changed; }
+			if (std::find(a_live.begin(), a_live.end(), def) != a_live.end())
+			{
+				if (bind != g_binds.end()) { g_binds.erase(bind); ++changed; }
+				if (changed) { logger::info("own remaps ({}): {}|{}|{} is back on its controlmap.txt key {} - its INI lines are dropped", a_reason, context, a_event, DeviceName(a_device), Hex(def)); }
+				return changed;
+			}
+			if (bind == g_binds.end())
+			{
+				Bind b;
+				b.context = context;
+				b.event = std::string(a_event);
+				b.device = a_device;
+				b.key = *real;
+				g_binds.push_back(std::move(b));
+				++changed;
+			}
+			else if (bind->key != *real)
+			{
+				bind->key = *real;
+				++changed;
+			}
+			if (changed) { logger::info("own remaps ({}): {}|{}|{} -> {} written to [Bound] (controlmap.txt gives {})", a_reason, context, a_event, DeviceName(a_device), Hex(*real), Hex(def)); }
+			return changed;
+		}
+	}
+
+	std::uint16_t DefaultKey(std::string_view a_event, int a_device)
+	{
+		if (a_device < 0 || a_device > 2) { return kUnmapped; }
+		const auto& defaults = GameplayDefaults();
+		const auto it = defaults.find(Lower(a_event));
+		return it == defaults.end() ? kUnmapped : it->second.key[a_device];
+	}
+
+	GameplaySnapshot SnapshotGameplay()
+	{
+		GameplaySnapshot s;
+		auto* map = RE::ControlMap::GetSingleton();
+		if (!map) { logger::warn("own remaps: the ControlMap singleton is null; no snapshot taken"); return s; }
+		for (int d = 0; d < 3; ++d)
+		{
+			auto* mappings = MappingsFor(map, 0, d);
+			if (!mappings) { continue; }
+			for (const auto& m : *mappings)
+			{
+				const char* event = m.eventID.c_str();
+				if (!event || !*event) { continue; }
+				auto it = std::find_if(s.events.begin(), s.events.end(), [&](const std::string& a_have) { return IEquals(a_have, event); });
+				const std::size_t i = static_cast<std::size_t>(it - s.events.begin());
+				if (it == s.events.end())
+				{
+					s.events.emplace_back(event);
+					s.keys.emplace_back();
+				}
+				s.keys[i][d].push_back(m.inputKey);
+			}
+		}
+		return s;
+	}
+
+	int RecordChanges(const GameplaySnapshot& a_before, const char* a_reason)
+	{
+		const GameplaySnapshot after = SnapshotGameplay();
+		if (GameplayDefaults().empty()) { logger::warn("own remaps ({}): controlmap.txt defaults are unavailable, so a control left with no key cannot be told from its default; unbinds are not recorded", a_reason); }
+		std::scoped_lock l(g_lock);
+		int changed = 0;
+		for (std::size_t i = 0; i < after.events.size(); ++i)
+		{
+			const auto was = std::find_if(a_before.events.begin(), a_before.events.end(), [&](const std::string& a_have) { return IEquals(a_have, after.events[i]); });
+			for (int d = 0; d < 3; ++d)
+			{
+				const std::vector<std::uint16_t> before = was == a_before.events.end() ? std::vector<std::uint16_t>{} : a_before.keys[static_cast<std::size_t>(was - a_before.events.begin())][d];
+				if (Sorted(before) == Sorted(after.keys[i][d])) { continue; }
+				changed += RecordLocked(after.events[i], d, after.keys[i][d], a_reason);
+			}
+		}
+		if (changed)
+		{
+			g_ownLines += changed;
+			g_lastOwn = std::format("{}: {} INI line(s) changed", a_reason, changed);
+		}
+		logger::debug("own remaps ({}): {} control(s) compared, {} INI line(s) changed", a_reason, after.events.size(), changed);
+		return changed;
+	}
+
+	int ImportLiveRemaps(const char* a_reason)
+	{
+		const GameplaySnapshot live = SnapshotGameplay();
+		const auto& defaults = GameplayDefaults();
+		if (defaults.empty()) { logger::warn("own remaps ({}): controlmap.txt defaults are unavailable; nothing imported", a_reason); return 0; }
+		std::scoped_lock l(g_lock);
+		int changed = 0;
+		for (std::size_t i = 0; i < live.events.size(); ++i)
+		{
+			const auto def = defaults.find(Lower(live.events[i]));
+			if (def == defaults.end()) { continue; }  // not a control controlmap.txt lists in Gameplay
+			for (int d = 0; d < 3; ++d)
+			{
+				const auto& keys = live.keys[i][d];
+				if (keys.empty()) { continue; }                                          // no mapping for it on that device
+				if (FindEntry(0, live.events[i], d) != g_entries.end()) { continue; }  // the INI already decides it
+				const bool bound = std::any_of(g_binds.begin(), g_binds.end(), [&](const Bind& b) {
+					return b.device == d && IEquals(b.context, "Gameplay") && IEquals(b.event, live.events[i]);
+				});
+				if (bound) { continue; }
+				const bool hasKey = std::any_of(keys.begin(), keys.end(), [](std::uint16_t a_k) { return a_k != kUnmapped; });
+				const bool same = hasKey ? std::find(keys.begin(), keys.end(), def->second.key[d]) != keys.end() : def->second.key[d] == kUnmapped;
+				if (same) { continue; }
+				changed += RecordLocked(live.events[i], d, keys, a_reason);
+			}
+		}
+		if (changed)
+		{
+			g_ownLines += changed;
+			g_lastOwn = std::format("{}: {} INI line(s) imported from the live control map", a_reason, changed);
+		}
+		logger::info("own remaps ({}): {} control(s) checked against controlmap.txt, {} INI line(s) imported", a_reason, live.events.size(), changed);
+		return changed;
+	}
+
+	std::string CustomMapPath()
+	{
+		// The game opens "ControlMap_Custom.txt" by bare name, so it lives in the process's working folder (the game
+		// folder; Stock Game under MO2).
+		std::error_code ec;
+		const auto folder = std::filesystem::current_path(ec);
+		if (ec) { return {}; }
+		return PathText(folder / "ControlMap_Custom.txt");
+	}
+
+	bool RemoveCustomMap(const char* a_reason)
+	{
+		const std::string path = CustomMapPath();
+		if (path.empty()) { logger::warn("own remaps ({}): the working folder is unknown; ControlMap_Custom.txt is not looked for", a_reason); return false; }
+		const std::filesystem::path p = PathFromText(path);
+		std::error_code ec;
+		if (!std::filesystem::exists(p, ec)) { logger::debug("own remaps ({}): no ControlMap_Custom.txt at {}", a_reason, path); return false; }
+		const auto size = std::filesystem::file_size(p, ec);
+		ec.clear();
+		if (!std::filesystem::remove(p, ec) || ec)
+		{
+			logger::warn("own remaps ({}): could not remove {}: {}", a_reason, path, ec ? ec.message() : std::string("not removed"));
+			return false;
+		}
+		logger::info("own remaps ({}): removed {} ({} bytes) - the controls it held are in the INI", a_reason, path, size);
+		std::scoped_lock l(g_lock);
+		g_customMapRemoved = true;
+		g_lastOwn = std::format("{}: ControlMap_Custom.txt removed", a_reason);
+		return true;
+	}
+
+	void OwnRemapsAtDataLoad()
+	{
+		if (!settings::general::keepRemapsInIni)
+		{
+			logger::info("own remaps: bKeepRemapsInIni=0; the game keeps its own ControlMap_Custom.txt");
+			return;
+		}
+		if (!settings::general::enabled)
+		{
+			logger::info("own remaps: bEnabled=0; ControlMap_Custom.txt is left alone so no remap is lost");
+			return;
+		}
+		const std::string path = CustomMapPath();
+		std::error_code ec;
+		if (path.empty() || !std::filesystem::exists(PathFromText(path), ec))
+		{
+			logger::info("own remaps: no ControlMap_Custom.txt in the game folder{}; the INI holds every remap", path.empty() ? " (working folder unknown)" : "");
+			return;
+		}
+		logger::info("own remaps: {} found; its changes are moved into the INI", path);
+		if (ImportLiveRemaps("data loaded") > 0) { settings::Save(); }
+		RemoveCustomMap("data loaded");
+	}
+
 	std::vector<KeylessControl> ListedKeylessOnFamily(bool a_gamepad)
 	{
 		std::vector<std::string> events;
@@ -810,7 +1044,8 @@ namespace unbinder
 			for (const auto& k : e.original) { if (!f2) { out += ","; } f2 = false; out += std::format(R"({{"key":"{}"}})", Hex(k.key)); }
 			out += "]}";
 		}
-		out += std::format(R"(],"lastBound":{},"binds":[)", g_lastBound);
+		out += std::format(R"(],"customMap":{{"path":"{}","removedThisSession":{}}},"lastOwn":"{}","ownLines":{},"lastBound":{},"binds":[)",
+						  EscapeJson(CustomMapPath()), g_customMapRemoved ? "true" : "false", EscapeJson(g_lastOwn), g_ownLines, g_lastBound);
 		first = true;
 		for (const auto& b : g_binds)
 		{

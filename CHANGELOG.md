@@ -7,6 +7,11 @@ Rule 61: this mod's own history, kept beside the code it describes.
 > number; at `.9` the MINOR rolls. The next number is LAST WORKING + 1; failed/scratch/
 > untested numbers are reused. Numbers come from version-gate.ps1.
 
+## 1.0.7 - 2026-09-15 - untested
+
+### Added
+- Remaps made in the game's Controls menu are kept in this mod's own INI (the owner: 'include the control map file in the mod and instead of it generating a file each time, it writes back to our mods included file and nothing goes to the overwrite'). A new [General] bKeepRemapsInIni=1: when a remap ends, every Gameplay control whose keys changed - the one remapped and any control the game took the key from - is written into [Unbound] (no key) or [Bound] (another key), or its lines are dropped when it is back on its controlmap.txt key; the INI is saved in place, so under MO2 the change lands in the mod's own folder, not overwrite. The game's ControlMap_Custom.txt (written by bare name into the game's working folder, where Root Builder syncs it into overwrite\Root) is removed when the journal closes; one left from before is folded into the INI at data load (controls with no INI line whose live keys differ from controlmap.txt) and then removed. 0 keeps the game's own file. An INI from before 1.0.7 gets the key added on its first save. DevBench uvc.control op=own runs the import and removal; op=state reports customMap, lastOwn and ownLines.
+
 ## 1.0.6 - 2026-09-14 - untested
 
 ### Added

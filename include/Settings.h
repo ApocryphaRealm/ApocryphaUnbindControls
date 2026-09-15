@@ -17,6 +17,7 @@ namespace settings
 	namespace general
 	{
 		inline bool enabled = true;  // bEnabled:General - apply the [Unbound] list in game
+		inline bool keepRemapsInIni = true;  // bKeepRemapsInIni:General - Controls-menu remaps live in this INI, not ControlMap_Custom.txt
 	}
 
 	void Init(const std::string& a_iniFileName);

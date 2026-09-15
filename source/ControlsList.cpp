@@ -78,6 +78,7 @@ namespace controlslist
 		bool g_hasPress = false;  // g_pressLock
 		std::string g_remapEvent;                       // main thread
 		std::array<std::vector<std::uint16_t>, 3> g_before;  // main thread: the control's keys when the remap began
+		unbinder::GameplaySnapshot g_beforeAll;             // main thread: every Gameplay control's keys when the remap began
 
 		void SetResult(std::string a_text)
 		{
@@ -489,6 +490,7 @@ namespace controlslist
 				}
 				g_remapEvent = event;
 				for (int d = 0; d < 3; ++d) { g_before[d] = unbinder::LiveKeys(event, d); }
+				g_beforeAll = unbinder::SnapshotGameplay();  // a remap can also take a key from another control
 				{
 					std::scoped_lock l(g_pressLock);
 					g_hasPress = false;
@@ -502,6 +504,18 @@ namespace controlslist
 				g_remapArmed.store(false);
 				g_remapActive.store(false);
 				EvaluateRemap();
+				// 1.0.7: whatever the remap changed - the control itself and any control the game took the key from - is written
+				// into the INI lists, so the controls live in this mod's own file; the game's ControlMap_Custom.txt is removed
+				// when the journal closes (Unbinder).
+				if (settings::general::keepRemapsInIni && settings::general::enabled)
+				{
+					if (const int n = unbinder::RecordChanges(g_beforeAll, "Controls menu remap"); n > 0)
+					{
+						settings::Save();
+						logger::info("controls list: {} INI line(s) now hold this remap", n);
+					}
+				}
+				g_beforeAll = {};
 			}
 		}
 
