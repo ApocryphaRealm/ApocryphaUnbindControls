@@ -152,14 +152,22 @@ namespace settings
 						if (bar == std::string::npos) { break; }
 						from = bar + 1;
 					}
-					if (parts.size() != 7 && parts.size() != 8) { ++a_badLines; logger::warn("INI [Functions] line \"{}\" is not Name|Device|Button|Modifier|File|Section|Key[|ModifierKey]; ignored", t); continue; }
+					if (parts.size() < 7 || parts.size() > 9) { ++a_badLines; logger::warn("INI [Functions] line \"{}\" is not Name|Device|Button|Modifier|File|Section|Key[|ModifierKey[|NoKeyValue]]; ignored", t); continue; }
 					functions::Function f;
 					f.name = parts[0];
 					if (f.name.empty()) { ++a_badLines; logger::warn("INI [Functions] line \"{}\" has no name; ignored", t); continue; }
 					f.target.file = parts[4];
 					f.target.section = parts[5];
 					f.target.key = parts[6];
-					if (parts.size() == 8) { f.target.modifierKey = parts[7]; }
+					if (parts.size() >= 8) { f.target.modifierKey = parts[7]; }
+					// What the TARGET writes for "no key" - not a constant across mods: One Click Power Attack uses
+					// -1, Stances NG uses 0 ("0 is to deactivate the key entirely"). Writing the wrong one would
+					// leave a cleared row pointing at a real key.
+					if (parts.size() == 9 && !parts[8].empty())
+					{
+						try { f.target.none = std::stoi(parts[8]); }
+						catch (...) { ++a_badLines; logger::warn("INI [Functions] line \"{}\": \"{}\" is not a number for the no-key value; ignored", t, parts[8]); continue; }
+					}
 					if (f.target.file.empty() || f.target.key.empty()) { ++a_badLines; logger::warn("INI [Functions] line \"{}\": a row needs a File and a Key to deliver to; ignored", t); continue; }
 					// A row with no device is simply unbound; only a device that IS named has to be one this mod knows.
 					if (!parts[1].empty())
@@ -421,8 +429,8 @@ namespace settings
 				}
 				break;
 			}
-			functionLines.push_back(std::format("{}|{}|{}|{}|{}|{}|{}|{}", f.name, device, keyText, modText,
-												f.target.file, f.target.section, f.target.key, f.target.modifierKey));
+			functionLines.push_back(std::format("{}|{}|{}|{}|{}|{}|{}|{}|{}", f.name, device, keyText, modText,
+												f.target.file, f.target.section, f.target.key, f.target.modifierKey, f.target.none));
 		}
 		std::vector<std::string> remappableLines;
 		for (const auto& r : unbinder::GetRemappable()) { remappableLines.push_back(std::format("{}|{}|{}", r.context, r.event, unbinder::DeviceName(r.device))); }

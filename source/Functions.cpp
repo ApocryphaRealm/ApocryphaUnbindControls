@@ -153,10 +153,33 @@ namespace functions
 	// Shipped unbound: a row that arrived holding a button would take that button from whatever the player has on it.
 	std::vector<Function> DefaultFunctions()
 	{
+		std::vector<Function> out;
+
 		Function powerAttack;
 		powerAttack.name = "Power Attack";
 		powerAttack.target = { "MCM\\Settings\\OCPA.ini", "General", "iKeycode", "iModifierKey", -1 };
-		return { powerAttack };
+		out.push_back(std::move(powerAttack));
+
+		// Stances (the owner, 2026-09-16: "we need to make a way for uvc to register stances then" - so that the
+		// controller-map-and-stance-key mod he has been carrying can be switched off and these rows take its place).
+		// Stances NG reads its own SKSE\Plugins\StancesNG.ini and its comment points at the same SKSE Input Script
+		// numbering these rows deliver, so nothing has to be converted. Its "off" value is 0, not -1 ("0 is to
+		// deactivate the key entirely"), which is why the no-key value belongs to the target rather than to this mod.
+		// Each stance takes a modifier as well, which is how the shipped layout distinguishes high from low on one key.
+		const char* kStances[][3] = {
+			{ "High Stance", "iHighStanceKey", "iModifierKeyhighStance" },
+			{ "Mid Stance", "iMidStanceKey", "iModifierKeyMidStance" },
+			{ "Low Stance", "iLowStanceKey", "iModifierKeyLowStance" },
+			{ "Neutral Stance", "iNeutralStanceKey", "iModifierNeutralStance" },
+		};
+		for (const auto& stance : kStances)
+		{
+			Function f;
+			f.name = stance[0];
+			f.target = { "SKSE\\Plugins\\StancesNG.ini", "Keys", stance[1], stance[2], 0 };
+			out.push_back(std::move(f));
+		}
+		return out;
 	}
 
 	bool IsFunctionRow(std::string_view a_name, std::size_t* a_index)
