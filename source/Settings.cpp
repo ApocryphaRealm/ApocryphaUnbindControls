@@ -315,7 +315,12 @@ namespace settings
 			logger::info("controls forced remappable: {}{}", remappableCount, sawRemappable ? "" : " (no [Remappable] section - shipped list kept)");
 			const std::size_t functionCount = sawFunctions ? funcs.size() : functions::GetFunctions().size();
 			if (sawFunctions) { functions::SetFunctions(std::move(funcs)); }
-			logger::info("Controls page extra rows: {}{}", functionCount, sawFunctions ? "" : " (no [Functions] section - shipped rows kept)");
+			// Declared AND present, because they differ whenever a row points at a mod that is not installed -
+			// and the count on its own reads as "three rows will appear" when the answer may be none.
+			const std::size_t presentCount = functions::GetPresentFunctions().size();
+			logger::info("Controls page extra rows: {} declared, {} shown ({} whose mod is not installed){}",
+						 functionCount, presentCount, functionCount - presentCount,
+						 sawFunctions ? "" : " - no [Functions] section, shipped rows kept");
 			logger::info("settings loaded from {}: enabled={} keepRemapsInIni={} logLevel={} unbound entries={} binds={}{}{}", iniPath, general::enabled, general::keepRemapsInIni, debug::logLevel,
 						 count, bindCount, sawBound ? "" : " (no [Bound] section - shipped binds kept)", bad ? std::format(" ({} bad line(s) ignored)", bad) : "");
 			return true;
