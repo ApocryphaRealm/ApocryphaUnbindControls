@@ -7,6 +7,7 @@
 
 #include "ControlsList.h"
 #include "DevBenchTool.h"
+#include "Functions.h"
 #include "Settings.h"
 #include "Unbinder.h"
 
@@ -26,6 +27,10 @@ namespace
 			controlslist::InstallInputSink();
 			unbinder::OwnRemapsAtDataLoad();  // before the apply: a leftover ControlMap_Custom.txt moves into the INI first
 			unbinder::ApplyAll("data loaded");
+			// The extra Controls-page rows are delivered to the mods that own those functions, so a target file
+			// edited by hand (or by that mod's own menu) is put back to what the Controls page shows.
+			functions::Install();
+			functions::Deliver("data loaded");
 			DevBenchTool::Init(true);
 			break;
 		case SKSE::MessagingInterface::kPostLoadGame:

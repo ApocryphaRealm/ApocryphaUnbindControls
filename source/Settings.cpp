@@ -2,6 +2,7 @@
 
 #include "Settings.h"
 
+#include "Functions.h"
 #include "SystemMenu.h"
 
 #include "Unbinder.h"
@@ -63,7 +64,7 @@ namespace settings
 		// Scalars go into the key:section map; each [Unbound] line - "Context|Control|Device", an "=..."
 		// after it is accepted and ignored - becomes an entry.
 		// Each [Bound] line - "Context|Control|Device|Button" - becomes a bind; a_sawBound says the section exists.
-		void ReadFile(std::map<std::string, std::string>& a_keys, std::vector<unbinder::Entry>& a_entries, std::vector<unbinder::Bind>& a_binds, bool& a_sawBound, std::vector<std::string>& a_rows, bool& a_sawSystemMenu, int& a_badLines)
+		void ReadFile(std::map<std::string, std::string>& a_keys, std::vector<unbinder::Entry>& a_entries, std::vector<unbinder::Bind>& a_binds, bool& a_sawBound, std::vector<std::string>& a_rows, bool& a_sawSystemMenu, std::vector<functions::Function>& a_functions, bool& a_sawFunctions, int& a_badLines)
 		{
 			std::vector<std::string> a_seenRows;  // tokens of every [SystemMenu] row already read
 			std::ifstream in(iniPath);
@@ -78,6 +79,7 @@ namespace settings
 					section = Lower(t.substr(1, t.size() - 2));
 					if (section == "bound") { a_sawBound = true; }
 					if (section == "systemmenu") { a_sawSystemMenu = true; }
+					if (section == "functions") { a_sawFunctions = true; }
 					continue;
 				}
 				const auto eq = t.find('=');
@@ -113,6 +115,53 @@ namespace settings
 					const bool dup = std::any_of(a_binds.begin(), a_binds.end(), [&](const unbinder::Bind& o) { return o.device == b.device && Lower(o.context) == Lower(b.context) && Lower(o.event) == Lower(b.event); });
 					if (dup) { logger::warn("INI [Bound] line \"{}\" repeats an earlier line; ignored", t); continue; }
 					a_binds.push_back(std::move(b));
+					continue;
+				}
+				if (section == "functions")
+				{
+					// An extra row on the game's Controls page for a function the game has no control for, delivered to
+					// another mod's own settings file (the owner, 2026-09-16: "we would just provide the rows"):
+					// Name|Device|Button|Modifier|File|Section|Key[|ModifierKey]. Device, Button and Modifier may be
+					// empty - that is a row the player has not bound yet, which is how every row ships.
+					std::vector<std::string> parts;
+					std::size_t from = 0;
+					while (true)
+					{
+						const auto bar = t.find('|', from);
+						parts.push_back(Trim(t.substr(from, bar == std::string::npos ? std::string::npos : bar - from)));
+						if (bar == std::string::npos) { break; }
+						from = bar + 1;
+					}
+					if (parts.size() != 7 && parts.size() != 8) { ++a_badLines; logger::warn("INI [Functions] line \"{}\" is not Name|Device|Button|Modifier|File|Section|Key[|ModifierKey]; ignored", t); continue; }
+					functions::Function f;
+					f.name = parts[0];
+					if (f.name.empty()) { ++a_badLines; logger::warn("INI [Functions] line \"{}\" has no name; ignored", t); continue; }
+					f.target.file = parts[4];
+					f.target.section = parts[5];
+					f.target.key = parts[6];
+					if (parts.size() == 8) { f.target.modifierKey = parts[7]; }
+					if (f.target.file.empty() || f.target.key.empty()) { ++a_badLines; logger::warn("INI [Functions] line \"{}\": a row needs a File and a Key to deliver to; ignored", t); continue; }
+					// A row with no device is simply unbound; only a device that IS named has to be one this mod knows.
+					if (!parts[1].empty())
+					{
+						const int device = unbinder::DeviceIndex(parts[1]);
+						if (device < 0) { ++a_badLines; logger::warn("INI [Functions] line \"{}\": unknown device \"{}\"; ignored (keyboard, mouse or gamepad)", t, parts[1]); continue; }
+						if (!parts[2].empty())
+						{
+							const std::uint16_t key = unbinder::ParseButton(parts[2], device);
+							if (key == 0xFF) { ++a_badLines; logger::warn("INI [Functions] line \"{}\": \"{}\" is not a button name or code; ignored", t, parts[2]); continue; }
+							f.bind[device].key = key;
+							if (!parts[3].empty())
+							{
+								const std::uint16_t mod = unbinder::ParseButton(parts[3], device);
+								if (mod == 0xFF) { ++a_badLines; logger::warn("INI [Functions] line \"{}\": modifier \"{}\" is not a button name or code; ignored", t, parts[3]); continue; }
+								f.bind[device].modifier = mod;
+							}
+						}
+					}
+					const bool dup = std::any_of(a_functions.begin(), a_functions.end(), [&](const functions::Function& o) { return Lower(o.name) == Lower(f.name); });
+					if (dup) { logger::warn("INI [Functions] line \"{}\" repeats an earlier row; ignored", t); continue; }
+					a_functions.push_back(std::move(f));
 					continue;
 				}
 				if (section == "systemmenu")
@@ -163,8 +212,10 @@ namespace settings
 			bool sawBound = false;
 			std::vector<std::string> rows;
 			bool sawSystemMenu = false;
+			std::vector<functions::Function> funcs;
+			bool sawFunctions = false;
 			int bad = 0;
-			ReadFile(k, entries, binds, sawBound, rows, sawSystemMenu, bad);
+			ReadFile(k, entries, binds, sawBound, rows, sawSystemMenu, funcs, sawFunctions, bad);
 			auto get = [&](const char* a_key, auto& a_out, auto a_parse) {
 				const auto it = k.find(a_key);
 				if (it == k.end()) { logger::debug("INI key {} missing; keeping current value", a_key); return; }
@@ -181,6 +232,10 @@ namespace settings
 			// An INI from before 1.0.6 has no [SystemMenu] section: it gets the shipped hidden rows.
 			if (sawSystemMenu) { systemmenu::SetHidden(std::move(rows)); }
 			logger::info("System tab rows hidden: {}{}", systemmenu::GetHidden().size(), sawSystemMenu ? "" : " (no [SystemMenu] section - shipped rows kept)");
+			// An INI from before 1.0.8 has no [Functions] section: it gets the shipped rows, unbound, rather than none.
+			const std::size_t functionCount = sawFunctions ? funcs.size() : functions::GetFunctions().size();
+			if (sawFunctions) { functions::SetFunctions(std::move(funcs)); }
+			logger::info("Controls page extra rows: {}{}", functionCount, sawFunctions ? "" : " (no [Functions] section - shipped rows kept)");
 			logger::info("settings loaded from {}: enabled={} keepRemapsInIni={} logLevel={} unbound entries={} binds={}{}{}", iniPath, general::enabled, general::keepRemapsInIni, debug::logLevel,
 						 count, bindCount, sawBound ? "" : " (no [Bound] section - shipped binds kept)", bad ? std::format(" ({} bad line(s) ignored)", bad) : "");
 			return true;
@@ -265,6 +320,7 @@ namespace settings
 		unbinder::SetEntries(unbinder::DefaultEntries());
 		unbinder::SetBinds(unbinder::DefaultBinds());
 		systemmenu::SetHidden(systemmenu::DefaultHidden());
+		functions::SetFunctions(functions::DefaultFunctions());
 
 		auto* collection = utils::INISettingCollection::GetSingleton();
 		collection->AddSettings(
@@ -319,6 +375,29 @@ namespace settings
 			}
 		}
 		WriteSection(lines, "[Bound]", boundLines);
+		// The extra Controls-page rows, with whatever the player bound them to in the Controls menu. A row keeps its
+		// line even while unbound: the line is what MAKES the row exist, so dropping it would delete the row.
+		std::vector<std::string> functionLines;
+		for (const auto& f : functions::GetFunctions())
+		{
+			std::string device, keyText, modText;
+			for (int d = 0; d < 3; ++d)
+			{
+				if (f.bind[d].key == 0xFF) { continue; }
+				device = unbinder::DeviceName(d);
+				const char* name = unbinder::ButtonName(f.bind[d].key, d);
+				keyText = name[0] ? std::string(name) : std::format("0x{:02x}", f.bind[d].key);
+				if (f.bind[d].modifier != 0)
+				{
+					const char* modName = unbinder::ButtonName(f.bind[d].modifier, d);
+					modText = modName[0] ? std::string(modName) : std::format("0x{:02x}", f.bind[d].modifier);
+				}
+				break;
+			}
+			functionLines.push_back(std::format("{}|{}|{}|{}|{}|{}|{}|{}", f.name, device, keyText, modText,
+												f.target.file, f.target.section, f.target.key, f.target.modifierKey));
+		}
+		WriteSection(lines, "[Functions]", functionLines);
 
 		std::ofstream out(iniPath, std::ios::trunc);
 		if (!out) { logger::error("Save: could not open {} for writing", iniPath); return false; }

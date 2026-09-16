@@ -2,6 +2,7 @@
 
 #include "ControlsList.h"
 
+#include "Functions.h"
 #include "Settings.h"
 #include "SystemMenu.h"
 #include "Unbinder.h"
@@ -170,6 +171,11 @@ namespace controlslist
 			{
 				RE::GFxValue entry;
 				if (!a_entries.GetElement(i, &entry) || !entry.IsObject()) { continue; }
+				// An extra row ([Functions]) is skipped outright: its key text is composed by this mod from its own
+				// binding, never sent by the game, so it can say nothing about which device family the page is
+				// showing - the same trap the modifier prefix sprang in 1.0.8, one step further out.
+				RE::GFxValue isFunction;
+				if (entry.GetMember("_uvcFunction", &isFunction) && isFunction.IsBool() && isFunction.GetBool()) { continue; }
 				// Prefer the game's ORIGINAL string when this mod has prefixed a modifier onto the row.
 				// Without this the detector reads "LT + 360_Y", which starts with neither "360_" nor a PS
 				// prefix, and the whole list is taken for the keyboard - blanking the wrong family from the
@@ -190,6 +196,8 @@ namespace controlslist
 			double sortIndex = -1.0;
 			bool added = false;      // put back by this mod
 			bool blank = false;
+			bool function = false;             // an extra row from [Functions], not a user event
+			std::size_t functionIndex = 0;
 			const char* why = "has a key on this device";
 		};
 
@@ -202,6 +210,20 @@ namespace controlslist
 			NumberMember(a_entry, "sortIndex", f.sortIndex);
 			RE::GFxValue added;
 			f.added = a_entry.GetMember("_uvcAdded", &added) && added.IsBool() && added.GetBool();
+			// An extra row ([Functions]) is not a user event, so the live map knows nothing about it: its key comes
+			// from the row's own binding, and the row is blank until the player gives it one.
+			std::size_t index = 0;
+			if (!f.text.empty() && functions::IsFunctionRow(f.text, &index))
+			{
+				f.function = true;
+				f.functionIndex = index;
+				if (functions::ShownBinding(index, a_gamepad).key == functions::kUnbound)
+				{
+					f.blank = true;
+					f.why = a_gamepad ? "an extra row with no gamepad button" : "an extra row with no keyboard or mouse key";
+				}
+				return f;
+			}
 			if (!f.text.empty() && unbinder::KeylessOnFamily(f.text, a_gamepad))
 			{
 				f.blank = true;
@@ -349,6 +371,66 @@ namespace controlslist
 			return true;
 		}
 
+		// The extra rows ([Functions]) go at the END of the list, after every vanilla control. They are not user events,
+		// so controlmap.txt gives them no place in its order, and appending is the one position that cannot push a
+		// vanilla row out of the order the player already knows. Their key text is written on every pass rather than
+		// once: the row's binding changes while the page is open (the player just bound it), and the game never
+		// rewrites an entry it did not create.
+		bool AddFunctionRows(RE::GFxMovieView* a_movie, RE::GFxValue& a_entries, bool a_gamepad)
+		{
+			const auto list = functions::GetFunctions();
+			if (list.empty()) { return false; }
+
+			const std::uint32_t count = a_entries.GetArraySize();
+			std::vector<std::string> present;
+			present.reserve(count);
+			for (std::uint32_t i = 0; i < count; ++i)
+			{
+				RE::GFxValue value;
+				if (a_entries.GetElement(i, &value) && value.IsObject()) { present.push_back(StringMember(value, "text")); }
+				else { present.emplace_back(); }
+			}
+
+			int added = 0;
+			for (std::size_t f = 0; f < list.size(); ++f)
+			{
+				const std::string keyText = functions::ShownText(f, a_gamepad);
+				const auto at = std::find(present.begin(), present.end(), list[f].name);
+				if (at != present.end())
+				{
+					// Already a row: only its key text can have changed.
+					RE::GFxValue entry;
+					const auto index = static_cast<std::uint32_t>(std::distance(present.begin(), at));
+					if (a_entries.GetElement(index, &entry) && entry.IsObject() && StringMember(entry, "buttonName") != keyText)
+					{
+						entry.SetMember("buttonName", RE::GFxValue(keyText.c_str()));
+						entry.SetMember("_uvcBaseName", RE::GFxValue(keyText.c_str()));
+						++added;  // the list is redrawn so the new key shows
+					}
+					continue;
+				}
+				RE::GFxValue value;
+				a_movie->CreateObject(&value);
+				value.SetMember("text", RE::GFxValue(list[f].name.c_str()));
+				value.SetMember("buttonName", RE::GFxValue(keyText.c_str()));
+				value.SetMember("buttonID", RE::GFxValue(static_cast<double>(kUnmappedID)));
+				value.SetMember("_uvcAdded", RE::GFxValue(true));
+				value.SetMember("_uvcFunction", RE::GFxValue(true));
+				// ListShowsGamepad reads _uvcBaseName when it is there; an extra row must never be the row that
+				// decides the device family, because its name is one this mod composed, not one the game sent
+				// (the 1.0.8 finding that a modifier prefix turned "360_Y" into a name no family test matches).
+				value.SetMember("_uvcBaseName", RE::GFxValue(keyText.c_str()));
+				const auto size = a_entries.GetArraySize();
+				a_entries.SetArraySize(size + 1);
+				a_entries.SetElement(size, value);
+				present.push_back(list[f].name);
+				++added;
+				logger::info("controls list: extra row \"{}\" added at the end of the {} list (key \"{}\")", list[f].name,
+							 a_gamepad ? "gamepad" : "keyboard", keyText.empty() ? "none" : keyText);
+			}
+			return added > 0;
+		}
+
 		// Records the first key pressed while a remap is on. Runs on the main thread when the game dispatches input,
 		// before the menus handle it.
 		class InputSink : public RE::BSTEventSink<RE::InputEvent*>
@@ -413,9 +495,47 @@ namespace controlslist
 				return;
 			}
 
+			const std::string pressedText = hasPress ? std::format("{} 0x{:02x}", unbinder::DeviceName(pressed.device), pressed.code) : std::string("nothing recorded");
+
+			// An extra row ([Functions]) first: it is not a user event, so the game changed nothing on the live map for
+			// it and there is nothing to compare. The press IS the whole answer - its own key again unbinds it, any
+			// other key binds it - and the new value goes straight to the mod that owns the function.
+			std::size_t functionIndex = 0;
+			if (functions::IsFunctionRow(event, &functionIndex))
+			{
+				if (!hasPress || pressed.device < 0 || pressed.device > 2)
+				{
+					SetRemapResult(std::format("\"{}\": the remap ended with no key recorded; the row is unchanged", event));
+					logger::debug("controls list: extra row \"{}\" remap ended with no key recorded", event);
+					return;
+				}
+				std::string text;
+				if (functions::HoldsKey(functionIndex, pressed.device, pressed.code))
+				{
+					functions::Unbind(functionIndex, pressed.device);
+					text = std::format("\"{}\": its own key pressed again ({}); the extra row is unbound", event, pressedText);
+				}
+				else
+				{
+					std::string why;
+					if (!functions::Bind(functionIndex, pressed.device, pressed.code, why))
+					{
+						SetRemapResult(std::format("\"{}\": {} refused: {}", event, pressedText, why));
+						logger::warn("controls list: extra row \"{}\": {} refused: {}", event, pressedText, why);
+						return;
+					}
+					text = std::format("\"{}\": bound to {}", event, pressedText);
+				}
+				settings::Save();
+				const int files = functions::Deliver("Controls menu");
+				const std::string full = std::format("{}; {} target file(s) written", text, files);
+				SetRemapResult(full);
+				logger::info("controls list: {}", full);
+				return;
+			}
+
 			std::array<std::vector<std::uint16_t>, 3> after;
 			for (int d = 0; d < 3; ++d) { after[d] = unbinder::LiveKeys(event, d); }
-			const std::string pressedText = hasPress ? std::format("{} 0x{:02x}", unbinder::DeviceName(pressed.device), pressed.code) : std::string("nothing recorded");
 
 			// 1. A control the INI list unbinds was given a key: the player bound it, so it leaves the list. A control a [Bound]
 			// line gives a key was given ANOTHER key: the line follows the player's choice, or closing the journal would put
@@ -596,7 +716,15 @@ namespace controlslist
 			const bool gamepad = ListShowsGamepad(entries);
 			if (g_showsGamepad.exchange(gamepad) != gamepad) { logger::debug("controls list: now showing the {}", gamepad ? "gamepad" : "keyboard and mouse"); }
 
-			if (!g_remapActive.load() && AddMissingRows(a_movie, entries, gamepad))
+			bool changed = false;
+			if (!g_remapActive.load())
+			{
+				changed = AddMissingRows(a_movie, entries, gamepad);
+				// Both are asked, and the order matters: the vanilla rows this mod puts back are placed by
+				// controlmap.txt order, and the extra rows go after all of them.
+				changed = AddFunctionRows(a_movie, entries, gamepad) || changed;
+			}
+			if (changed)
 			{
 				// InvalidateData is a method of the list object, the call shape that is safe (logic library).
 				const std::string path = ListPathCopy();

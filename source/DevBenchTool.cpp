@@ -4,6 +4,7 @@
 
 #include "DevBench/DevBenchAPI.h"
 #include "ControlsList.h"
+#include "Functions.h"
 #include "Settings.h"
 #include "SystemMenu.h"
 #include "Unbinder.h"
@@ -166,6 +167,52 @@ namespace DevBenchTool
 											removed ? "true" : "false", EscapeJson(unbinder::CustomMapPath())).c_str());
 				return;
 			}
+			// The driving half of this feature (rule 64): bind, unbind and deliver an extra Controls-page row without
+			// opening the journal and pushing the buttons by hand.
+			if (op == "function")
+			{
+				const std::string name = Get(args, "event");
+				const std::string deviceText = Get(args, "device");
+				const std::string keyText = Get(args, "key");
+				std::size_t index = 0;
+				if (!functions::IsFunctionRow(name, &index))
+				{
+					a_write(a_sink, std::format(R"({{"ok":false,"op":"function","error":"no extra row named \"{}\""}})", EscapeJson(name)).c_str());
+					return;
+				}
+				const int device = unbinder::DeviceIndex(deviceText);
+				if (device < 0)
+				{
+					a_write(a_sink, R"({"ok":false,"op":"function","error":"device must be keyboard, mouse or gamepad"})");
+					return;
+				}
+				bool ok = false;
+				int files = 0;
+				std::string why;
+				const bool ran = RunOnMainThread([&]() {
+					if (keyText.empty() || keyText == "none")
+					{
+						ok = functions::Unbind(index, device);
+					}
+					else
+					{
+						const std::uint16_t key = unbinder::ParseButton(keyText, device);
+						if (key == 0xFF) { why = "not a button name or code"; return; }
+						ok = functions::Bind(index, device, key, why);
+					}
+					if (ok) { settings::Save(); files = functions::Deliver("tool"); }
+				});
+				a_write(a_sink, std::format(R"({{"ok":{},"op":"function","row":"{}","device":"{}","filesWritten":{},"error":"{}"}})", (ran && ok) ? "true" : "false",
+											EscapeJson(name), EscapeJson(deviceText), files, EscapeJson(why)).c_str());
+				return;
+			}
+			if (op == "deliver")
+			{
+				int files = 0;
+				const bool ran = RunOnMainThread([&]() { files = functions::Deliver("tool"); });
+				a_write(a_sink, std::format(R"({{"ok":{},"op":"deliver","filesWritten":{}}})", ran ? "true" : "false", files).c_str());
+				return;
+			}
 			if (op == "apply")
 			{
 				const bool ran = RunOnMainThread([]() { unbinder::ApplyAll("tool"); });
@@ -181,8 +228,8 @@ namespace DevBenchTool
 			}
 
 			const std::string json = std::format(
-				"{{\"ok\":true,\"op\":\"state\",\"settings\":{{\"enabled\":{},\"keepRemapsInIni\":{},\"logLevel\":{},\"iniPath\":\"{}\"}},{},{},{}}}",
-				settings::general::enabled ? "true" : "false", settings::general::keepRemapsInIni ? "true" : "false", settings::debug::logLevel, EscapeJson(settings::GetIniPath()), unbinder::StateJson(), controlslist::StateJson(), systemmenu::StateJson());
+				"{{\"ok\":true,\"op\":\"state\",\"settings\":{{\"enabled\":{},\"keepRemapsInIni\":{},\"logLevel\":{},\"iniPath\":\"{}\"}},{},{},{},{}}}",
+				settings::general::enabled ? "true" : "false", settings::general::keepRemapsInIni ? "true" : "false", settings::debug::logLevel, EscapeJson(settings::GetIniPath()), unbinder::StateJson(), controlslist::StateJson(), systemmenu::StateJson(), functions::StateJson());
 			a_write(a_sink, json.c_str());
 		}
 	}
@@ -206,8 +253,8 @@ namespace DevBenchTool
 			"keys captured this session, last apply. op=dump [context]: every mapping of the live ControlMap (event, key, modifier, "
 			"remappable) per context and device. op=unbind / op=rebind with context (name or index), event, device "
 			"(keyboard|mouse|gamepad): add to or remove from the list, applied and written to the INI. op=apply re-applies the list; "
-			"op=reload gives the keys back, re-reads the INI and applies. op=rows (journal open): every row of the game's Controls list - event, the buttonName and buttonID the game sent, whether this mod draws it blank and why. op=listen [seconds, default 20, 1-120]: log every button event - device, code, the user event the game attached, value, held time - to the mod's log. op=systemrows (journal open): the System page - whether it picks rows by name, every row it knows (canonical), the rows it shows, the [SystemMenu] list and the rows removed this open. op=own: controls with no INI line whose live keys differ from controlmap.txt are written into the INI, and ControlMap_Custom.txt is removed from the game folder; op=state reports customMap, lastOwn and ownLines.\","
-			"\"inputSchema\":{\"type\":\"object\",\"properties\":{\"op\":{\"type\":\"string\"},\"context\":{\"type\":\"string\"},\"event\":{\"type\":\"string\"},\"device\":{\"type\":\"string\"},\"seconds\":{\"type\":\"string\"}}},"
+			"op=reload gives the keys back, re-reads the INI and applies. op=rows (journal open): every row of the game's Controls list - event, the buttonName and buttonID the game sent, whether this mod draws it blank and why. op=listen [seconds, default 20, 1-120]: log every button event - device, code, the user event the game attached, value, held time - to the mod's log. op=systemrows (journal open): the System page - whether it picks rows by name, every row it knows (canonical), the rows it shows, the [SystemMenu] list and the rows removed this open. op=own: controls with no INI line whose live keys differ from controlmap.txt are written into the INI, and ControlMap_Custom.txt is removed from the game folder; op=state reports customMap, lastOwn and ownLines. op=function with event (the extra row's name), device and key (a button name or code, or \"none\" to unbind): binds an extra [Functions] row and writes its value into the target mod's settings file. op=deliver writes every extra row's value to its target file now. op=state lists the extra rows with the SKSE input code each one delivers.\","
+			"\"inputSchema\":{\"type\":\"object\",\"properties\":{\"op\":{\"type\":\"string\"},\"context\":{\"type\":\"string\"},\"event\":{\"type\":\"string\"},\"device\":{\"type\":\"string\"},\"key\":{\"type\":\"string\"},\"seconds\":{\"type\":\"string\"}}},"
 			"\"readOnly\":false"
 			"}";
 
