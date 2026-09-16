@@ -44,6 +44,33 @@ namespace unbinder
 			{ "LT", 0x0009 }, { "RT", 0x000a },
 		};
 
+		// DirectInput scan codes, for NAMING a keyboard key in the log and in the Controls list. The game's own
+		// controlmap.txt writes these as raw hex, so without a table a modifier reads as "0x2a" rather than
+		// "Left Shift". Names are matched case-insensitively on the way in, so "lshift" and "Left Shift" both parse.
+		constexpr std::pair<const char*, std::uint16_t> kKeyboardKeys[] = {
+			{ "Escape", 0x01 }, { "1", 0x02 }, { "2", 0x03 }, { "3", 0x04 }, { "4", 0x05 }, { "5", 0x06 },
+			{ "6", 0x07 }, { "7", 0x08 }, { "8", 0x09 }, { "9", 0x0a }, { "0", 0x0b }, { "Minus", 0x0c },
+			{ "Equals", 0x0d }, { "Backspace", 0x0e }, { "Tab", 0x0f },
+			{ "Q", 0x10 }, { "W", 0x11 }, { "E", 0x12 }, { "R", 0x13 }, { "T", 0x14 }, { "Y", 0x15 },
+			{ "U", 0x16 }, { "I", 0x17 }, { "O", 0x18 }, { "P", 0x19 },
+			{ "LeftBracket", 0x1a }, { "RightBracket", 0x1b }, { "Enter", 0x1c }, { "Left Ctrl", 0x1d },
+			{ "A", 0x1e }, { "S", 0x1f }, { "D", 0x20 }, { "F", 0x21 }, { "G", 0x22 }, { "H", 0x23 },
+			{ "J", 0x24 }, { "K", 0x25 }, { "L", 0x26 }, { "Semicolon", 0x27 }, { "Apostrophe", 0x28 },
+			{ "Grave", 0x29 }, { "Left Shift", 0x2a }, { "Backslash", 0x2b },
+			{ "Z", 0x2c }, { "X", 0x2d }, { "C", 0x2e }, { "V", 0x2f }, { "B", 0x30 }, { "N", 0x31 },
+			{ "M", 0x32 }, { "Comma", 0x33 }, { "Period", 0x34 }, { "Slash", 0x35 }, { "Right Shift", 0x36 },
+			{ "NumMultiply", 0x37 }, { "Left Alt", 0x38 }, { "Space", 0x39 }, { "CapsLock", 0x3a },
+			{ "F1", 0x3b }, { "F2", 0x3c }, { "F3", 0x3d }, { "F4", 0x3e }, { "F5", 0x3f }, { "F6", 0x40 },
+			{ "F7", 0x41 }, { "F8", 0x42 }, { "F9", 0x43 }, { "F10", 0x44 }, { "NumLock", 0x45 },
+			{ "ScrollLock", 0x46 }, { "Num7", 0x47 }, { "Num8", 0x48 }, { "Num9", 0x49 }, { "NumMinus", 0x4a },
+			{ "Num4", 0x4b }, { "Num5", 0x4c }, { "Num6", 0x4d }, { "NumPlus", 0x4e }, { "Num1", 0x4f },
+			{ "Num2", 0x50 }, { "Num3", 0x51 }, { "Num0", 0x52 }, { "NumPeriod", 0x53 },
+			{ "F11", 0x57 }, { "F12", 0x58 }, { "NumEnter", 0x9c }, { "Right Ctrl", 0x9d },
+			{ "NumSlash", 0xb5 }, { "PrintScreen", 0xb7 }, { "Right Alt", 0xb8 }, { "Pause", 0xc5 },
+			{ "Home", 0xc7 }, { "Up", 0xc8 }, { "PageUp", 0xc9 }, { "Left", 0xcb }, { "Right", 0xcd },
+			{ "End", 0xcf }, { "Down", 0xd0 }, { "PageDown", 0xd1 }, { "Insert", 0xd2 }, { "Delete", 0xd3 },
+		};
+
 		// The context names, in the engine's index order. SE and AE before 1.6.1130 have 17; AE 1.6.1130+
 		// inserts Marketplace at 16 and Favor becomes 17 (RE/U/UserEvents.h).
 		constexpr const char* kNamesSE[17] = {
@@ -325,11 +352,14 @@ namespace unbinder
 					continue;
 				}
 				auto found = Find(*mappings, b.event);
-				if (!found.empty() && found.front()->inputKey == b.key) { continue; }  // already there
+				// Already there: BOTH halves must match, or a bind that only changes its modifier is skipped silently.
+				if (!found.empty() && found.front()->inputKey == b.key && found.front()->modifier == b.modifier) { continue; }
 				const RE::ControlMap::UserEventMapping* holder = nullptr;
 				for (const auto& m : *mappings)
 				{
-					if (m.inputKey == b.key && !(m.eventID.c_str() && IEquals(m.eventID.c_str(), b.event))) { holder = &m; break; }
+					// The same key under a DIFFERENT modifier is not a conflict - the engine tells (key, modifier) pairs
+					// apart - so both halves are compared here too.
+					if (m.inputKey == b.key && m.modifier == b.modifier && !(m.eventID.c_str() && IEquals(m.eventID.c_str(), b.event))) { holder = &m; break; }
 				}
 				if (holder)
 				{
@@ -359,7 +389,7 @@ namespace unbinder
 					// (inputKey, modifier) with comparator 67264, which orders and matches on BOTH; a press builds its search key
 					// with modifier 0 (idCode's upper bits), so a mapping stored with modifier 0xFF is never found and the press
 					// gets no user event (1.0.5 listen test: code 0x10 userEvent ""). Adversarial contest 2026-09-14.
-					copy.modifier = 0;
+					copy.modifier = b.modifier;  // 0 when the bind names no modifier
 					copy.linked = false;
 					mappings->push_back(copy);
 					logger::info("bind ({}): {}|{}|{} had no mapping on that device; created one on {}", a_reason, b.context, b.event, DeviceName(b.device), keyText);
@@ -368,6 +398,7 @@ namespace unbinder
 				{
 					logger::info("bind ({}): {}|{}|{} {} -> {}", a_reason, b.context, b.event, DeviceName(b.device), Hex(found.front()->inputKey), keyText);
 					found.front()->inputKey = b.key;
+					found.front()->modifier = b.modifier;  // an existing mapping keeps its old modifier otherwise
 				}
 				SortByKey(*mappings);
 				++bound;
@@ -507,6 +538,14 @@ namespace unbinder
 				if (IEquals(name, a_text)) { return code; }
 			}
 		}
+		if (a_device == 0)
+		{
+			// A keyboard key may be written by name ("Left Shift") as well as by code ("0x2a").
+			for (const auto& [name, code] : kKeyboardKeys)
+			{
+				if (IEquals(name, a_text)) { return code; }
+			}
+		}
 		try
 		{
 			std::size_t used = 0;
@@ -522,10 +561,22 @@ namespace unbinder
 
 	const char* ButtonName(std::uint16_t a_key, int a_device)
 	{
-		if (a_device != 2) { return ""; }
-		for (const auto& [name, code] : kPadButtons)
+		if (a_device == 2)
 		{
-			if (code == a_key) { return name; }
+			for (const auto& [name, code] : kPadButtons)
+			{
+				if (code == a_key) { return name; }
+			}
+			return "";
+		}
+		// Keyboard: name it where the table knows it, so a modifier reads "Left Shift" and not "0x2a".
+		// Mouse has no name table; its callers fall back to hex, as before.
+		if (a_device == 0)
+		{
+			for (const auto& [name, code] : kKeyboardKeys)
+			{
+				if (code == a_key) { return name; }
+			}
 		}
 		return "";
 	}

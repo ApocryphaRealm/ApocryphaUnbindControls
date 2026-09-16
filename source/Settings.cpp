@@ -92,7 +92,8 @@ namespace settings
 						if (bar == std::string::npos) { break; }
 						from = bar + 1;
 					}
-					if (parts.size() != 4) { ++a_badLines; logger::warn("INI [Bound] line \"{}\" is not Context|Control|Device|Button; ignored", t); continue; }
+					// 4 fields, or 5 with an optional modifier: Context|Control|Device|Button[|Modifier].
+					if (parts.size() != 4 && parts.size() != 5) { ++a_badLines; logger::warn("INI [Bound] line \"{}\" is not Context|Control|Device|Button[|Modifier]; ignored", t); continue; }
 					unbinder::Bind b;
 					b.context = parts[0];
 					b.event = parts[1];
@@ -101,6 +102,14 @@ namespace settings
 					if (b.device < 0) { ++a_badLines; logger::warn("INI [Bound] line \"{}\": unknown device; ignored (keyboard, mouse or gamepad)", t); continue; }
 					b.key = unbinder::ParseButton(parts[3], b.device);
 					if (b.key == 0xFF) { ++a_badLines; logger::warn("INI [Bound] line \"{}\": \"{}\" is not a button name or code; ignored", t, parts[3]); continue; }
+					if (parts.size() == 5 && !parts[4].empty())
+					{
+						const std::uint16_t mod = unbinder::ParseButton(parts[4], b.device);
+						// 0xFF is the parser's "not a button"; it is also the value that would make the mapping
+						// unreachable, so a bad modifier drops the line rather than being stored.
+						if (mod == 0xFF) { ++a_badLines; logger::warn("INI [Bound] line \"{}\": modifier \"{}\" is not a button name or code; ignored", t, parts[4]); continue; }
+						b.modifier = mod;
+					}
 					const bool dup = std::any_of(a_binds.begin(), a_binds.end(), [&](const unbinder::Bind& o) { return o.device == b.device && Lower(o.context) == Lower(b.context) && Lower(o.event) == Lower(b.event); });
 					if (dup) { logger::warn("INI [Bound] line \"{}\" repeats an earlier line; ignored", t); continue; }
 					a_binds.push_back(std::move(b));
@@ -295,7 +304,19 @@ namespace settings
 		for (const auto& b : unbinder::GetBinds())
 		{
 			const char* name = unbinder::ButtonName(b.key, b.device);
-			boundLines.push_back(std::format("{}|{}|{}|{}", b.context, b.event, unbinder::DeviceName(b.device), name[0] ? std::string(name) : std::format("0x{:02x}", b.key)));
+			const std::string keyText = name[0] ? std::string(name) : std::format("0x{:02x}", b.key);
+			// The modifier is written back only when there is one, so an INI that never used one is unchanged.
+			// Without this the field would be parsed and then dropped by the next save (every Controls-menu remap saves).
+			if (b.modifier != 0)
+			{
+				const char* modName = unbinder::ButtonName(b.modifier, b.device);
+				const std::string modText = modName[0] ? std::string(modName) : std::format("0x{:02x}", b.modifier);
+				boundLines.push_back(std::format("{}|{}|{}|{}|{}", b.context, b.event, unbinder::DeviceName(b.device), keyText, modText));
+			}
+			else
+			{
+				boundLines.push_back(std::format("{}|{}|{}|{}", b.context, b.event, unbinder::DeviceName(b.device), keyText));
+			}
 		}
 		WriteSection(lines, "[Bound]", boundLines);
 

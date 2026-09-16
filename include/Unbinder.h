@@ -57,6 +57,11 @@ namespace unbinder
 		std::string event;      // e.g. "Pause"
 		int device = 0;         // 0 keyboard, 1 mouse, 2 gamepad
 		std::uint16_t key = 0xFF;
+		// The key that must be HELD for this bind to fire. 0 = none - never 0xFF: the engine's
+		// button -> user event lookup matches (inputKey, modifier) exactly and a press searches with
+		// modifier 0, so 0xFF here makes the mapping unreachable (logic library, 2026-09-14).
+		// controlmap.txt writes the same thing as "0x0009+0x0100" (modifier+key).
+		std::uint16_t modifier = 0;
 	};
 	std::vector<Bind> GetBinds();
 	void SetBinds(std::vector<Bind> a_binds);        // from the INI; does not apply

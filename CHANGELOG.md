@@ -7,6 +7,14 @@ Rule 61: this mod's own history, kept beside the code it describes.
 > number; at `.9` the MINOR rolls. The next number is LAST WORKING + 1; failed/scratch/
 > untested numbers are reused. Numbers come from version-gate.ps1.
 
+## 1.0.8 - 2026-09-16 - untested
+
+### Added
+- **A bind can require a modifier key held down.** `[Bound]` lines take an optional fifth field - `Context|Control|Device|Button|Modifier` - naming a key or button that must be held for the control to fire. The engine has always supported this: a `UserEventMapping` carries a `modifier` beside its `inputKey`, and the button-to-event lookup matches BOTH, which is how `controlmap.txt` expresses combinations as `0x0009+0x0100`. This exposes that field instead of adding a parallel input system, so it composes with every other mod that reads the control map. `0` means no modifier and is written into the live map; `0xFF` is never stored there, because a press searches with modifier `0` and a mapping stored under `0xFF` can never be found (the bug 1.0.5 shipped). A modifier is written back to the INI only when the bind has one, so an INI that never used one is untouched, and a remap made in the game's Controls menu keeps the control's modifier rather than clearing it.
+
+### Fixed
+- Applying a bind compared only `inputKey`, in three places that all needed the modifier too: a bind that changed only its modifier was skipped as "already there"; a control holding the same key under a *different* modifier was reported as a conflict when the engine can tell the two apart; and an existing mapping kept its old modifier because only `inputKey` was written to it.
+
 ## 1.0.7 - 2026-09-15 - untested
 
 ### Added
