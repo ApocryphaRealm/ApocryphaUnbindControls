@@ -508,12 +508,18 @@ namespace functions
 						const auto& bound = f.bind[forDevice];
 						const int code = bound.key == kUnbound ? f.target.none : ToInputCode(bound.key, forDevice);
 						WriteKey(lines, sectionName, f.target.key, std::to_string(code));
+						// The modifier is written on EVERY delivery, so a wrong "no key" value corrupts it even when
+						// the row is bound - which is how Wheeler's toggleWheelModifier ended up -1 where it wanted 0
+						// and the wheel stopped opening (2026-09-16). It is logged for the same reason: the key was
+						// visible in the log and the modifier was not, so the damage was invisible.
+						int modifierWritten = f.target.none;
 						if (!f.target.modifierKey.empty())
 						{
-							const int modifier = (bound.key != kUnbound && bound.modifier != 0) ? ToInputCode(bound.modifier, forDevice) : f.target.none;
-							WriteKey(lines, sectionName, f.target.modifierKey, std::to_string(modifier));
+							modifierWritten = (bound.key != kUnbound && bound.modifier != 0) ? ToInputCode(bound.modifier, forDevice) : f.target.none;
+							WriteKey(lines, sectionName, f.target.modifierKey, std::to_string(modifierWritten));
 						}
-						applied += std::format("{}\"{}\" {} -> {}", applied.empty() ? "" : ", ", f.name, unbinder::DeviceName(forDevice), code);
+						applied += std::format("{}\"{}\" {} -> key {} modifier {}", applied.empty() ? "" : ", ", f.name,
+											   unbinder::DeviceName(forDevice), code, modifierWritten);
 					}
 					continue;
 				}
@@ -525,12 +531,13 @@ namespace functions
 					if (f.bind[d].key != kUnbound) { code = ToInputCode(f.bind[d].key, d); device = d; break; }
 				}
 				WriteKey(lines, f.target.section, f.target.key, std::to_string(code));
+				int modifierWritten = f.target.none;
 				if (!f.target.modifierKey.empty())
 				{
-					const int modifier = (device >= 0 && f.bind[device].modifier != 0) ? ToInputCode(f.bind[device].modifier, device) : f.target.none;
-					WriteKey(lines, f.target.section, f.target.modifierKey, std::to_string(modifier));
+					modifierWritten = (device >= 0 && f.bind[device].modifier != 0) ? ToInputCode(f.bind[device].modifier, device) : f.target.none;
+					WriteKey(lines, f.target.section, f.target.modifierKey, std::to_string(modifierWritten));
 				}
-				applied += std::format("{}\"{}\" -> {}", applied.empty() ? "" : ", ", f.name, code);
+				applied += std::format("{}\"{}\" -> key {} modifier {}", applied.empty() ? "" : ", ", f.name, code, modifierWritten);
 			}
 
 			// Nothing to say that the file does not already say: leave another mod's file alone rather than rewrite

@@ -194,7 +194,10 @@ namespace settings
 					// What the TARGET writes for "no key" - not a constant across mods: One Click Power Attack uses
 					// -1, Stances NG uses 0 ("0 is to deactivate the key entirely"). Writing the wrong one would
 					// leave a cleared row pointing at a real key.
-					if (parts.size() == 9 && !parts[8].empty())
+					// >= 9, not == 9: a line that ALSO names a gamepad section has ten fields, and an equality test
+					// silently dropped its no-key value back to the default. Wheeler's "unset" is 0, so unbinding
+					// the Wheel Menu row wrote -1 into its config instead (seen live, 2026-09-16).
+					if (parts.size() >= 9 && !parts[8].empty())
 					{
 						try { f.target.none = std::stoi(parts[8]); }
 						catch (...) { ++a_badLines; logger::warn("INI [Functions] line \"{}\": \"{}\" is not a number for the no-key value; ignored", t, parts[8]); continue; }
