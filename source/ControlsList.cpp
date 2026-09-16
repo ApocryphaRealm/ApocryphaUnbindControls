@@ -10,6 +10,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <atomic>
 #include <format>
 #include <mutex>
@@ -143,6 +144,13 @@ namespace controlslist
 			return (menu && menu->uiMovie) ? menu->uiMovie.get() : nullptr;
 		}
 
+		bool IEqualsView(std::string_view a_lhs, std::string_view a_rhs)
+		{
+			return a_lhs.size() == a_rhs.size() &&
+			       std::equal(a_lhs.begin(), a_lhs.end(), a_rhs.begin(),
+			                  [](unsigned char a, unsigned char b) { return std::tolower(a) == std::tolower(b); });
+		}
+
 		std::string StringMember(const RE::GFxValue& a_obj, const char* a_name)
 		{
 			RE::GFxValue v;
@@ -241,6 +249,16 @@ namespace controlslist
 			f.added = a_entry.GetMember("_uvcAdded", &added) && added.IsBool() && added.GetBool();
 			// An extra row ([Functions]) is not a user event, so the live map knows nothing about it: its key comes
 			// from the row's own binding, and the row is blank until the player gives it one.
+			if (IEqualsView(f.text, unbinder::kModifierRowName))
+			{
+				f.function = true;  // drawn like an extra row: this mod owns its value, the live map knows nothing of it
+				if (unbinder::ModifierFor(a_gamepad ? 2 : 0) == 0xFF)
+				{
+					f.blank = true;
+					f.why = a_gamepad ? "the designated modifier row has no gamepad button" : "the designated modifier row has no key";
+				}
+				return f;
+			}
 			std::size_t index = 0;
 			if (!f.text.empty() && functions::IsFunctionRow(f.text, &index))
 			{
@@ -410,7 +428,6 @@ namespace controlslist
 		bool AddFunctionRows(RE::GFxMovieView* a_movie, RE::GFxValue& a_entries, bool a_gamepad)
 		{
 			const auto list = functions::GetFunctions();
-			if (list.empty()) { return false; }
 
 			const std::uint32_t count = a_entries.GetArraySize();
 			std::vector<std::string> present;
@@ -423,6 +440,55 @@ namespace controlslist
 			}
 
 			int added = 0;
+
+			// The designated Modifier row (the owner, 2026-09-16: "There should be a modifier key row, which would be
+			// set to left trigger"). It is not a user event either, so it is drawn the same way an extra row is - but
+			// its value lives in this mod's [Modifier] list and it is what every "Modifier" combination resolves to.
+			{
+				const std::uint16_t mod = unbinder::ModifierFor(a_gamepad ? 2 : 0);
+				const char* modName = mod == 0xFF ? "" : unbinder::ButtonName(mod, a_gamepad ? 2 : 0);
+				const std::string modText = mod == 0xFF ? std::string() : (modName[0] ? std::string(modName) : std::format("0x{:02x}", mod));
+				const auto at = std::find(present.begin(), present.end(), std::string(unbinder::kModifierRowName));
+				if (at != present.end())
+				{
+					RE::GFxValue entry;
+					const auto index = static_cast<std::uint32_t>(std::distance(present.begin(), at));
+					if (a_entries.GetElement(index, &entry) && entry.IsObject() && StringMember(entry, "buttonName") != modText)
+					{
+						entry.SetMember("buttonName", RE::GFxValue(modText.c_str()));
+						entry.SetMember("_uvcBaseName", RE::GFxValue(modText.c_str()));
+						++added;
+					}
+				}
+				else
+				{
+					RE::GFxValue value;
+					a_movie->CreateObject(&value);
+					RE::GFxValue last;
+					double sortIndex = 0.0;
+					bool hasSort = false;
+					if (a_entries.GetArraySize() > 0 && a_entries.GetElement(a_entries.GetArraySize() - 1, &last) && last.IsObject())
+					{
+						CloneRowMembers(last, value, unbinder::kModifierRowName);
+						hasSort = NumberMember(last, "sortIndex", sortIndex);
+					}
+					value.SetMember("text", RE::GFxValue(unbinder::kModifierRowName));
+					value.SetMember("buttonName", RE::GFxValue(modText.c_str()));
+					value.SetMember("buttonID", RE::GFxValue(static_cast<double>(kUnmappedID)));
+					value.SetMember("_uvcAdded", RE::GFxValue(true));
+					value.SetMember("_uvcFunction", RE::GFxValue(true));
+					value.SetMember("_uvcBaseName", RE::GFxValue(modText.c_str()));
+					if (hasSort) { value.SetMember("sortIndex", RE::GFxValue(sortIndex + 1.0)); }
+					const auto size = a_entries.GetArraySize();
+					a_entries.SetArraySize(size + 1);
+					a_entries.SetElement(size, value);
+					present.push_back(unbinder::kModifierRowName);
+					++added;
+					logger::info("controls list: the Modifier row added to the {} list (button \"{}\")",
+								 a_gamepad ? "gamepad" : "keyboard", modText.empty() ? "none" : modText);
+				}
+			}
+
 			for (std::size_t f = 0; f < list.size(); ++f)
 			{
 				const std::string keyText = functions::ShownText(f, a_gamepad);
@@ -540,7 +606,28 @@ namespace controlslist
 
 			const std::string pressedText = hasPress ? std::format("{} 0x{:02x}", unbinder::DeviceName(pressed.device), pressed.code) : std::string("nothing recorded");
 
-			// An extra row ([Functions]) first: it is not a user event, so the game changed nothing on the live map for
+			// The Modifier row first - it is this mod's own, not a user event and not a [Functions] row.
+			if (IEqualsView(event, unbinder::kModifierRowName))
+			{
+				if (!hasPress || pressed.device < 0 || pressed.device > 2)
+				{
+					SetRemapResult(std::format("\"{}\": the remap ended with no button recorded; the row is unchanged", event));
+					return;
+				}
+				const std::uint16_t had = unbinder::ModifierFor(pressed.device);
+				const bool same = (had == pressed.code);
+				unbinder::SetModifier(pressed.device, same ? 0xFF : static_cast<std::uint16_t>(pressed.code));
+				settings::Save();
+				// Every combination that refers to the row moves with it, so the live map is rebuilt now.
+				unbinder::ApplyAll("modifier row changed");
+				const std::string text = same ? std::format("\"{}\": its own button pressed again ({}); the designated modifier is cleared", event, pressedText) :
+												std::format("\"{}\": the designated modifier is now {}; every \"Modifier\" combination follows it", event, pressedText);
+				SetRemapResult(text);
+				logger::info("controls list: {}", text);
+				return;
+			}
+
+			// An extra row ([Functions]) next: it is not a user event, so the game changed nothing on the live map for
 			// it and there is nothing to compare. The press IS the whole answer - its own key again unbinds it, any
 			// other key binds it - and the new value goes straight to the mod that owns the function.
 			std::size_t functionIndex = 0;

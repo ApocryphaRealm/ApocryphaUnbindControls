@@ -64,7 +64,7 @@ namespace settings
 		// Scalars go into the key:section map; each [Unbound] line - "Context|Control|Device", an "=..."
 		// after it is accepted and ignored - becomes an entry.
 		// Each [Bound] line - "Context|Control|Device|Button" - becomes a bind; a_sawBound says the section exists.
-		void ReadFile(std::map<std::string, std::string>& a_keys, std::vector<unbinder::Entry>& a_entries, std::vector<unbinder::Bind>& a_binds, bool& a_sawBound, std::vector<std::string>& a_rows, bool& a_sawSystemMenu, std::vector<functions::Function>& a_functions, bool& a_sawFunctions, std::vector<unbinder::Remappable>& a_remappable, bool& a_sawRemappable, int& a_badLines)
+		void ReadFile(std::map<std::string, std::string>& a_keys, std::vector<unbinder::Entry>& a_entries, std::vector<unbinder::Bind>& a_binds, bool& a_sawBound, std::vector<std::string>& a_rows, bool& a_sawSystemMenu, std::vector<functions::Function>& a_functions, bool& a_sawFunctions, std::vector<unbinder::Remappable>& a_remappable, bool& a_sawRemappable, std::vector<unbinder::ModifierKey>& a_modifiers, bool& a_sawModifier, int& a_badLines)
 		{
 			std::vector<std::string> a_seenRows;  // tokens of every [SystemMenu] row already read
 			std::ifstream in(iniPath);
@@ -81,6 +81,7 @@ namespace settings
 					if (section == "systemmenu") { a_sawSystemMenu = true; }
 					if (section == "functions") { a_sawFunctions = true; }
 					if (section == "remappable") { a_sawRemappable = true; }
+					if (section == "modifier") { a_sawModifier = true; }
 					continue;
 				}
 				const auto eq = t.find('=');
@@ -107,6 +108,14 @@ namespace settings
 					if (b.key == 0xFF) { ++a_badLines; logger::warn("INI [Bound] line \"{}\": \"{}\" is not a button name or code; ignored", t, parts[3]); continue; }
 					if (parts.size() == 5 && !parts[4].empty())
 					{
+						// The word "Modifier" means the device's designated modifier row rather than a button, so
+						// moving that row moves this combination with it.
+						if (Lower(parts[4]) == Lower(unbinder::kModifierRowName))
+						{
+							b.useDesignatedModifier = true;
+							a_binds.push_back(std::move(b));
+							continue;
+						}
 						const std::uint16_t mod = unbinder::ParseButton(parts[4], b.device);
 						// 0xFF is the parser's "not a button"; it is also the value that would make the mapping
 						// unreachable, so a bad modifier drops the line rather than being stored.
@@ -116,6 +125,24 @@ namespace settings
 					const bool dup = std::any_of(a_binds.begin(), a_binds.end(), [&](const unbinder::Bind& o) { return o.device == b.device && Lower(o.context) == Lower(b.context) && Lower(o.event) == Lower(b.event); });
 					if (dup) { logger::warn("INI [Bound] line \"{}\" repeats an earlier line; ignored", t); continue; }
 					a_binds.push_back(std::move(b));
+					continue;
+				}
+				if (section == "modifier")
+				{
+					// Device|Button - the ONE button that a [Bound] line means when it writes "Modifier".
+					const std::string key = Trim(t);
+					const auto bar = key.find('|');
+					if (bar == std::string::npos) { ++a_badLines; logger::warn("INI [Modifier] line \"{}\" is not Device|Button; ignored", key); continue; }
+					unbinder::ModifierKey mk;
+					mk.device = unbinder::DeviceIndex(Trim(key.substr(0, bar)));
+					if (mk.device < 0) { ++a_badLines; logger::warn("INI [Modifier] line \"{}\": unknown device; ignored (keyboard, mouse or gamepad)", key); continue; }
+					const std::string button = Trim(key.substr(bar + 1));
+					// Empty is meaningful: that device has no designated modifier.
+					mk.key = button.empty() ? 0xFF : unbinder::ParseButton(button, mk.device);
+					if (!button.empty() && mk.key == 0xFF) { ++a_badLines; logger::warn("INI [Modifier] line \"{}\": \"{}\" is not a button name or code; ignored", key, button); continue; }
+					const bool dup = std::any_of(a_modifiers.begin(), a_modifiers.end(), [&](const unbinder::ModifierKey& o) { return o.device == mk.device; });
+					if (dup) { logger::warn("INI [Modifier] line \"{}\" repeats a device already given one; ignored", key); continue; }
+					a_modifiers.push_back(mk);
 					continue;
 				}
 				if (section == "remappable")
@@ -244,8 +271,10 @@ namespace settings
 			bool sawFunctions = false;
 			std::vector<unbinder::Remappable> remappable;
 			bool sawRemappable = false;
+			std::vector<unbinder::ModifierKey> modifiers;
+			bool sawModifier = false;
 			int bad = 0;
-			ReadFile(k, entries, binds, sawBound, rows, sawSystemMenu, funcs, sawFunctions, remappable, sawRemappable, bad);
+			ReadFile(k, entries, binds, sawBound, rows, sawSystemMenu, funcs, sawFunctions, remappable, sawRemappable, modifiers, sawModifier, bad);
 			auto get = [&](const char* a_key, auto& a_out, auto a_parse) {
 				const auto it = k.find(a_key);
 				if (it == k.end()) { logger::debug("INI key {} missing; keeping current value", a_key); return; }
@@ -263,6 +292,13 @@ namespace settings
 			if (sawSystemMenu) { systemmenu::SetHidden(std::move(rows)); }
 			logger::info("System tab rows hidden: {}{}", systemmenu::GetHidden().size(), sawSystemMenu ? "" : " (no [SystemMenu] section - shipped rows kept)");
 			// An INI from before 1.0.8 has no [Functions] section: it gets the shipped rows, unbound, rather than none.
+			// An INI from before 1.0.8 has no [Modifier] section: it gets the shipped one.
+			if (sawModifier) { unbinder::SetModifiers(std::move(modifiers)); }
+			{
+				const std::uint16_t pad = unbinder::ModifierFor(2);
+				logger::info("designated modifier: gamepad {}{}", pad == 0xFF ? "none" : unbinder::ButtonName(pad, 2),
+							 sawModifier ? "" : " (no [Modifier] section - shipped value kept)");
+			}
 			// An INI from before 1.0.8 has no [Remappable] section: it gets the shipped list.
 			const std::size_t remappableCount = sawRemappable ? remappable.size() : unbinder::GetRemappable().size();
 			if (sawRemappable) { unbinder::SetRemappable(std::move(remappable)); }
@@ -356,6 +392,7 @@ namespace settings
 		systemmenu::SetHidden(systemmenu::DefaultHidden());
 		functions::SetFunctions(functions::DefaultFunctions());
 		unbinder::SetRemappable(unbinder::DefaultRemappable());
+		unbinder::SetModifiers(unbinder::DefaultModifiers());
 
 		auto* collection = utils::INISettingCollection::GetSingleton();
 		collection->AddSettings(
@@ -398,7 +435,11 @@ namespace settings
 			const std::string keyText = name[0] ? std::string(name) : std::format("0x{:02x}", b.key);
 			// The modifier is written back only when there is one, so an INI that never used one is unchanged.
 			// Without this the field would be parsed and then dropped by the next save (every Controls-menu remap saves).
-			if (b.modifier != 0)
+			if (b.useDesignatedModifier)
+			{
+				boundLines.push_back(std::format("{}|{}|{}|{}|{}", b.context, b.event, unbinder::DeviceName(b.device), keyText, unbinder::kModifierRowName));
+			}
+			else if (b.modifier != 0)
 			{
 				const char* modName = unbinder::ButtonName(b.modifier, b.device);
 				const std::string modText = modName[0] ? std::string(modName) : std::format("0x{:02x}", b.modifier);
@@ -432,6 +473,14 @@ namespace settings
 			functionLines.push_back(std::format("{}|{}|{}|{}|{}|{}|{}|{}|{}", f.name, device, keyText, modText,
 												f.target.file, f.target.section, f.target.key, f.target.modifierKey, f.target.none));
 		}
+		std::vector<std::string> modifierLines;
+		for (const auto& m : unbinder::GetModifiers())
+		{
+			const char* name = m.key == 0xFF ? "" : unbinder::ButtonName(m.key, m.device);
+			const std::string text = m.key == 0xFF ? std::string() : (name[0] ? std::string(name) : std::format("0x{:02x}", m.key));
+			modifierLines.push_back(std::format("{}|{}", unbinder::DeviceName(m.device), text));
+		}
+		WriteSection(lines, "[Modifier]", modifierLines);
 		std::vector<std::string> remappableLines;
 		for (const auto& r : unbinder::GetRemappable()) { remappableLines.push_back(std::format("{}|{}|{}", r.context, r.event, unbinder::DeviceName(r.device))); }
 		WriteSection(lines, "[Remappable]", remappableLines);

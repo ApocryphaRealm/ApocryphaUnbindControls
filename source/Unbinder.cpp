@@ -32,6 +32,7 @@ namespace unbinder
 		bool g_sinkInstalled = false;
 		std::vector<Bind> g_binds;
 		std::vector<Remappable> g_remappable;
+		std::vector<ModifierKey> g_modifiers;
 		int g_lastBound = 0;
 		int g_lastRemappable = 0;  // binds that changed a key at the last apply
 		std::string g_lastOwn = "nothing recorded yet";  // g_lock: the latest remap written into the INI lists
@@ -335,6 +336,20 @@ namespace unbinder
 			return false;
 		}
 
+		// A bind's modifier, with "Modifier" resolved to the device's designated row. A designated modifier that is
+		// not set (0xFF) means no modifier at all rather than an unreachable mapping - 0xFF stored here can never be
+		// matched by a press (logic library, 2026-09-14).
+		std::uint16_t ResolvedModifier(const Bind& a_bind)
+		{
+			if (!a_bind.useDesignatedModifier) { return a_bind.modifier; }
+			std::uint16_t designated = kUnmapped;
+			for (const auto& m : g_modifiers)
+			{
+				if (m.device == a_bind.device) { designated = m.key; break; }
+			}
+			return designated == kUnmapped ? 0 : designated;
+		}
+
 		// [Bound]: give each listed control its key. Runs after the unbinds, so a key the list just freed (Journal's Start
 		// on the gamepad) is free for the bind. One key, one action: a key another control on that device still holds is
 		// not taken, and the holder is named. A control with no mapping on that device at all gets one, copied from its
@@ -370,71 +385,147 @@ namespace unbinder
 			return changed;
 		}
 
+		// [Bound]: give each listed control its key.
+		//
+		// Applied as a SET, in two phases, because a list of binds is a LAYOUT and a layout contains swaps. Applying
+		// one bind at a time and refusing any key another control still holds deadlocks the moment two controls trade
+		// places: Shout wants RT while Right Attack/Block still has it, Right Attack/Block wants RB while Shout still
+		// has it, and each is refused because the other has not moved yet. Nothing moves, and the log fills with
+		// conflicts that are not conflicts (2026-09-16, porting a whole controller layout into the INI).
+		//
+		// So: work out every bind for a device first, treat a key held by another control THAT IS ALSO MOVING as
+		// free, clear all the outgoing keys, and only then write the new ones. A key held by a control that is NOT in
+		// the list is still a real conflict and is still refused, with the holder named - one key, one action.
+		//
+		// Caller holds g_lock.
 		int ApplyBinds(RE::ControlMap* a_map, const char* a_reason)
 		{
 			int bound = 0;
+
+			// Group by context+device: a swap can only happen within one device's mapping array.
+			std::vector<std::pair<int, int>> groups;
 			for (const auto& b : g_binds)
 			{
 				const int ctx = ContextIndex(b.context);
-				auto* mappings = ctx >= 0 ? MappingsFor(a_map, ctx, b.device) : nullptr;
-				if (!mappings || b.key == kUnmapped) { continue; }
-				const std::string keyText = ButtonName(b.key, b.device)[0] ? std::format("{} ({})", ButtonName(b.key, b.device), Hex(b.key)) : Hex(b.key);
-				if (b.device == 0 && IsAmfReserved(b.key))
+				if (ctx < 0 || b.key == kUnmapped) { continue; }
+				const std::pair<int, int> g{ ctx, b.device };
+				if (std::find(groups.begin(), groups.end(), g) == groups.end()) { groups.push_back(g); }
+			}
+
+			for (const auto& [ctx, device] : groups)
+			{
+				auto* mappings = MappingsFor(a_map, ctx, device);
+				if (!mappings) { continue; }
+
+				// The controls this device is about to move. A key one of them still holds is not taken, it is vacated.
+				std::vector<const Bind*> moving;
+				for (const auto& b : g_binds)
 				{
-					logger::warn("bind ({}): {}|{}|{} -> {} refused: AMF reserves that key", a_reason, b.context, b.event, DeviceName(b.device), keyText);
-					continue;
+					if (ContextIndex(b.context) == ctx && b.device == device && b.key != kUnmapped) { moving.push_back(&b); }
 				}
-				auto found = Find(*mappings, b.event);
-				// Already there: BOTH halves must match, or a bind that only changes its modifier is skipped silently.
-				if (!found.empty() && found.front()->inputKey == b.key && found.front()->modifier == b.modifier) { continue; }
-				const RE::ControlMap::UserEventMapping* holder = nullptr;
-				for (const auto& m : *mappings)
+				auto isMoving = [&](std::string_view a_event) {
+					return std::any_of(moving.begin(), moving.end(), [&](const Bind* a_b) { return IEquals(a_b->event, a_event); });
+				};
+
+				// Phase 1 - decide. Nothing is written yet, so every decision sees the map as it was.
+				std::vector<const Bind*> accepted;
+				for (const auto* b : moving)
 				{
-					// The same key under a DIFFERENT modifier is not a conflict - the engine tells (key, modifier) pairs
-					// apart - so both halves are compared here too.
-					if (m.inputKey == b.key && m.modifier == b.modifier && !(m.eventID.c_str() && IEquals(m.eventID.c_str(), b.event))) { holder = &m; break; }
-				}
-				if (holder)
-				{
-					logger::warn("bind ({}): {}|{}|{} -> {} not applied: \"{}\" already holds it on that device", a_reason, b.context, b.event, DeviceName(b.device), keyText,
-								 holder->eventID.c_str() ? holder->eventID.c_str() : "?");
-					continue;
-				}
-				if (found.empty())
-				{
-					RE::ControlMap::UserEventMapping copy{};
-					bool have = false;
-					for (int d = 0; d < 3 && !have; ++d)
+					const std::uint16_t wantModifier = ResolvedModifier(*b);
+					const std::string keyText = ButtonName(b->key, b->device)[0] ? std::format("{} ({})", ButtonName(b->key, b->device), Hex(b->key)) : Hex(b->key);
+					if (b->device == 0 && IsAmfReserved(b->key))
 					{
-						if (d == b.device) { continue; }
-						auto* other = MappingsFor(a_map, ctx, d);
-						if (!other) { continue; }
-						auto theirs = Find(*other, b.event);
-						if (!theirs.empty()) { copy = *theirs.front(); have = true; }
-					}
-					if (!have)
-					{
-						logger::warn("bind ({}): {}|{}|{} -> {} not applied: the game has no such control in that context", a_reason, b.context, b.event, DeviceName(b.device), keyText);
+						logger::warn("bind ({}): {}|{}|{} -> {} refused: AMF reserves that key", a_reason, b->context, b->event, DeviceName(b->device), keyText);
 						continue;
 					}
-					copy.inputKey = b.key;
-					// 0 = no modifier. The engine's button -> user event lookup (SE ID 67242) binary-searches this array for
-					// (inputKey, modifier) with comparator 67264, which orders and matches on BOTH; a press builds its search key
-					// with modifier 0 (idCode's upper bits), so a mapping stored with modifier 0xFF is never found and the press
-					// gets no user event (1.0.5 listen test: code 0x10 userEvent ""). Adversarial contest 2026-09-14.
-					copy.modifier = b.modifier;  // 0 when the bind names no modifier
-					copy.linked = false;
-					mappings->push_back(copy);
-					logger::info("bind ({}): {}|{}|{} had no mapping on that device; created one on {}", a_reason, b.context, b.event, DeviceName(b.device), keyText);
+					auto found = Find(*mappings, b->event);
+					// Already exactly there: BOTH halves must match, or a bind that only changes its modifier is skipped.
+					if (!found.empty() && found.front()->inputKey == b->key && found.front()->modifier == wantModifier) { continue; }
+
+					const RE::ControlMap::UserEventMapping* holder = nullptr;
+					for (const auto& m : *mappings)
+					{
+						// The same key under a DIFFERENT modifier is not a conflict - the engine tells (key, modifier)
+						// pairs apart - so both halves are compared.
+						if (m.inputKey != b->key || m.modifier != wantModifier) { continue; }
+						const char* id = m.eventID.c_str();
+						if (id && IEquals(id, b->event)) { continue; }        // itself
+						if (id && isMoving(id)) { continue; }                 // a swap: that control is leaving this key
+						holder = &m;
+						break;
+					}
+					if (holder)
+					{
+						logger::warn("bind ({}): {}|{}|{} -> {} not applied: \"{}\" already holds it on that device", a_reason, b->context, b->event, DeviceName(b->device), keyText,
+									 holder->eventID.c_str() ? holder->eventID.c_str() : "?");
+						continue;
+					}
+					// One key, one action - including among the binds being applied together. Treating a moving
+					// control's key as free is what lets two controls SWAP; it must not also let two of them LAND
+					// on the same button. Seen live: clearing the designated modifier dropped Shout from LB+LT to
+					// plain LB, where Left Attack/Block already was, and both were "moving" so neither blocked the
+					// other. The first line in the list keeps the button; a later one is refused and says so.
+					const auto clash = std::find_if(accepted.begin(), accepted.end(), [&](const Bind* a_a) {
+						return a_a->key == b->key && ResolvedModifier(*a_a) == wantModifier;
+					});
+					if (clash != accepted.end())
+					{
+						logger::warn("bind ({}): {}|{}|{} -> {} not applied: \"{}\" was given it first", a_reason, b->context, b->event, DeviceName(b->device), keyText, (*clash)->event);
+						continue;
+					}
+					accepted.push_back(b);
 				}
-				else
+				if (accepted.empty()) { continue; }
+
+				// Phase 2 - vacate. Every accepted control drops its current key before any new key is written, so the
+				// array never holds two controls on one (key, modifier) even for an instant.
+				for (const auto* b : accepted)
 				{
-					logger::info("bind ({}): {}|{}|{} {} -> {}", a_reason, b.context, b.event, DeviceName(b.device), Hex(found.front()->inputKey), keyText);
-					found.front()->inputKey = b.key;
-					found.front()->modifier = b.modifier;  // an existing mapping keeps its old modifier otherwise
+					for (auto* m : Find(*mappings, b->event)) { m->inputKey = kUnmapped; }
+				}
+
+				// Phase 3 - write.
+				for (const auto* b : accepted)
+				{
+					const std::uint16_t wantModifier = ResolvedModifier(*b);
+					const std::string keyText = ButtonName(b->key, b->device)[0] ? std::format("{} ({})", ButtonName(b->key, b->device), Hex(b->key)) : Hex(b->key);
+					auto found = Find(*mappings, b->event);
+					if (found.empty())
+					{
+						RE::ControlMap::UserEventMapping copy{};
+						bool have = false;
+						for (int d = 0; d < 3 && !have; ++d)
+						{
+							if (d == b->device) { continue; }
+							auto* other = MappingsFor(a_map, ctx, d);
+							if (!other) { continue; }
+							auto theirs = Find(*other, b->event);
+							if (!theirs.empty()) { copy = *theirs.front(); have = true; }
+						}
+						if (!have)
+						{
+							logger::warn("bind ({}): {}|{}|{} -> {} not applied: the game has no such control in that context", a_reason, b->context, b->event, DeviceName(b->device), keyText);
+							continue;
+						}
+						copy.inputKey = b->key;
+						// 0 = no modifier. The engine's button -> user event lookup (SE ID 67242) binary-searches this array
+						// for (inputKey, modifier) with comparator 67264, which orders and matches on BOTH; a press builds its
+						// search key with modifier 0, so a mapping stored with modifier 0xFF is never found and the press gets
+						// no user event (1.0.5 listen test). Adversarial contest 2026-09-14.
+						copy.modifier = wantModifier;
+						copy.linked = false;
+						mappings->push_back(copy);
+						logger::info("bind ({}): {}|{}|{} had no mapping on that device; created one on {}", a_reason, b->context, b->event, DeviceName(b->device), keyText);
+					}
+					else
+					{
+						logger::info("bind ({}): {}|{}|{} -> {}", a_reason, b->context, b->event, DeviceName(b->device), keyText);
+						found.front()->inputKey = b->key;
+						found.front()->modifier = wantModifier;  // an existing mapping keeps its old modifier otherwise
+					}
+					++bound;
 				}
 				SortByKey(*mappings);
-				++bound;
 			}
 			return bound;
 		}
@@ -536,6 +627,48 @@ namespace unbinder
 			out.push_back(std::move(e));
 		}
 		return out;
+	}
+
+	std::vector<ModifierKey> GetModifiers()
+	{
+		std::scoped_lock l(g_lock);
+		return g_modifiers;
+	}
+
+	void SetModifiers(std::vector<ModifierKey> a_list)
+	{
+		std::scoped_lock l(g_lock);
+		g_modifiers = std::move(a_list);
+	}
+
+	std::vector<ModifierKey> DefaultModifiers()
+	{
+		return { { 2, 0x0009 } };  // Left Trigger on the gamepad (the owner, 2026-09-16)
+	}
+
+	std::uint16_t ModifierFor(int a_device)
+	{
+		std::scoped_lock l(g_lock);
+		for (const auto& m : g_modifiers)
+		{
+			if (m.device == a_device) { return m.key; }
+		}
+		return kUnmapped;
+	}
+
+	bool SetModifier(int a_device, std::uint16_t a_key)
+	{
+		if (a_device < 0 || a_device > 2) { return false; }
+		std::scoped_lock l(g_lock);
+		for (auto& m : g_modifiers)
+		{
+			if (m.device != a_device) { continue; }
+			if (m.key == a_key) { return false; }
+			m.key = a_key;
+			return true;
+		}
+		g_modifiers.push_back({ a_device, a_key });
+		return true;
 	}
 
 	std::vector<Remappable> GetRemappable()

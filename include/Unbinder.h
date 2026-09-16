@@ -62,6 +62,9 @@ namespace unbinder
 		// modifier 0, so 0xFF here makes the mapping unreachable (logic library, 2026-09-14).
 		// controlmap.txt writes the same thing as "0x0009+0x0100" (modifier+key).
 		std::uint16_t modifier = 0;
+		// true when the INI wrote "Modifier" instead of naming a button: the value above is ignored and the
+		// device's designated modifier row is used, so moving that row moves this combination with it.
+		bool useDesignatedModifier = false;
 	};
 	// [Remappable]: a vanilla control the GAME refuses to let the player rebind on a device, forced remappable at
 	// runtime so its row appears on the game's own Controls page.
@@ -84,6 +87,31 @@ namespace unbinder
 		std::string event;    // e.g. "Right Attack/Block"
 		int device = 0;       // 0 keyboard, 1 mouse, 2 gamepad
 	};
+	// [Modifier]: ONE designated modifier button per device, shown on the game's Controls page as its own row.
+	//
+	// The owner, 2026-09-16: "There should be a modifier key row, which would be set to left trigger. And shout
+	// would be set to left trigger plus left bumper." A [Bound] line then writes the word "Modifier" in its
+	// modifier field instead of naming a button, and it resolves to whatever this row holds - so moving the
+	// modifier moves every combination that uses it, in one place, rather than editing each line.
+	//
+	// The engine still stores the RESOLVED button on each mapping (UserEventMapping::modifier), which is what its
+	// button -> event lookup matches. The designated row is a surface over that, not a second input system.
+	struct ModifierKey
+	{
+		int device = 0;            // 0 keyboard, 1 mouse, 2 gamepad
+		std::uint16_t key = 0xFF;  // 0xFF = this device has no designated modifier
+	};
+	std::vector<ModifierKey> GetModifiers();
+	void SetModifiers(std::vector<ModifierKey> a_list);
+	// Shipped: Left Trigger on the gamepad; nothing on the keyboard or mouse.
+	std::vector<ModifierKey> DefaultModifiers();
+	// The designated modifier for a device, 0xFF when it has none. Asked per bind at apply time.
+	std::uint16_t ModifierFor(int a_device);
+	// The row's name on the Controls page, and the word a [Bound] line writes to refer to it.
+	inline constexpr const char* kModifierRowName = "Modifier";
+	// The player bound or unbound the Modifier row in the Controls menu (main thread; the caller saves and re-applies).
+	bool SetModifier(int a_device, std::uint16_t a_key);
+
 	std::vector<Remappable> GetRemappable();
 	void SetRemappable(std::vector<Remappable> a_list);  // from the INI; does not apply
 	// Shipped: the attack controls on the gamepad, which is where the game's own map turns the flag off.
