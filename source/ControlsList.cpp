@@ -869,6 +869,63 @@ namespace controlslist
 			static inline REL::Relocation<decltype(thunk)> func;
 		};
 
+		// Opens the System page's Controls panel from code, for the DevBench tool.
+		//
+		// NOT by driving keys. Splicing a keypress into the Controls menu is how a control gets REMAPPED by accident:
+		// the selection moves invisibly, the press is taken as the start of a remap, and the result is written out as
+		// if the player had done it (logic library 4680). Driving a test that way risks rewriting the owner's own
+		// bindings. The page already has the transition as a property - currentState, with INPUT_MAPPING_STATE as one
+		// of its values - so it is set directly, which runs the page's own state change and touches no input at all.
+		bool OpenControlsPanelImpl(std::string& a_why)
+		{
+			auto* ui = RE::UI::GetSingleton();
+			if (!ui) { a_why = "no UI singleton"; return false; }
+			const auto menu = ui->GetMenu(RE::JournalMenu::MENU_NAME);
+			if (!menu || !menu->uiMovie) { a_why = "the journal is not open"; return false; }
+			const std::string page = PagePathCopy();
+			if (page.empty()) { a_why = "the System page has not been found yet - open the journal's System tab first"; return false; }
+			auto* movie = menu->uiMovie.get();
+			// INPUT_MAPPING_STATE is a constant of the page's CLASS, not of the instance, so where it can be read
+			// from depends on how the journal's author declared it. Each of these is a plain variable read - never a
+			// call through a function object, which is the shape that crashed the game in 1.0.2.
+			const std::string candidates[] = {
+				page + ".INPUT_MAPPING_STATE",
+				page + ".__proto__.INPUT_MAPPING_STATE",
+				"_global.SystemPage.INPUT_MAPPING_STATE",
+				"_global.InputMappingList.INPUT_MAPPING_STATE",
+			};
+			RE::GFxValue state;
+			bool found = false;
+			for (const auto& path : candidates)
+			{
+				if (movie->GetVariable(&state, path.c_str()) && state.IsNumber())
+				{
+					found = true;
+					logger::debug("controls list: INPUT_MAPPING_STATE read from {} ({})", path, state.GetNumber());
+					break;
+				}
+			}
+			if (!found)
+			{
+				// Say what IS there, so the next attempt is informed rather than another guess.
+				RE::GFxValue pageValue;
+				std::string members;
+				if (movie->GetVariable(&pageValue, page.c_str()) && pageValue.IsObject())
+				{
+					pageValue.VisitMembers([&](const char* a_name, const RE::GFxValue&) {
+						if (a_name) { members += (members.empty() ? "" : ", ") + std::string(a_name); }
+					});
+				}
+				logger::warn("controls list: INPUT_MAPPING_STATE not found on this journal. The page's members are: {}",
+							 members.empty() ? "(none readable)" : members);
+				a_why = "this journal's System page has no readable INPUT_MAPPING_STATE - its members are in the log";
+				return false;
+			}
+			if (!movie->SetVariable((page + ".currentState").c_str(), state)) { a_why = "setting currentState failed"; return false; }
+			logger::info("controls list: Controls panel opened by setting {}.currentState to INPUT_MAPPING_STATE ({})", page, state.GetNumber());
+			return true;
+		}
+
 		void ResetRemapWatch()
 		{
 			g_remapArmed.store(false);
@@ -944,6 +1001,11 @@ namespace controlslist
 			g_pagePath.clear();
 		}
 		logger::debug("controls list: journal closed ({} row(s) put back, {} frame(s) drew a row with no key this open)", g_rowsAdded.load(), g_blankFrames.load());
+	}
+
+	bool OpenControlsPanel(std::string& a_why)
+	{
+		return OpenControlsPanelImpl(a_why);
 	}
 
 	std::string RowsJson()

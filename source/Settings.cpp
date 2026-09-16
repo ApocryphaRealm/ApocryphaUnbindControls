@@ -64,7 +64,7 @@ namespace settings
 		// Scalars go into the key:section map; each [Unbound] line - "Context|Control|Device", an "=..."
 		// after it is accepted and ignored - becomes an entry.
 		// Each [Bound] line - "Context|Control|Device|Button" - becomes a bind; a_sawBound says the section exists.
-		void ReadFile(std::map<std::string, std::string>& a_keys, std::vector<unbinder::Entry>& a_entries, std::vector<unbinder::Bind>& a_binds, bool& a_sawBound, std::vector<std::string>& a_rows, bool& a_sawSystemMenu, std::vector<functions::Function>& a_functions, bool& a_sawFunctions, int& a_badLines)
+		void ReadFile(std::map<std::string, std::string>& a_keys, std::vector<unbinder::Entry>& a_entries, std::vector<unbinder::Bind>& a_binds, bool& a_sawBound, std::vector<std::string>& a_rows, bool& a_sawSystemMenu, std::vector<functions::Function>& a_functions, bool& a_sawFunctions, std::vector<unbinder::Remappable>& a_remappable, bool& a_sawRemappable, int& a_badLines)
 		{
 			std::vector<std::string> a_seenRows;  // tokens of every [SystemMenu] row already read
 			std::ifstream in(iniPath);
@@ -80,6 +80,7 @@ namespace settings
 					if (section == "bound") { a_sawBound = true; }
 					if (section == "systemmenu") { a_sawSystemMenu = true; }
 					if (section == "functions") { a_sawFunctions = true; }
+					if (section == "remappable") { a_sawRemappable = true; }
 					continue;
 				}
 				const auto eq = t.find('=');
@@ -115,6 +116,25 @@ namespace settings
 					const bool dup = std::any_of(a_binds.begin(), a_binds.end(), [&](const unbinder::Bind& o) { return o.device == b.device && Lower(o.context) == Lower(b.context) && Lower(o.event) == Lower(b.event); });
 					if (dup) { logger::warn("INI [Bound] line \"{}\" repeats an earlier line; ignored", t); continue; }
 					a_binds.push_back(std::move(b));
+					continue;
+				}
+				if (section == "remappable")
+				{
+					// Context|Control|Device - a vanilla control the game refuses to let the player rebind on that
+					// device, forced remappable so its row appears on the game's own Controls page.
+					const std::string key = Trim(t);
+					const auto p1 = key.find('|');
+					const auto p2 = p1 == std::string::npos ? std::string::npos : key.find('|', p1 + 1);
+					if (p1 == std::string::npos || p2 == std::string::npos) { ++a_badLines; logger::warn("INI [Remappable] line \"{}\" is not Context|Control|Device; ignored", key); continue; }
+					unbinder::Remappable r;
+					r.context = Trim(key.substr(0, p1));
+					r.event = Trim(key.substr(p1 + 1, p2 - p1 - 1));
+					r.device = unbinder::DeviceIndex(Trim(key.substr(p2 + 1)));
+					if (unbinder::ContextIndex(r.context) < 0) { ++a_badLines; logger::warn("INI [Remappable] line \"{}\": unknown context \"{}\"; ignored", key, r.context); continue; }
+					if (r.device < 0) { ++a_badLines; logger::warn("INI [Remappable] line \"{}\": unknown device; ignored (keyboard, mouse or gamepad)", key); continue; }
+					const bool dup = std::any_of(a_remappable.begin(), a_remappable.end(), [&](const unbinder::Remappable& o) { return o.device == r.device && Lower(o.context) == Lower(r.context) && Lower(o.event) == Lower(r.event); });
+					if (dup) { logger::warn("INI [Remappable] line \"{}\" repeats an earlier line; ignored", key); continue; }
+					a_remappable.push_back(std::move(r));
 					continue;
 				}
 				if (section == "functions")
@@ -214,8 +234,10 @@ namespace settings
 			bool sawSystemMenu = false;
 			std::vector<functions::Function> funcs;
 			bool sawFunctions = false;
+			std::vector<unbinder::Remappable> remappable;
+			bool sawRemappable = false;
 			int bad = 0;
-			ReadFile(k, entries, binds, sawBound, rows, sawSystemMenu, funcs, sawFunctions, bad);
+			ReadFile(k, entries, binds, sawBound, rows, sawSystemMenu, funcs, sawFunctions, remappable, sawRemappable, bad);
 			auto get = [&](const char* a_key, auto& a_out, auto a_parse) {
 				const auto it = k.find(a_key);
 				if (it == k.end()) { logger::debug("INI key {} missing; keeping current value", a_key); return; }
@@ -233,6 +255,10 @@ namespace settings
 			if (sawSystemMenu) { systemmenu::SetHidden(std::move(rows)); }
 			logger::info("System tab rows hidden: {}{}", systemmenu::GetHidden().size(), sawSystemMenu ? "" : " (no [SystemMenu] section - shipped rows kept)");
 			// An INI from before 1.0.8 has no [Functions] section: it gets the shipped rows, unbound, rather than none.
+			// An INI from before 1.0.8 has no [Remappable] section: it gets the shipped list.
+			const std::size_t remappableCount = sawRemappable ? remappable.size() : unbinder::GetRemappable().size();
+			if (sawRemappable) { unbinder::SetRemappable(std::move(remappable)); }
+			logger::info("controls forced remappable: {}{}", remappableCount, sawRemappable ? "" : " (no [Remappable] section - shipped list kept)");
 			const std::size_t functionCount = sawFunctions ? funcs.size() : functions::GetFunctions().size();
 			if (sawFunctions) { functions::SetFunctions(std::move(funcs)); }
 			logger::info("Controls page extra rows: {}{}", functionCount, sawFunctions ? "" : " (no [Functions] section - shipped rows kept)");
@@ -321,6 +347,7 @@ namespace settings
 		unbinder::SetBinds(unbinder::DefaultBinds());
 		systemmenu::SetHidden(systemmenu::DefaultHidden());
 		functions::SetFunctions(functions::DefaultFunctions());
+		unbinder::SetRemappable(unbinder::DefaultRemappable());
 
 		auto* collection = utils::INISettingCollection::GetSingleton();
 		collection->AddSettings(
@@ -397,6 +424,9 @@ namespace settings
 			functionLines.push_back(std::format("{}|{}|{}|{}|{}|{}|{}|{}", f.name, device, keyText, modText,
 												f.target.file, f.target.section, f.target.key, f.target.modifierKey));
 		}
+		std::vector<std::string> remappableLines;
+		for (const auto& r : unbinder::GetRemappable()) { remappableLines.push_back(std::format("{}|{}|{}", r.context, r.event, unbinder::DeviceName(r.device))); }
+		WriteSection(lines, "[Remappable]", remappableLines);
 		WriteSection(lines, "[Functions]", functionLines);
 
 		std::ofstream out(iniPath, std::ios::trunc);

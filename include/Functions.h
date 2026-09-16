@@ -84,10 +84,19 @@ namespace functions
 	// True when a_key on a_device is what this row is already bound to - the "press it again to unbind" test.
 	bool HoldsKey(std::size_t a_index, int a_device, std::uint16_t a_key);
 
-	// Writes every function's binding into its target file. Called after a bind changes and at data load, so a target
-	// file that was edited by hand (or by the other mod's own menu) is put back to what the Controls page shows.
-	// Returns the number of target files written. Main thread only.
-	int Deliver(const char* a_reason);
+	// A row that is not bound on any device takes the key the TARGET MOD already has, instead of the other way round.
+	// This is what makes the row safe to ship: the mod it points at was configured long before this row existed - One
+	// Click Power Attack has had its key set from its own MCM - and a row that arrived empty and then delivered its
+	// emptiness would silently wipe that setting the first time the game loaded. So on load the row reads the target
+	// and shows what is already there; the Controls page then reflects reality, and a player who changes it there is
+	// making a deliberate choice. Returns the number of rows that took a value; the caller saves the INI.
+	int Adopt(const char* a_reason);
+
+	// Writes every function's binding into its target file. Returns the number of target files written.
+	// a_writeUnbound false (data load) leaves a row that is bound to nothing alone, so an untouched row never writes
+	// over the target mod's own setting. True (the Controls menu, the DevBench tool) writes the "none" value as well,
+	// because there the player unbinding the row IS the instruction to clear it. Main thread only.
+	int Deliver(const char* a_reason, bool a_writeUnbound = true);
 
 	// The SKSE Input Script code for a key on a device, and back. kUnbound / the target's "none" value round-trip.
 	int ToInputCode(std::uint16_t a_key, int a_device);

@@ -30,7 +30,11 @@ namespace
 			// The extra Controls-page rows are delivered to the mods that own those functions, so a target file
 			// edited by hand (or by that mod's own menu) is put back to what the Controls page shows.
 			functions::Install();
-			functions::Deliver("data loaded");
+			// Adopt BEFORE delivering: a row that has not been bound yet takes the key the target mod already has,
+			// so the Controls page shows what is really in force and an untouched row never writes over that mod's
+			// own setting.
+			if (functions::Adopt("data loaded") > 0) { settings::Save(); }
+			functions::Deliver("data loaded", false);
 			DevBenchTool::Init(true);
 			break;
 		case SKSE::MessagingInterface::kPostLoadGame:

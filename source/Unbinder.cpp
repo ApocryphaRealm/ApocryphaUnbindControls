@@ -31,7 +31,9 @@ namespace unbinder
 		int g_lastTouched = 0;
 		bool g_sinkInstalled = false;
 		std::vector<Bind> g_binds;
-		int g_lastBound = 0;  // binds that changed a key at the last apply
+		std::vector<Remappable> g_remappable;
+		int g_lastBound = 0;
+		int g_lastRemappable = 0;  // binds that changed a key at the last apply
 		std::string g_lastOwn = "nothing recorded yet";  // g_lock: the latest remap written into the INI lists
 		int g_ownLines = 0;                               // g_lock: INI lines changed by recorded remaps this session
 		bool g_customMapRemoved = false;                  // g_lock: a ControlMap_Custom.txt was removed this session
@@ -337,6 +339,37 @@ namespace unbinder
 		// on the gamepad) is free for the bind. One key, one action: a key another control on that device still holds is
 		// not taken, and the holder is named. A control with no mapping on that device at all gets one, copied from its
 		// mapping on another device (same event, order and flags) with the new key. Caller holds g_lock.
+		// [Remappable]: set the flag the game reads when it decides which controls its Controls page will list, and
+		// which buttons it will let a remap take. Caller holds g_lock. Returns the mappings changed.
+		int ApplyRemappable(RE::ControlMap* a_map, const char* a_reason)
+		{
+			int changed = 0;
+			for (const auto& r : g_remappable)
+			{
+				const int ctx = ContextIndex(r.context);
+				auto* mappings = ctx >= 0 ? MappingsFor(a_map, ctx, r.device) : nullptr;
+				if (!mappings)
+				{
+					logger::warn("remappable ({}): {}|{}|{} - context unknown or not loaded", a_reason, r.context, r.event, DeviceName(r.device));
+					continue;
+				}
+				auto found = Find(*mappings, r.event);
+				if (found.empty())
+				{
+					logger::warn("remappable ({}): {}|{}|{} - the game has no such control on that device", a_reason, r.context, r.event, DeviceName(r.device));
+					continue;
+				}
+				for (auto* m : found)
+				{
+					if (m->remappable) { continue; }
+					m->remappable = true;
+					++changed;
+					logger::info("remappable ({}): {}|{}|{} is now remappable, so the game lists it on its Controls page", a_reason, r.context, r.event, DeviceName(r.device));
+				}
+			}
+			return changed;
+		}
+
 		int ApplyBinds(RE::ControlMap* a_map, const char* a_reason)
 		{
 			int bound = 0;
@@ -503,6 +536,29 @@ namespace unbinder
 			out.push_back(std::move(e));
 		}
 		return out;
+	}
+
+	std::vector<Remappable> GetRemappable()
+	{
+		std::scoped_lock l(g_lock);
+		return g_remappable;
+	}
+
+	void SetRemappable(std::vector<Remappable> a_list)
+	{
+		std::scoped_lock l(g_lock);
+		g_remappable = std::move(a_list);
+	}
+
+	// The gamepad attack controls. Apostasy's control map, like vanilla's, clears their gamepad remappable flag, so
+	// without this the controller's Controls page has no normal-attack row for either hand and refuses their buttons
+	// to any other row as "reserved".
+	std::vector<Remappable> DefaultRemappable()
+	{
+		return {
+			{ "Gameplay", "Right Attack/Block", 2 },
+			{ "Gameplay", "Left Attack/Block", 2 },
+		};
 	}
 
 	std::vector<Bind> GetBinds()
@@ -705,6 +761,7 @@ namespace unbinder
 			}
 		}
 		for (auto* m : dirty) { SortByKey(*m); }
+		g_lastRemappable = ApplyRemappable(map, a_reason);
 		g_lastBound = ApplyBinds(map, a_reason);
 		g_lastLinked = KeepLinkedActions(map, a_reason);
 		if (g_lastLinked) { logger::info("apply ({}): {} menu action(s) linked to an unbound control given their key", a_reason, g_lastLinked); }

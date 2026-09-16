@@ -40,6 +40,10 @@ namespace controlslist
 	void OnJournalClose();
 
 	// For the DevBench tool (main thread): the live rows of the Controls list and what this mod decided for each.
+	// Opens the System page's Controls panel (DevBench driving; main thread). False with a_why set when it cannot.
+	// Never drives keys to do it - a spliced press in the Controls menu remaps a control (logic library 4680).
+	bool OpenControlsPanel(std::string& a_why);
+
 	std::string RowsJson();
 	std::string StateJson();  // "controlsList":{...} member, no braces around it
 }

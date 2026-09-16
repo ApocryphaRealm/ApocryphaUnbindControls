@@ -63,6 +63,32 @@ namespace unbinder
 		// controlmap.txt writes the same thing as "0x0009+0x0100" (modifier+key).
 		std::uint16_t modifier = 0;
 	};
+	// [Remappable]: a vanilla control the GAME refuses to let the player rebind on a device, forced remappable at
+	// runtime so its row appears on the game's own Controls page.
+	//
+	// controlmap.txt carries a remappable flag per device, and the Controls page lists only the controls whose flag
+	// is set for the family it is showing. Apostasy's control map (and the vanilla one) clear it on the gamepad for
+	// the attack controls, so "Left Attack/Block" and "Right Attack/Block" - the normal attack, both hands - have no
+	// row on the controller page at all, and there is no way to rebind them there (the owner, 2026-09-16: "there's a
+	// power attack row, but there's No normal attack row ... and when I tried to rebind the power attack, it said
+	// the key was reserved").
+	//
+	// The flag is a plain bool on each UserEventMapping, so it is simply set. That is better than drawing a row for
+	// the control ourselves: the GAME then lists it, names it, draws its button art and runs its own remap - all the
+	// parts a hand-made row would have had to imitate - and this mod's existing remap watch records the result into
+	// the INI as it does for any other row. It also clears the "That button is reserved." refusal, which the journal
+	// shows when a button is asked for while a NON-remappable control still holds it.
+	struct Remappable
+	{
+		std::string context;  // e.g. "Gameplay"
+		std::string event;    // e.g. "Right Attack/Block"
+		int device = 0;       // 0 keyboard, 1 mouse, 2 gamepad
+	};
+	std::vector<Remappable> GetRemappable();
+	void SetRemappable(std::vector<Remappable> a_list);  // from the INI; does not apply
+	// Shipped: the attack controls on the gamepad, which is where the game's own map turns the flag off.
+	std::vector<Remappable> DefaultRemappable();
+
 	std::vector<Bind> GetBinds();
 	void SetBinds(std::vector<Bind> a_binds);        // from the INI; does not apply
 	// The modifier a bound control requires, without copying the whole bind list. The Controls list asks this

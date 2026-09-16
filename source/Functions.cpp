@@ -271,7 +271,93 @@ namespace functions
 		return kUnbound;
 	}
 
-	int Deliver(const char* a_reason)
+	// Reads one key out of a section of an INI on disk. "" when the file, the section or the key is not there.
+	namespace
+	{
+		std::string ReadKey(const std::filesystem::path& a_path, const std::string& a_section, const std::string& a_key)
+		{
+			std::ifstream in(a_path, std::ios::binary);
+			if (!in) { return {}; }
+			std::string line;
+			bool inside = false;
+			bool first = true;
+			while (std::getline(in, line))
+			{
+				if (!line.empty() && line.back() == '\r') { line.pop_back(); }
+				if (first && line.rfind("\xEF\xBB\xBF", 0) == 0) { line.erase(0, 3); }
+				first = false;
+				const std::string t = Trim(line);
+				if (IsSectionHeader(t))
+				{
+					inside = IEquals(t.substr(1, t.size() - 2), a_section);
+					continue;
+				}
+				if (!inside || t.empty() || t[0] == ';' || t[0] == '#') { continue; }
+				const auto eq = t.find('=');
+				if (eq == std::string::npos) { continue; }
+				if (IEquals(Trim(t.substr(0, eq)), a_key)) { return Trim(t.substr(eq + 1)); }
+			}
+			return {};
+		}
+	}
+
+	int Adopt(const char* a_reason)
+	{
+		if (g_dataPath.empty()) { return 0; }
+		std::vector<Function> snapshot;
+		{
+			std::scoped_lock l(g_lock);
+			snapshot = g_functions;
+		}
+
+		int adopted = 0;
+		for (std::size_t i = 0; i < snapshot.size(); ++i)
+		{
+			const auto& f = snapshot[i];
+			if (f.target.file.empty() || f.target.key.empty()) { continue; }
+			const bool bound = std::any_of(f.bind.begin(), f.bind.end(), [](const Binding& a_b) { return a_b.key != kUnbound; });
+			if (bound) { continue; }
+
+			const std::filesystem::path path = std::filesystem::path(g_dataPath) / f.target.file;
+			const std::string value = ReadKey(path, f.target.section, f.target.key);
+			if (value.empty()) { continue; }
+			int code = f.target.none;
+			try { code = std::stoi(value); } catch (...) { continue; }
+			if (code == f.target.none) { continue; }
+			int device = -1;
+			const std::uint16_t key = FromInputCode(code, device);
+			if (device < 0 || device > 2 || key == kUnbound) { continue; }
+
+			std::uint16_t modifier = 0;
+			if (!f.target.modifierKey.empty())
+			{
+				const std::string modValue = ReadKey(path, f.target.section, f.target.modifierKey);
+				int modCode = f.target.none;
+				try { modCode = std::stoi(modValue); } catch (...) { modCode = f.target.none; }
+				if (modCode != f.target.none)
+				{
+					int modDevice = -1;
+					const std::uint16_t parsed = FromInputCode(modCode, modDevice);
+					if (parsed != kUnbound) { modifier = parsed; }
+				}
+			}
+
+			{
+				std::scoped_lock l(g_lock);
+				if (i >= g_functions.size()) { continue; }
+				g_functions[i].bind[device].key = key;
+				g_functions[i].bind[device].modifier = modifier;
+			}
+			++adopted;
+			const char* name = unbinder::ButtonName(key, device);
+			logger::info("functions ({}): \"{}\" took the key the target already had - {} {} (code {}){}", a_reason, f.name,
+						 unbinder::DeviceName(device), (name && name[0]) ? name : "?", code,
+						 modifier ? std::format(", modifier {}", unbinder::ButtonName(modifier, device)) : "");
+		}
+		return adopted;
+	}
+
+	int Deliver(const char* a_reason, bool a_writeUnbound)
 	{
 		std::vector<Function> snapshot;
 		{
@@ -287,6 +373,17 @@ namespace functions
 
 		// Several rows can share one target file, so the file is read once, every row that writes into it is applied,
 		// and it is written once - otherwise the second row would be applied to a copy read before the first.
+		// A row bound to nothing is left alone unless the caller says otherwise: it would write the target's "none"
+		// value over a setting the target mod's own menu put there, which is how the first load of this feature wiped
+		// One Click Power Attack's key (2026-09-16). Adopt() is what fills such a row in instead.
+		if (!a_writeUnbound)
+		{
+			std::erase_if(snapshot, [](const Function& a_f) {
+				return std::none_of(a_f.bind.begin(), a_f.bind.end(), [](const Binding& a_b) { return a_b.key != kUnbound; });
+			});
+			if (snapshot.empty()) { return 0; }
+		}
+
 		std::vector<std::string> files;
 		for (const auto& f : snapshot)
 		{
@@ -299,16 +396,27 @@ namespace functions
 		{
 			const std::filesystem::path path = std::filesystem::path(g_dataPath) / file;
 			std::vector<std::string> lines;
+			bool bom = false;
 			{
-				std::ifstream in(path);
+				std::ifstream in(path, std::ios::binary);
 				std::string line;
 				while (in && std::getline(in, line))
 				{
 					if (!line.empty() && line.back() == '\r') { line.pop_back(); }
+					// MCM Helper writes its settings files with a UTF-8 BOM. Left on the first line it becomes part
+					// of that line's text, so "[General]" is not recognised as a section header and a SECOND
+					// [General] would be appended to a file that already had one. Stripped for the parse and put
+					// back on write, because the file belongs to another mod and its encoding is not ours to change.
+					if (lines.empty() && line.rfind("\xEF\xBB\xBF", 0) == 0)
+					{
+						bom = true;
+						line.erase(0, 3);
+					}
 					lines.push_back(line);
 				}
 			}
 			const bool existed = !lines.empty();
+			const std::vector<std::string> before = lines;
 
 			std::string applied;
 			for (const auto& f : snapshot)
@@ -331,6 +439,15 @@ namespace functions
 				applied += std::format("{}\"{}\" -> {}", applied.empty() ? "" : ", ", f.name, code);
 			}
 
+			// Nothing to say that the file does not already say: leave another mod's file alone rather than rewrite
+			// it to the byte. Delivery runs at every data load, and a rewrite that changes nothing still restyles
+			// that mod's spacing and rewrites its timestamp.
+			if (lines == before)
+			{
+				logger::debug("functions ({}): {} already says what the Controls page shows; not rewritten [{}]", a_reason, path.string(), applied);
+				continue;
+			}
+
 			std::error_code ec;
 			std::filesystem::create_directories(path.parent_path(), ec);
 			std::ofstream out(path, std::ios::binary | std::ios::trunc);
@@ -339,6 +456,9 @@ namespace functions
 				logger::error("functions ({}): could not write {}", a_reason, path.string());
 				continue;
 			}
+			// The BOM the file arrived with goes back on: the file belongs to another mod (MCM Helper writes its
+			// settings with one) and its encoding is not ours to change.
+			if (bom) { out << "\xEF\xBB\xBF"; }
 			for (const auto& line : lines) { out << line << "\r\n"; }
 			++written;
 			logger::info("functions ({}): {} {} [{}]", a_reason, existed ? "updated" : "created", path.string(), applied);
