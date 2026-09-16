@@ -629,6 +629,62 @@ namespace unbinder
 		return out;
 	}
 
+	// The name the GAME gives a gamepad button, read from its own Interface\Controls\PC\gamepad.txt.
+	//
+	// That file - not this mod, and not a table written from memory - decides what a Controls-page row must put in
+	// buttonName for its key tile to be drawn. It is also full of surprises worth honouring rather than guessing at:
+	// the D-PAD entries carry NO prefix at all ("Up", "Down", "Left", "Right") while every other button does
+	// ("PS3_LB", "PS3_LT"), and the prefix in the stock file is PS3_ whatever pad is plugged in, because the art set
+	// is chosen further down. Guessing lowercase "lt" and assuming the d-pad had no glyph got both halves wrong
+	// (the owner, 2026-09-16: "it definitely does have a art tile for the D-pad").
+	//
+	// Read once, through the game's resource system, so a replacer's file wins exactly as its control map does.
+	const std::string& GamepadButtonName(std::uint16_t a_key)
+	{
+		static const std::map<std::uint16_t, std::string> s_names = [] {
+			std::map<std::uint16_t, std::string> out;
+			RE::BSResourceNiBinaryStream stream("Interface\\Controls\\PC\\gamepad.txt");
+			if (!stream.good())
+			{
+				logger::warn("gamepad names: the game's gamepad.txt could not be opened; added rows will have no key tile");
+				return out;
+			}
+			std::string text;
+			char c = 0;
+			while (text.size() < (1u << 16) && stream.read(&c, 1)) { text.push_back(c); }
+			std::size_t pos = 0;
+			while (pos < text.size())
+			{
+				std::size_t eol = text.find('\n', pos);
+				if (eol == std::string::npos) { eol = text.size(); }
+				std::string_view line(text.data() + pos, eol - pos);
+				pos = eol + 1;
+				const auto first = line.find_first_not_of(" \t\r");
+				if (first == std::string_view::npos) { continue; }
+				line = line.substr(first);
+				if (line.starts_with("//")) { continue; }
+				const auto gap = line.find_first_of(" \t");
+				if (gap == std::string_view::npos) { continue; }
+				const std::string name(line.substr(0, gap));
+				const auto valueAt = line.find_first_not_of(" \t", gap);
+				if (valueAt == std::string_view::npos) { continue; }
+				std::string value(line.substr(valueAt));
+				while (!value.empty() && (value.back() == '\r' || value.back() == ' ' || value.back() == '\t')) { value.pop_back(); }
+				try
+				{
+					const auto code = static_cast<std::uint16_t>(std::stoul(value, nullptr, 0));
+					out.emplace(code, name);
+				}
+				catch (...) {}
+			}
+			logger::info("gamepad names: {} button name(s) read from the game's gamepad.txt", out.size());
+			return out;
+		}();
+		static const std::string empty;
+		const auto it = s_names.find(a_key);
+		return it == s_names.end() ? empty : it->second;
+	}
+
 	std::vector<ModifierKey> GetModifiers()
 	{
 		std::scoped_lock l(g_lock);

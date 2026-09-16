@@ -40,7 +40,11 @@ namespace functions
 	struct Target
 	{
 		std::string file;         // e.g. "MCM\\Settings\\OCPA.ini"
-		std::string section;      // e.g. "General"
+		std::string section;      // e.g. "General" - and the KEYBOARD/MOUSE section when gamepadSection is set
+		// A target that keeps one key per DEVICE rather than one key in the unified numbering. Wheeler does:
+		// [InputBindings.MKB] and [InputBindings.GamePad], each with its own toggleWheel. Empty means the mod
+		// keeps a single key and `section` holds it whichever device it came from.
+		std::string gamepadSection;
 		std::string key;          // e.g. "iKeycode"
 		std::string modifierKey;  // e.g. "iModifierKey"; empty when the target has no modifier setting
 		int none = -1;            // what the target writes for "no key" (OCPA uses -1)

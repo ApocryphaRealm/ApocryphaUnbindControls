@@ -101,6 +101,10 @@ namespace unbinder
 		int device = 0;            // 0 keyboard, 1 mouse, 2 gamepad
 		std::uint16_t key = 0xFF;  // 0xFF = this device has no designated modifier
 	};
+	// The name the GAME gives a gamepad button, from its own Interface\Controls\PC\gamepad.txt - what a
+	// Controls-page row must put in buttonName for its key tile to be drawn. "" when the file has no entry.
+	const std::string& GamepadButtonName(std::uint16_t a_key);
+
 	std::vector<ModifierKey> GetModifiers();
 	void SetModifiers(std::vector<ModifierKey> a_list);
 	// Shipped: Left Trigger on the gamepad; nothing on the keyboard or mouse.

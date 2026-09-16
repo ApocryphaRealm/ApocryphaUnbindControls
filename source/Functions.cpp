@@ -157,7 +157,7 @@ namespace functions
 
 		Function powerAttack;
 		powerAttack.name = "Power Attack";
-		powerAttack.target = { "MCM\\Settings\\OCPA.ini", "General", "iKeycode", "iModifierKey", -1 };
+		powerAttack.target = { "MCM\\Settings\\OCPA.ini", "General", "", "iKeycode", "iModifierKey", -1 };
 		out.push_back(std::move(powerAttack));
 
 		// Stances (the owner, 2026-09-16: "we need to make a way for uvc to register stances then", then, after seeing
@@ -168,8 +168,18 @@ namespace functions
 		// value belongs to the target rather than to this mod.
 		Function stance;
 		stance.name = "Stance";
-		stance.target = { "SKSE\\Plugins\\StancesNG.ini", "Keys", "iMidStanceKey", "iModifierKeyMidStance", 0 };
+		stance.target = { "SKSE\\Plugins\\StancesNG.ini", "Keys", "", "iMidStanceKey", "iModifierKeyMidStance", 0 };
 		out.push_back(std::move(stance));
+
+		// The wheel (the owner, 2026-09-16: "i want to add a wheeler row that says wheel menu. and overwrites
+		// whatever is currently bound to our wheeler mod"). Wheeler keeps the key per DEVICE, so the row does too:
+		// the gamepad Controls page drives [InputBindings.GamePad] and the keyboard page [InputBindings.MKB],
+		// independently, which is what he asked for. Its "no key" value is 0, as the rest of that file uses.
+		Function wheel;
+		wheel.name = "Wheel Menu";
+		wheel.target = { "SKSE\\Plugins\\wheeler\\Controls.ini", "InputBindings.MKB", "InputBindings.GamePad",
+						 "toggleWheel", "toggleWheelModifier", 0 };
+		out.push_back(std::move(wheel));
 
 		return out;
 	}
@@ -334,6 +344,54 @@ namespace functions
 			if (bound) { continue; }
 
 			const std::filesystem::path path = std::filesystem::path(g_dataPath) / f.target.file;
+
+			// A split target holds one key per device, so each section is read into the device it belongs to and
+			// the row can end up bound on both. A single-key target keeps the old behaviour: whichever device the
+			// number decodes to is the one it lands on.
+			if (!f.target.gamepadSection.empty())
+			{
+				bool took = false;
+				for (const auto& [sectionName, forDevice] : { std::pair<const std::string&, int>{ f.target.gamepadSection, 2 },
+															  std::pair<const std::string&, int>{ f.target.section, 0 } })
+				{
+					if (sectionName.empty()) { continue; }
+					const std::string raw = ReadKey(path, sectionName, f.target.key);
+					if (raw.empty()) { continue; }
+					int code = f.target.none;
+					try { code = std::stoi(raw); } catch (...) { continue; }
+					if (code == f.target.none) { continue; }
+					int decoded = -1;
+					const std::uint16_t key = FromInputCode(code, decoded);
+					if (key == kUnbound) { continue; }
+					// The SECTION says which device it is; the number only has to give the button.
+					std::uint16_t modifier = 0;
+					if (!f.target.modifierKey.empty())
+					{
+						const std::string modRaw = ReadKey(path, sectionName, f.target.modifierKey);
+						int modCode = f.target.none;
+						try { modCode = std::stoi(modRaw); } catch (...) { modCode = f.target.none; }
+						if (modCode != f.target.none)
+						{
+							int ignored = -1;
+							const std::uint16_t parsed = FromInputCode(modCode, ignored);
+							if (parsed != kUnbound) { modifier = parsed; }
+						}
+					}
+					{
+						std::scoped_lock l(g_lock);
+						if (i >= g_functions.size()) { continue; }
+						g_functions[i].bind[forDevice].key = key;
+						g_functions[i].bind[forDevice].modifier = modifier;
+					}
+					took = true;
+					const char* name = unbinder::ButtonName(key, forDevice);
+					logger::info("functions ({}): \"{}\" took the {} key the target already had - {} (code {})", a_reason, f.name,
+								 unbinder::DeviceName(forDevice), (name && name[0]) ? name : "?", code);
+				}
+				if (took) { ++adopted; }
+				continue;
+			}
+
 			const std::string value = ReadKey(path, f.target.section, f.target.key);
 			if (value.empty()) { continue; }
 			int code = f.target.none;
@@ -439,6 +497,27 @@ namespace functions
 				if (!IEquals(f.target.file, file) || f.target.key.empty()) { continue; }
 				// One row, one value: the device that has a key wins, keyboard first, because the target setting is a
 				// single key and the SKSE numbering puts all three devices in the same space.
+				// Split target: each device writes into its own section and leaves the other alone, so the
+				// gamepad Controls page drives the mod's gamepad binding and the keyboard page its keyboard one.
+				if (!f.target.gamepadSection.empty())
+				{
+					for (const auto& [sectionName, forDevice] : { std::pair<const std::string&, int>{ f.target.gamepadSection, 2 },
+																  std::pair<const std::string&, int>{ f.target.section, 0 } })
+					{
+						if (sectionName.empty()) { continue; }
+						const auto& bound = f.bind[forDevice];
+						const int code = bound.key == kUnbound ? f.target.none : ToInputCode(bound.key, forDevice);
+						WriteKey(lines, sectionName, f.target.key, std::to_string(code));
+						if (!f.target.modifierKey.empty())
+						{
+							const int modifier = (bound.key != kUnbound && bound.modifier != 0) ? ToInputCode(bound.modifier, forDevice) : f.target.none;
+							WriteKey(lines, sectionName, f.target.modifierKey, std::to_string(modifier));
+						}
+						applied += std::format("{}\"{}\" {} -> {}", applied.empty() ? "" : ", ", f.name, unbinder::DeviceName(forDevice), code);
+					}
+					continue;
+				}
+
 				int code = f.target.none;
 				int device = -1;
 				for (int d : { 0, 1, 2 })
