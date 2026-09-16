@@ -16,6 +16,7 @@ Rule 61: this mod's own history, kept beside the code it describes.
 
 ### Fixed
 - Applying a bind compared only `inputKey`, in three places that all needed the modifier too: a bind that changed only its modifier was skipped as "already there"; a control holding the same key under a *different* modifier was reported as a conflict when the engine can tell the two apart; and an existing mapping kept its old modifier because only `inputKey` was written to it.
+- Showing the modifier would have broken the list's device-family detection. `ListShowsGamepad` decides whether the Controls page is showing the keyboard or the controller by reading the first non-empty `buttonName` and testing it for a `360_`/`PS3_`/`PS4_`/`PS5_` prefix - it deliberately does not trust the input manager's flag, because 1.0.2 did and blanked Start and Back while the controller was shown. Prefixing a modifier turns `360_Y` into `LT + 360_Y`, which matches none of those, so from the second frame onward (the prefix persists on the entry) a modified row appearing first would make the whole list read as the keyboard and blank the wrong family. The game's own string is now kept on the entry as `_uvcBaseName` and the detector reads that, so the family is never decided from a name this mod composed.
 
 ## 1.0.7 - 2026-09-15 - untested
 

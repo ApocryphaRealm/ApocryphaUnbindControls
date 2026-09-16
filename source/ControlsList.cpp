@@ -170,7 +170,12 @@ namespace controlslist
 			{
 				RE::GFxValue entry;
 				if (!a_entries.GetElement(i, &entry) || !entry.IsObject()) { continue; }
-				const std::string name = StringMember(entry, "buttonName");
+				// Prefer the game's ORIGINAL string when this mod has prefixed a modifier onto the row.
+				// Without this the detector reads "LT + 360_Y", which starts with neither "360_" nor a PS
+				// prefix, and the whole list is taken for the keyboard - blanking the wrong family from the
+				// second frame onward, since the prefix persists on the entry.
+				std::string name = StringMember(entry, "_uvcBaseName");
+				if (name.empty()) { name = StringMember(entry, "buttonName"); }
 				if (name.empty()) { continue; }
 				return IsGamepadButtonName(name);
 			}
@@ -665,6 +670,9 @@ namespace controlslist
 						if (row.buttonName.rfind(prefix, 0) != 0)
 						{
 							const std::string shown = prefix + row.buttonName;
+							// Keep the game's own string: ListShowsGamepad reads this instead, so the device
+							// family is never decided from a name this mod composed.
+							entry.SetMember("_uvcBaseName", RE::GFxValue(row.buttonName.c_str()));
 							entry.SetMember("buttonName", RE::GFxValue(shown.c_str()));
 							if (g_loggedRows.insert(std::format("modifier|{}|{}", gamepad ? "gamepad" : "keyboard", row.text)).second)
 							{
