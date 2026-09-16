@@ -340,8 +340,17 @@ namespace functions
 		{
 			const auto& f = snapshot[i];
 			if (f.target.file.empty() || f.target.key.empty()) { continue; }
+			// A SPLIT target is adopted PER DEVICE, because the INI stores only one device's binding per row: the
+			// save writes the first device that is bound, so a row holding both a keyboard and a gamepad key loses
+			// one of them on the next save. Re-adopting the missing side from the target on every load is what
+			// makes that lossless - and it is free, because the target file is where that value lives anyway.
+			// (Seen live 2026-09-16: the Wheel Menu row adopted D-pad Down and B, saved only B, and the gamepad
+			// half then came back as "unbound" and wrote -1 over Wheeler's key.)
+			//
+			// A single-key target still adopts only when the whole row is unbound - there is one value, so one
+			// binding, and adopting over a deliberate choice would undo it.
 			const bool bound = std::any_of(f.bind.begin(), f.bind.end(), [](const Binding& a_b) { return a_b.key != kUnbound; });
-			if (bound) { continue; }
+			if (bound && f.target.gamepadSection.empty()) { continue; }
 
 			const std::filesystem::path path = std::filesystem::path(g_dataPath) / f.target.file;
 
@@ -355,6 +364,11 @@ namespace functions
 															  std::pair<const std::string&, int>{ f.target.section, 0 } })
 				{
 					if (sectionName.empty()) { continue; }
+					// This device already has a binding of its own - the INI kept it, so it is not missing.
+					{
+						std::scoped_lock l(g_lock);
+						if (i < g_functions.size() && g_functions[i].bind[forDevice].key != kUnbound) { continue; }
+					}
 					const std::string raw = ReadKey(path, sectionName, f.target.key);
 					if (raw.empty()) { continue; }
 					int code = f.target.none;
