@@ -188,6 +188,35 @@ namespace controlslist
 			return false;
 		}
 
+		// Copies a REAL row's members onto a row this mod is adding, so the two are indistinguishable to the list.
+		//
+		// Why this and not a bare object with text/buttonName/buttonID: the Controls list is a
+		// Shared.CenteredScrollingList with a Shared.ListFilterer, and a filterer decides whether to DRAW a row from
+		// bookkeeping the art keeps on the entry - filterFlag in the shared code, and whatever else a replacer adds.
+		// A row missing that member is not drawn, which looks exactly like the row was never added. Norden UI's
+		// quest_journal.swf is the case that raised it (it ships its own journal at a higher priority than Quest
+		// Journal Overhaul, and carries Shared.ListFilterer, EntryMatchesFilter and filterFlag), but the fix is not
+		// about Norden UI: cloning means this mod never has to know which members THIS journal's list cares about.
+		//
+		// The row's identity - its text, its key, this mod's own marks - is set by the caller afterwards, and
+		// sortIndex is left out because both callers work it out for the position they are inserting at.
+		void CloneRowMembers(const RE::GFxValue& a_template, RE::GFxValue& a_row, const char* a_forRow)
+		{
+			if (!a_template.IsObject() || !a_row.IsObject()) { return; }
+			static const std::set<std::string> kOwn = { "text", "buttonName", "buttonID", "sortIndex", "_uvcAdded", "_uvcFunction", "_uvcBaseName" };
+			std::string copied;
+			a_template.VisitMembers([&](const char* a_name, const RE::GFxValue& a_value) {
+				if (!a_name || kOwn.count(a_name)) { return; }
+				a_row.SetMember(a_name, a_value);
+				copied += (copied.empty() ? "" : ", ") + std::string(a_name);
+			});
+			if (g_loggedRows.insert(std::format("clone|{}", a_forRow)).second)
+			{
+				logger::debug("controls list: \"{}\" took its bookkeeping from a real row ({})", a_forRow,
+							  copied.empty() ? "nothing to copy - this journal's rows carry no extra members" : copied);
+			}
+		}
+
 		struct RowFacts
 		{
 			std::string text;        // the user event, e.g. "Quick Inventory"
@@ -343,6 +372,8 @@ namespace controlslist
 				r.text = control.event;
 				r.order = control.order;
 				a_movie->CreateObject(&r.value);
+				// Take the bookkeeping from the row this one is going next to, before the identity members are set.
+				if (!rows.empty()) { CloneRowMembers(rows[pos > 0 ? pos - 1 : 0].value, r.value, control.event.c_str()); }
 				r.value.SetMember("text", RE::GFxValue(control.event.c_str()));
 				r.value.SetMember("buttonName", RE::GFxValue(""));
 				r.value.SetMember("buttonID", RE::GFxValue(static_cast<double>(kUnmappedID)));
@@ -411,9 +442,21 @@ namespace controlslist
 				}
 				RE::GFxValue value;
 				a_movie->CreateObject(&value);
+				// The last real row is the template: an extra row goes after every vanilla control, so that is the
+				// row it sits next to, and it carries whatever this journal's list keeps on a row.
+				RE::GFxValue last;
+				double sortIndex = 0.0;
+				bool hasSort = false;
+				if (a_entries.GetArraySize() > 0 && a_entries.GetElement(a_entries.GetArraySize() - 1, &last) && last.IsObject())
+				{
+					CloneRowMembers(last, value, list[f].name.c_str());
+					hasSort = NumberMember(last, "sortIndex", sortIndex);
+				}
 				value.SetMember("text", RE::GFxValue(list[f].name.c_str()));
 				value.SetMember("buttonName", RE::GFxValue(keyText.c_str()));
 				value.SetMember("buttonID", RE::GFxValue(static_cast<double>(kUnmappedID)));
+				// Appended, so it sorts after everything already there.
+				if (hasSort) { value.SetMember("sortIndex", RE::GFxValue(sortIndex + 1.0)); }
 				value.SetMember("_uvcAdded", RE::GFxValue(true));
 				value.SetMember("_uvcFunction", RE::GFxValue(true));
 				// ListShowsGamepad reads _uvcBaseName when it is there; an extra row must never be the row that
