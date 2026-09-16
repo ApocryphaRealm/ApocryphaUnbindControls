@@ -179,7 +179,7 @@ namespace settings
 						if (bar == std::string::npos) { break; }
 						from = bar + 1;
 					}
-					if (parts.size() < 7 || parts.size() > 10) { ++a_badLines; logger::warn("INI [Functions] line \"{}\" is not Name|Device|Button|Modifier|File|Section|Key[|ModifierKey[|NoKeyValue[|GamepadSection]]]; ignored", t); continue; }
+					if (parts.size() < 7 || parts.size() > 11) { ++a_badLines; logger::warn("INI [Functions] line \"{}\" is not Name|Device|Button|Modifier|File|Section|Key[|ModifierKey[|NoKeyValue[|GamepadSection[|RequiresFile]]]]; ignored", t); continue; }
 					functions::Function f;
 					f.name = parts[0];
 					if (f.name.empty()) { ++a_badLines; logger::warn("INI [Functions] line \"{}\" has no name; ignored", t); continue; }
@@ -190,7 +190,10 @@ namespace settings
 					// A target that keeps one key PER DEVICE rather than one in the unified numbering. Wheeler does:
 					// the gamepad Controls page drives its [InputBindings.GamePad] and the keyboard page its
 					// [InputBindings.MKB], independently. Empty means the mod keeps a single key.
-					if (parts.size() == 10) { f.target.gamepadSection = parts[9]; }
+					if (parts.size() >= 10) { f.target.gamepadSection = parts[9]; }
+					// A file whose presence means the target MOD is installed. Without it the row is not shown
+					// and writes nothing, so this mod is safe to install without the mods its rows point at.
+					if (parts.size() == 11) { f.target.requiresFile = parts[10]; }
 					// What the TARGET writes for "no key" - not a constant across mods: One Click Power Attack uses
 					// -1, Stances NG uses 0 ("0 is to deactivate the key entirely"). Writing the wrong one would
 					// leave a cleared row pointing at a real key.
@@ -484,9 +487,9 @@ namespace settings
 			}
 			else
 			{
-				functionLines.push_back(std::format("{}|{}|{}|{}|{}|{}|{}|{}|{}|{}", f.name, device, keyText, modText,
+				functionLines.push_back(std::format("{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}", f.name, device, keyText, modText,
 													f.target.file, f.target.section, f.target.key, f.target.modifierKey, f.target.none,
-													f.target.gamepadSection));
+													f.target.gamepadSection, f.target.requiresFile));
 			}
 		}
 		std::vector<std::string> modifierLines;

@@ -508,6 +508,8 @@ namespace controlslist
 
 			for (std::size_t f = 0; f < list.size(); ++f)
 			{
+				// The mod this row points at is not installed: no row, and nothing written on its behalf.
+				if (!functions::IsPresentAt(f)) { continue; }
 				const auto shown = functions::ShownBinding(f, a_gamepad);
 				const int fnDevice = a_gamepad ? 2 : 0;
 				// The tile shows the BUTTON; a modifier is spelled in front of it, the way a bound control's row is.

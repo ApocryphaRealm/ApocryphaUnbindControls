@@ -7,6 +7,11 @@ Rule 61: this mod's own history, kept beside the code it describes.
 > number; at `.9` the MINOR rolls. The next number is LAST WORKING + 1; failed/scratch/
 > untested numbers are reused. Numbers come from version-gate.ps1.
 
+## 1.0.9 - 2026-09-16 - untested
+
+### Fixed
+- **A row whose mod is not installed is not shown and writes nothing** (the owner, before release, 2026-09-16: *"is uvc safe to install if they dont have the mods we let it overwrite? like wheeler, stances and ocpa?"*). It was already safe in the way that matters most - at data load a row with no binding is skipped, and a row adopts nothing from a file that does not exist, so no settings file was ever written for an absent mod. But the rows still APPEARED on the Controls page, so somebody without One Click Power Attack saw a Power Attack row that did nothing, and binding it would have created a settings file for software that was not there. A `[Functions]` line now takes an optional eleventh field naming a file whose presence means the target mod is installed - the shipped rows probe `OneClickPowerAttack.dll`, `StancesNG.dll` and `wheeler.dll` - and a row whose mod is missing is left out of the Controls page entirely, cannot be remapped, and delivers nothing. Installing this alongside none of those three now adds no rows for them at all.
+
 ## 1.0.8 - 2026-09-16 - untested
 
 ### Added

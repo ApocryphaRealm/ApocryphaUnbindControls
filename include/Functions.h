@@ -48,6 +48,11 @@ namespace functions
 		std::string key;          // e.g. "iKeycode"
 		std::string modifierKey;  // e.g. "iModifierKey"; empty when the target has no modifier setting
 		int none = -1;            // what the target writes for "no key" (OCPA uses -1)
+		// A file whose presence means the TARGET MOD IS INSTALLED, relative to Data. A row whose mod is not
+		// there is not shown on the Controls page and delivers nothing - so installing this mod on a game
+		// without One Click Power Attack, Stances NG or Wheeler adds no rows for them and writes no settings
+		// file on their behalf. Empty falls back to the target file itself.
+		std::string requiresFile;
 	};
 
 	struct Binding
@@ -62,6 +67,14 @@ namespace functions
 		Target target;
 		std::array<Binding, 3> bind{};    // keyboard, mouse, gamepad
 	};
+
+	// Only the rows whose target mod is actually installed. This is what the Controls page and delivery
+	// both use; GetFunctions returns every row the INI declared, installed or not.
+	std::vector<Function> GetPresentFunctions();
+
+	// Is the mod THIS row points at installed? Indexed against the full list, because the Controls page
+	// identifies a row by its position there.
+	bool IsPresentAt(std::size_t a_index);
 
 	std::vector<Function> GetFunctions();
 	void SetFunctions(std::vector<Function> a_functions);  // from the INI; does not apply

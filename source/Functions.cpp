@@ -135,6 +135,43 @@ namespace functions
 		}
 	}
 
+	// Is the mod this row points at actually installed?
+	//
+	// Asked of the file system, once per call, because it is the only honest answer available: a row exists to set
+	// another mod's key, and with that mod absent the row would be a control that does nothing and a settings file
+	// written for software that is not there. The owner asked exactly this before release - whether the mod is safe
+	// to install without Wheeler, Stances NG or One Click Power Attack (2026-09-16).
+	bool TargetPresent(const Function& a_function)
+	{
+		if (g_dataPath.empty()) { return false; }
+		const std::string& probe = a_function.target.requiresFile.empty() ? a_function.target.file : a_function.target.requiresFile;
+		if (probe.empty()) { return false; }
+		std::error_code ec;
+		return std::filesystem::exists(std::filesystem::path(g_dataPath) / probe, ec) && !ec;
+	}
+
+	bool IsPresentAt(std::size_t a_index)
+	{
+		Function copy;
+		{
+			std::scoped_lock l(g_lock);
+			if (a_index >= g_functions.size()) { return false; }
+			copy = g_functions[a_index];
+		}
+		return TargetPresent(copy);
+	}
+
+	std::vector<Function> GetPresentFunctions()
+	{
+		std::vector<Function> out;
+		{
+			std::scoped_lock l(g_lock);
+			out = g_functions;
+		}
+		std::erase_if(out, [](const Function& a_f) { return !TargetPresent(a_f); });
+		return out;
+	}
+
 	std::vector<Function> GetFunctions()
 	{
 		std::scoped_lock l(g_lock);
@@ -157,7 +194,8 @@ namespace functions
 
 		Function powerAttack;
 		powerAttack.name = "Power Attack";
-		powerAttack.target = { "MCM\\Settings\\OCPA.ini", "General", "", "iKeycode", "iModifierKey", -1 };
+		powerAttack.target = { "MCM\\Settings\\OCPA.ini", "General", "", "iKeycode", "iModifierKey", -1,
+							   "SKSE\\Plugins\\OneClickPowerAttack.dll" };
 		out.push_back(std::move(powerAttack));
 
 		// Stances (the owner, 2026-09-16: "we need to make a way for uvc to register stances then", then, after seeing
@@ -168,7 +206,8 @@ namespace functions
 		// value belongs to the target rather than to this mod.
 		Function stance;
 		stance.name = "Stance";
-		stance.target = { "SKSE\\Plugins\\StancesNG.ini", "Keys", "", "iMidStanceKey", "iModifierKeyMidStance", 0 };
+		stance.target = { "SKSE\\Plugins\\StancesNG.ini", "Keys", "", "iMidStanceKey", "iModifierKeyMidStance", 0,
+						  "SKSE\\Plugins\\StancesNG.dll" };
 		out.push_back(std::move(stance));
 
 		// The wheel (the owner, 2026-09-16: "i want to add a wheeler row that says wheel menu. and overwrites
@@ -178,7 +217,7 @@ namespace functions
 		Function wheel;
 		wheel.name = "Wheel Menu";
 		wheel.target = { "SKSE\\Plugins\\wheeler\\Controls.ini", "InputBindings.MKB", "InputBindings.GamePad",
-						 "toggleWheel", "toggleWheelModifier", 0 };
+						 "toggleWheel", "toggleWheelModifier", 0, "SKSE\\Plugins\\wheeler.dll" };
 		out.push_back(std::move(wheel));
 
 		return out;
@@ -191,6 +230,8 @@ namespace functions
 		{
 			if (IEquals(g_functions[i].name, a_name))
 			{
+				// Absent mod, absent row: the Controls page does not draw it, so nothing may remap it either.
+				if (!TargetPresent(g_functions[i])) { return false; }
 				if (a_index) { *a_index = i; }
 				return true;
 			}
@@ -329,11 +370,7 @@ namespace functions
 	int Adopt(const char* a_reason)
 	{
 		if (g_dataPath.empty()) { return 0; }
-		std::vector<Function> snapshot;
-		{
-			std::scoped_lock l(g_lock);
-			snapshot = g_functions;
-		}
+		std::vector<Function> snapshot = GetPresentFunctions();
 
 		int adopted = 0;
 		for (std::size_t i = 0; i < snapshot.size(); ++i)
@@ -446,11 +483,7 @@ namespace functions
 
 	int Deliver(const char* a_reason, bool a_writeUnbound)
 	{
-		std::vector<Function> snapshot;
-		{
-			std::scoped_lock l(g_lock);
-			snapshot = g_functions;
-		}
+		std::vector<Function> snapshot = GetPresentFunctions();
 		if (snapshot.empty()) { return 0; }
 		if (g_dataPath.empty())
 		{
@@ -563,6 +596,7 @@ namespace functions
 				continue;
 			}
 
+			// The parent is only created for a mod that IS installed - TargetPresent has already said so.
 			std::error_code ec;
 			std::filesystem::create_directories(path.parent_path(), ec);
 			std::ofstream out(path, std::ios::binary | std::ios::trunc);
