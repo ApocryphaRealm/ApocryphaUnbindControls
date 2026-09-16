@@ -196,6 +196,67 @@ namespace controlslist
 			return false;
 		}
 
+		// The button-art name the journal wants for a gamepad code, e.g. "lt".
+		//
+		// A row's key TILE is drawn from this name, not from the name this mod uses in its INI: the art library is
+		// keyed "360_lt", "360_rb", "360_start" and so on (the prefix varies with the pad - 360_, PS4_ ...), so a row
+		// carrying the bare string "LT" matches no art and draws no tile at all. That is why the rows this mod adds
+		// had no visible key (the owner, 2026-09-16).
+		//
+		// The D-pad is deliberately absent: this journal's art has no d-pad glyph, so a row bound there gets no tile
+		// however it is named, and returning "" keeps the name honest rather than pointing at art that is not present.
+		const char* GamepadArtName(std::uint32_t a_code)
+		{
+			switch (a_code)
+			{
+			case 0x1000: return "a";
+			case 0x2000: return "b";
+			case 0x4000: return "x";
+			case 0x8000: return "y";
+			case 0x0100: return "lb";
+			case 0x0200: return "rb";
+			case 0x0009: return "lt";
+			case 0x000a: return "rt";
+			case 0x0010: return "start";
+			case 0x0020: return "back";
+			case 0x0040: return "l3";
+			case 0x0080: return "r3";
+			default: return "";
+			}
+		}
+
+		// The prefix the GAME is using on this page ("360_", "PS4_", ...), read off a row the game itself made so the
+		// art matches the pad actually connected. "360_" when nothing readable is there yet.
+		std::string GamepadArtPrefix(const RE::GFxValue& a_entries)
+		{
+			for (std::uint32_t i = 0; i < a_entries.GetArraySize(); ++i)
+			{
+				RE::GFxValue entry;
+				if (!a_entries.GetElement(i, &entry) || !entry.IsObject()) { continue; }
+				RE::GFxValue isOurs;
+				if (entry.GetMember("_uvcAdded", &isOurs) && isOurs.IsBool() && isOurs.GetBool()) { continue; }
+				std::string name = StringMember(entry, "_uvcBaseName");
+				if (name.empty()) { name = StringMember(entry, "buttonName"); }
+				const auto bar = name.find('_');
+				if (bar != std::string::npos && IsGamepadButtonName(name)) { return name.substr(0, bar + 1); }
+			}
+			return "360_";
+		}
+
+		// What an added row should put in buttonName so the journal draws its tile: the art name on the gamepad, and
+		// the key's own name on the keyboard (which is what that column shows there). "" when there is no key.
+		std::string RowButtonName(std::uint16_t a_key, int a_device, const std::string& a_prefix)
+		{
+			if (a_key == kUnmappedID) { return {}; }
+			if (a_device == 2)
+			{
+				const char* art = GamepadArtName(a_key);
+				return art[0] ? a_prefix + art : std::string();
+			}
+			const char* name = unbinder::ButtonName(a_key, a_device);
+			return (name && name[0]) ? std::string(name) : std::format("0x{:02x}", a_key);
+		}
+
 		// Copies a REAL row's members onto a row this mod is adding, so the two are indistinguishable to the list.
 		//
 		// Why this and not a bare object with text/buttonName/buttonID: the Controls list is a
@@ -428,6 +489,7 @@ namespace controlslist
 		bool AddFunctionRows(RE::GFxMovieView* a_movie, RE::GFxValue& a_entries, bool a_gamepad)
 		{
 			const auto list = functions::GetFunctions();
+			const std::string artPrefix = GamepadArtPrefix(a_entries);
 
 			const std::uint32_t count = a_entries.GetArraySize();
 			std::vector<std::string> present;
@@ -445,9 +507,9 @@ namespace controlslist
 			// set to left trigger"). It is not a user event either, so it is drawn the same way an extra row is - but
 			// its value lives in this mod's [Modifier] list and it is what every "Modifier" combination resolves to.
 			{
-				const std::uint16_t mod = unbinder::ModifierFor(a_gamepad ? 2 : 0);
-				const char* modName = mod == 0xFF ? "" : unbinder::ButtonName(mod, a_gamepad ? 2 : 0);
-				const std::string modText = mod == 0xFF ? std::string() : (modName[0] ? std::string(modName) : std::format("0x{:02x}", mod));
+				const int modDevice = a_gamepad ? 2 : 0;
+				const std::uint16_t mod = unbinder::ModifierFor(modDevice);
+				const std::string modText = RowButtonName(mod, modDevice, artPrefix);
 				const auto at = std::find(present.begin(), present.end(), std::string(unbinder::kModifierRowName));
 				if (at != present.end())
 				{
@@ -474,7 +536,7 @@ namespace controlslist
 					}
 					value.SetMember("text", RE::GFxValue(unbinder::kModifierRowName));
 					value.SetMember("buttonName", RE::GFxValue(modText.c_str()));
-					value.SetMember("buttonID", RE::GFxValue(static_cast<double>(kUnmappedID)));
+					value.SetMember("buttonID", RE::GFxValue(static_cast<double>(mod)));
 					value.SetMember("_uvcAdded", RE::GFxValue(true));
 					value.SetMember("_uvcFunction", RE::GFxValue(true));
 					value.SetMember("_uvcBaseName", RE::GFxValue(modText.c_str()));
@@ -491,7 +553,15 @@ namespace controlslist
 
 			for (std::size_t f = 0; f < list.size(); ++f)
 			{
-				const std::string keyText = functions::ShownText(f, a_gamepad);
+				const auto shown = functions::ShownBinding(f, a_gamepad);
+				const int fnDevice = a_gamepad ? 2 : 0;
+				// The tile shows the BUTTON; a modifier is spelled in front of it, the way a bound control's row is.
+				std::string keyText = RowButtonName(shown.key, fnDevice, artPrefix);
+				if (shown.key != kUnmappedID && shown.modifier != 0)
+				{
+					const std::string modPart = RowButtonName(shown.modifier, fnDevice, artPrefix);
+					if (!modPart.empty()) { keyText = modPart + " + " + keyText; }
+				}
 				const auto at = std::find(present.begin(), present.end(), list[f].name);
 				if (at != present.end())
 				{
