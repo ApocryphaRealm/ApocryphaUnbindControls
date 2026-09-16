@@ -137,7 +137,7 @@ namespace DevBenchTool
 				int seconds = 20;
 				try { const std::string s = Get(args, "seconds"); if (!s.empty()) { seconds = std::stoi(s); } } catch (...) {}
 				controlslist::Listen(seconds);
-				a_write(a_sink, std::format("{{\"ok\":true,\"op\":\"listen\",\"seconds\":{},\"log\":\"ApocryphaUnbindControls.log, lines starting listen:\"}}", seconds).c_str());
+				a_write(a_sink, std::format("{{\"ok\":true,\"op\":\"listen\",\"seconds\":{},\"log\":\"UnbindControls.log, lines starting listen:\"}}", seconds).c_str());
 				return;
 			}
 			if (op == "systemrows")

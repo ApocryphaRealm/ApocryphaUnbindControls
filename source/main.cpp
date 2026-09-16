@@ -52,11 +52,11 @@ namespace
 SKSEPluginLoad(const SKSE::LoadInterface* a_skse)
 {
 	SKSE::Init(a_skse);
-	SKSE::log::init("ApocryphaUnbindControls");
+	SKSE::log::init("UnbindControls");
 
-	settings::Init("ApocryphaUnbindControls.ini");
+	settings::Init("UnbindControls.ini");
 	settings::ApplyLogLevel();
-	SKSE::log::describe_level("ApocryphaUnbindControls.ini");
+	SKSE::log::describe_level("UnbindControls.ini");
 
 	logger::info("Unbind Vanilla Controls {} loading",
 				 SKSE::PluginDeclaration::GetSingleton()->GetVersion().string("."));

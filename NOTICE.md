@@ -23,4 +23,4 @@ build lines and the source, is GPL-3.0-or-later; earlier versions carried an MIT
 
 Components under other licences, with their notices: `THIRD_PARTY_NOTICES.md`.
 
-Source code: https://github.com/ApocryphaRealm/ApocryphaUnbindControls
+Source code: https://github.com/ApocryphaRealm/UnbindControls

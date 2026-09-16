@@ -2,7 +2,7 @@
   "name": "apocryphaunbindcontrols-17",
   "version-string": "1.0.0",
   "description": "Unbind Vanilla Controls - leave any of Skyrim's own controls with no key at all, per device. [Skyrim 1.7.x build line: CommonLibSSE-NG 7.2.0, cmake/ports-17]",
-  "homepage": "https://github.com/ApocryphaRealm/ApocryphaUnbindControls",
+  "homepage": "https://github.com/ApocryphaRealm/UnbindControls",
   "license": "GPL-3.0-or-later",
   "dependencies": [
     "commonlibsse-ng",
