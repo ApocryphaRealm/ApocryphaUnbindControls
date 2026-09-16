@@ -645,6 +645,34 @@ namespace controlslist
 					SetArtVisible(clip, true);
 					clip.SetMember("_uvcBlank", RE::GFxValue(false));
 				}
+
+				// A bind that requires a modifier shows it in front of the key the game named: "Left Shift + Q".
+				// Written onto the ENTRY, not the clip: the vanilla row function redraws each row from its entry
+				// every frame, and the clip only carries itemIndex. The key's own name is left to the game, which
+				// names it correctly for this journal and this gamepad type - only the prefix is ours.
+				//
+				// The guard is a PREFIX test, not "is the composed string different from what is there". This runs
+				// every frame, and after the first write the row already reads "Left Shift + Q", so composing again
+				// would give "Left Shift + Left Shift + Q" and grow without bound.
+				if (!row.blank && !row.text.empty() && !row.buttonName.empty())
+				{
+					const int device = gamepad ? 2 : 0;
+					std::uint16_t modifier = 0;
+					if (unbinder::BindModifier(row.text, device, modifier))
+					{
+						const char* modName = unbinder::ButtonName(modifier, device);
+						const std::string prefix = (modName[0] ? std::string(modName) : std::format("0x{:02x}", modifier)) + " + ";
+						if (row.buttonName.rfind(prefix, 0) != 0)
+						{
+							const std::string shown = prefix + row.buttonName;
+							entry.SetMember("buttonName", RE::GFxValue(shown.c_str()));
+							if (g_loggedRows.insert(std::format("modifier|{}|{}", gamepad ? "gamepad" : "keyboard", row.text)).second)
+							{
+								logger::debug("controls list: \"{}\" shown as \"{}\" (its bind requires a modifier)", row.text, shown);
+							}
+						}
+					}
+				}
 			}
 			if (blankNow) { g_blankFrames.fetch_add(1); }
 			g_rowsBlankNow.store(blankNow);

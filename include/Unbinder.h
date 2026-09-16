@@ -65,6 +65,10 @@ namespace unbinder
 	};
 	std::vector<Bind> GetBinds();
 	void SetBinds(std::vector<Bind> a_binds);        // from the INI; does not apply
+	// The modifier a bound control requires, without copying the whole bind list. The Controls list asks this
+	// once per visible row per journal frame, so GetBinds() (a copy of the vector under the lock) is the wrong
+	// tool there. True when Gameplay|a_event|a_device is bound WITH a modifier; a_modifier gets it.
+	bool BindModifier(std::string_view a_event, int a_device, std::uint16_t& a_modifier);
 	// The shipped binds (the owner, 2026-09-14: "add a system tab button to the controller control layout and unbind
 	// the journal button"): Gameplay|Pause|gamepad|Start. Matches the shipped INI's [Bound] lines.
 	std::vector<Bind> DefaultBinds();

@@ -529,6 +529,20 @@ namespace unbinder
 		return { b };
 	}
 
+	bool BindModifier(std::string_view a_event, int a_device, std::uint16_t& a_modifier)
+	{
+		std::scoped_lock l(g_lock);
+		const char* context = ContextName(0);  // Gameplay; the Controls list only shows that context
+		for (const auto& b : g_binds)
+		{
+			if (b.device != a_device || !IEquals(b.context, context) || !IEquals(b.event, a_event)) { continue; }
+			if (b.modifier == 0) { return false; }  // bound, but with no modifier to show
+			a_modifier = b.modifier;
+			return true;
+		}
+		return false;
+	}
+
 	std::uint16_t ParseButton(std::string_view a_text, int a_device)
 	{
 		if (a_device == 2)
