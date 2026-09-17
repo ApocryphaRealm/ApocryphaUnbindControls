@@ -1,6 +1,6 @@
 ﻿{
     "name": "apocryphaunbindcontrols",
-    "version-string": "1.0.9",
+    "version-string": "1.1.0",
     "description": "Unbind Vanilla Controls - leave any of Skyrim's own controls with no key at all, per device, from a page in the Apocrypha Menu Framework.",
     "homepage": "https://github.com/ApocryphaRealm/UnbindControls",
     "license": "GPL-3.0-or-later",
