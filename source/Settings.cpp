@@ -191,6 +191,13 @@ namespace settings
 					// the gamepad Controls page drives its [InputBindings.GamePad] and the keyboard page its
 					// [InputBindings.MKB], independently. Empty means the mod keeps a single key.
 					if (parts.size() >= 10) { f.target.gamepadSection = parts[9]; }
+					// "Section:Key" when the gamepad setting has a name of its own (Back Pocket's
+					// controller_toggle_item_key_code beside toggle_item_scan_code, both in [input]).
+					if (const auto colon = f.target.gamepadSection.find(':'); colon != std::string::npos)
+					{
+						f.target.gamepadKey = f.target.gamepadSection.substr(colon + 1);
+						f.target.gamepadSection.resize(colon);
+					}
 					// A file whose presence means the target MOD is installed. Without it the row is not shown
 					// and writes nothing, so this mod is safe to install without the mods its rows point at.
 					if (parts.size() == 11) { f.target.requiresFile = parts[10]; }
@@ -485,7 +492,9 @@ namespace settings
 				}
 				break;
 			}
-			if (f.target.gamepadSection.empty())
+			// Nine fields only when there is neither a gamepad section nor a RequiresFile: the short form had dropped
+			// the eleventh field on every save, so Power Attack and Stance lost their DLL probe (found 2026-09-28).
+			if (f.target.gamepadSection.empty() && f.target.requiresFile.empty())
 			{
 				functionLines.push_back(std::format("{}|{}|{}|{}|{}|{}|{}|{}|{}", f.name, device, keyText, modText,
 													f.target.file, f.target.section, f.target.key, f.target.modifierKey, f.target.none));
@@ -494,7 +503,8 @@ namespace settings
 			{
 				functionLines.push_back(std::format("{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}", f.name, device, keyText, modText,
 													f.target.file, f.target.section, f.target.key, f.target.modifierKey, f.target.none,
-													f.target.gamepadSection, f.target.requiresFile));
+													f.target.gamepadKey.empty() ? f.target.gamepadSection : f.target.gamepadSection + ":" + f.target.gamepadKey,
+													f.target.requiresFile));
 			}
 		}
 		std::vector<std::string> modifierLines;

@@ -68,24 +68,33 @@ namespace DevBenchTool
 		}
 
 		// Runs a_fn on the game's main thread and waits (the handler runs on DevBench's own thread; the
-		// ControlMap is only touched on the main thread).
+		// ControlMap is only touched on the main thread). The callers' lambdas capture their locals by reference, so
+		// a_fn must never run once this returns: the task runs it under the same lock the caller takes on a timeout,
+		// and skips it when the caller has already given up (logic library: a task that outlives its caller's
+		// timeout writes into a dead stack frame - 1.1.1's first boot crashed that way, a dump sent during data load).
 		bool RunOnMainThread(std::function<void()> a_fn, int a_timeoutMs = 4000)
 		{
 			auto* tasks = SKSE::GetTaskInterface();
 			if (!tasks) { return false; }
-			auto done = std::make_shared<std::atomic<bool>>(false);
-			auto m = std::make_shared<std::mutex>();
-			auto cv = std::make_shared<std::condition_variable>();
-			tasks->AddTask([=]() {
+			struct Shared
+			{
+				std::mutex m;
+				std::condition_variable cv;
+				bool done = false;
+				bool cancelled = false;
+			};
+			auto st = std::make_shared<Shared>();
+			tasks->AddTask([st, a_fn]() {
+				std::scoped_lock l(st->m);
+				if (st->cancelled) { return; }  // the caller gave up; its locals are gone
 				a_fn();
-				{
-					std::scoped_lock l(*m);
-					done->store(true);
-				}
-				cv->notify_all();
+				st->done = true;
+				st->cv.notify_all();
 			});
-			std::unique_lock l(*m);
-			return cv->wait_for(l, std::chrono::milliseconds(a_timeoutMs), [&]() { return done->load(); });
+			std::unique_lock l(st->m);
+			if (st->cv.wait_for(l, std::chrono::milliseconds(a_timeoutMs), [&]() { return st->done; })) { return true; }
+			st->cancelled = true;
+			return false;
 		}
 
 		int ContextArg(std::string_view a_args)
@@ -145,6 +154,22 @@ namespace DevBenchTool
 				std::string out;
 				if (!RunOnMainThread([&]() { out = systemmenu::RowsJson(); })) { a_write(a_sink, R"({"ok":false,"op":"systemrows","error":"main thread did not run the task in time"})"); return; }
 				a_write(a_sink, out.c_str());
+				return;
+			}
+			if (op == "gfxget" || op == "gfxset")
+			{
+				auto result = std::make_shared<std::string>();
+				const std::string path = Get(args, "path"), member = Get(args, "member"), value = Get(args, "value");
+				const bool set = op == "gfxset";
+				if (!RunOnMainThread([result, path, member, value, set]() { *result = controlslist::GfxMember(path, member, value, set); })) { a_write(a_sink, R"({"ok":false,"error":"main thread did not run the task in time"})"); return; }
+				a_write(a_sink, result->c_str());
+				return;
+			}
+			if (op == "rowclips")
+			{
+				auto result = std::make_shared<std::string>();
+				if (!RunOnMainThread([result]() { *result = controlslist::RowClipsJson(); })) { a_write(a_sink, R"({"ok":false,"op":"rowclips","error":"main thread did not run the task in time"})"); return; }
+				a_write(a_sink, result->c_str());
 				return;
 			}
 			if (op == "rows")

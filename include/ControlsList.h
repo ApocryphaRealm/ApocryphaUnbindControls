@@ -45,5 +45,7 @@ namespace controlslist
 	bool OpenControlsPanel(std::string& a_why);
 
 	std::string RowsJson();
+	std::string RowClipsJson();  // DevBench op=rowclips: the row clips and their text fields
+	std::string GfxMember(std::string_view a_path, std::string_view a_member, std::string_view a_value, bool a_set);  // op=gfxget / gfxset
 	std::string StateJson();  // "controlsList":{...} member, no braces around it
 }

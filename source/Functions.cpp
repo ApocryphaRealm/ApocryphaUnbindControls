@@ -406,7 +406,7 @@ namespace functions
 						std::scoped_lock l(g_lock);
 						if (i < g_functions.size() && g_functions[i].bind[forDevice].key != kUnbound) { continue; }
 					}
-					const std::string raw = ReadKey(path, sectionName, f.target.key);
+					const std::string raw = ReadKey(path, sectionName, f.target.KeyFor(forDevice));
 					if (raw.empty()) { continue; }
 					int code = f.target.none;
 					try { code = std::stoi(raw); } catch (...) { continue; }
@@ -554,7 +554,7 @@ namespace functions
 						if (sectionName.empty()) { continue; }
 						const auto& bound = f.bind[forDevice];
 						const int code = bound.key == kUnbound ? f.target.none : ToInputCode(bound.key, forDevice);
-						WriteKey(lines, sectionName, f.target.key, std::to_string(code));
+						WriteKey(lines, sectionName, f.target.KeyFor(forDevice), std::to_string(code));
 						// The modifier is written on EVERY delivery, so a wrong "no key" value corrupts it even when
 						// the row is bound - which is how Wheeler's toggleWheelModifier ended up -1 where it wanted 0
 						// and the wheel stopped opening (2026-09-16). It is logged for the same reason: the key was

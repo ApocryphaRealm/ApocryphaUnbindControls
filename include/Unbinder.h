@@ -139,6 +139,41 @@ namespace unbinder
 	// unbound the control by pressing its own key).
 	bool UpdateBind(int a_context, std::string_view a_event, int a_device, std::uint16_t a_key);
 	bool RemoveBind(int a_context, std::string_view a_event, int a_device);
+	// SetBind: the [Bound] line for that control, added or replaced (a menu row set on the Controls page). The caller saves
+	// and applies.
+	void SetBind(int a_context, std::string_view a_event, int a_device, std::uint16_t a_key, bool a_withModifier = false);
+	// The control that holds (key, modifier) in a context on a device right now; false when none does.
+	struct Holder
+	{
+		std::string event;
+		bool remappable = false;
+	};
+	bool HolderOf(int a_context, int a_device, std::uint16_t a_key, std::uint16_t a_modifier, Holder& a_out);
+	// The first mapping of a_event in a_context on a_device: its key and modifier (false when there is none).
+	bool LiveBinding(int a_context, std::string_view a_event, int a_device, std::uint16_t& a_key, std::uint16_t& a_modifier);
+
+	// Menu actions controlmap.txt LINKED to a gameplay control, turned into separate mappings of their own (1.1.1; the
+	// owner, 2026-09-28: "convert all of the linked mappings ... into context-aware separate mappings" and "make sure that
+	// the game's controls area gets rows for each of these new entries"). Each one gets its own row on the Controls page,
+	// on the device family its links were on. The Favourite button's row is shown but fixed (F / Y).
+	struct DelinkedAction
+	{
+		int context = 0;
+		std::string event;           // the engine's id, e.g. "ChargeItem"
+		std::string row;             // the row's identity, e.g. "Inventory: Charge Item" (also the log's name for it)
+		std::string block;           // the block it is listed under, e.g. "Inventory"
+		std::string title;           // the block's title row, e.g. "INVENTORY" or "IN FAVORITES MENU"
+		std::string action;          // the row's label inside that block, e.g. "Charge Item"
+		bool keyboardFamily = false; // linked on the keyboard or the mouse
+		bool gamepad = false;        // linked on the gamepad
+		bool fixed = false;          // the Favourite button: never changed
+		int sheetContext = 0;        // the context whose column the row is listed in (Charge Item sits with ITEMS)
+		bool hidden = false;         // separate mapping kept, but no row on the Controls page
+	};
+	std::vector<DelinkedAction> GetDelinked();
+	bool FindDelinkedRow(std::string_view a_row, DelinkedAction& a_out);
+	// Every key a_event has in a_context on a_device right now (any context; LiveKeys is Gameplay only).
+	std::vector<std::uint16_t> LiveKeysIn(int a_context, std::string_view a_event, int a_device);
 
 	// Main thread only.
 	bool Unbind(int a_context, std::string_view a_event, int a_device, std::string& a_why);  // adds to the list
@@ -158,6 +193,9 @@ namespace unbinder
 	bool KeylessOnFamily(std::string_view a_event, bool a_gamepad, int* a_order = nullptr);
 	int OrderInContext(std::string_view a_event);
 	std::vector<KeylessControl> ListedKeylessOnFamily(bool a_gamepad);
+	// Gameplay controls a [Bound] line binds on that family. The game leaves a control out of its Controls list when its
+	// mapping needs a modifier (Shout on LB + Modifier vanished from the controller page), so these are put back too.
+	std::vector<KeylessControl> BoundOnFamily(bool a_gamepad);
 	// Gameplay context helpers for the Controls list's remap watch (main thread). LiveKeys: every key a_event has on
 	// a_device right now, in array order. IsListed: the INI list holds Gameplay|a_event|a_device. Forget: remove that
 	// line from the list WITHOUT touching the live map (a key the player just gave the control stays); the caller saves.

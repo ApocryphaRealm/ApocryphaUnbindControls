@@ -7,6 +7,22 @@ Rule 61: this mod's own history, kept beside the code it describes.
 > number; at `.9` the MINOR rolls. The next number is LAST WORKING + 1; failed/scratch/
 > untested numbers are reused. Numbers come from version-gate.ps1.
 
+## 1.1.1 - 2026-09-28 - working
+
+### Fixed
+- The Favourite button in the inventory and magic menus no longer shows [???]. It borrowed Toggle POV's key (keyboard) and Jump's (controller), so unbinding or moving either control left it with no key. It is now fixed to F on the keyboard and Y / triangle on the controller, set on install and not changed by anything else, so the prompt draws the game's own button art with or without a UI overhaul.
+- The mouse works on the Controls sheet (the owner, 2026-09-28: *"the mouse couldnt select a control to change and it was locked to one entry"*). The sheet's cells are copies of the game's list rows, and the copies did not carry the rows' mouse handlers while the originals are hidden, so the mouse reached nothing and the selection stayed wherever the D-pad or arrow keys had left it. Moving the pointer over a row now selects it, and clicking it starts the rebind as Accept does.
+
+### Changed
+- **Every menu action the game's control map links to a gameplay control is now a separate mapping of its own, in its own menu** (the owner, 2026-09-28: *"convert all of the linked mappings ... into context-aware separate mappings"*). The game's controlmap.txt gives many menu actions no key of their own - Charge Item uses Wait's key, every menu's Cancel uses Tween Menu's and Pause's, Item Zoom uses Toggle POV's, the lock turns with the movement keys - and copies the gameplay key across whenever controls change. Moving or unbinding a gameplay control, through this mod's list, the Controls menu or a saved ControlMap_Custom.txt, therefore moved or emptied menu buttons with it. The links are now removed at every apply and each action keeps the key the linked control has by default in the controlmap.txt in force (so a controls replacer is respected); an action linked to several controls keeps one key for each (Cancel stays on Tab and Esc). [Unbound] and [Bound] lines that name a menu action are applied after this, so they still win. This replaces 1.0.4's rule, which only gave a linked action its key back when its control was unbound.
+
+### Changed
+- **Fewer columns on the Controls sheet** (the owner, 2026-09-28: *"charge item can just be added to the items column ... in favorites menu is not a necessary distinction as it has the same controls as the menus category ... Make legendary be in menus column. In lock picking and followers can be done away with as there's still just a default cancel button ... take away the journal column as well"*). Charge Item is listed under ITEMS and Make Legendary under MENUS; the IN FAVORITES MENU, IN LOCKPICKING, FOLLOWERS and JOURNAL columns are gone. Their actions keep their separate mappings on their default keys - only the rows are left off. IN MAP stays.
+
+### Added
+- **A row on the game's Controls page for each of those menu actions** (the owner, 2026-09-28: *"make sure that the game's controls area gets rows for each of these new entries"*), after the extra rows, named by menu and action - "Inventory: Charge Item", "Menus: Cancel", "Items: Inspect", "Map: Zoom In". A row is listed on the keyboard page, the controller page or both, wherever the action had a link. Pressing a new key gives the action that key in that menu only (kept as a [Bound] line); pressing its own key again unbinds it there (an [Unbound] line); a key another action of the same menu already holds is refused. The Favourite row is shown but stays on F and Y.
+- An Address Library check before anything else loads: a missing Address Library file gets a message naming it and the plugin stays inert instead of failing without a word.
+
 ## 1.1.0 - 2026-09-16 - untested
 
 ### Changed

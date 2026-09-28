@@ -78,7 +78,34 @@ namespace controlslist
 		std::mutex g_pressLock;
 		PressedKey g_pressed;  // g_pressLock
 		bool g_hasPress = false;  // g_pressLock
+		// A combination (the owner, 2026-09-28: "confirm that you can set the shout/power function to left trigger plus left
+		// bumper"): when the first button of a capture is the device's designated Modifier, the button pressed while it is
+		// still held is the key, and the bind is "key + Modifier". g_pressLock.
+		PressedKey g_pressed2;
+		bool g_hasPress2 = false;
+		bool g_firstReleased = false;
 		std::string g_remapEvent;                       // main thread
+		constexpr int kSheetCols = 4;    // columns on screen at once (the sheet slides to keep the selection on it)
+		constexpr int kSheetSlots = 15;  // a title and fourteen rows per column
+		struct SheetColumn
+		{
+			std::string title;        // "" for a column that continues the block to its left
+			bool titleSpans = false;  // GAMEPLAY: the title is centred over this column and the next
+			std::vector<std::string> rows;  // row keys (RowKey) into the list's entries
+		};
+		struct SheetState
+		{
+			int col = 0;
+			int row = 0;
+			int firstCol = 0;
+			bool capture = false;       // a row is waiting for its key
+			int captureContext = -1;    // the context a game control or menu action is bound in (-1: an extra row)
+			std::string captureEvent;   // its event id
+			long long releaseAtMs = 0;  // when the page's remap guard comes off after that capture
+			std::vector<SheetColumn> columns;
+			std::vector<std::string> drawn;  // what each cell last showed, so SetEntry runs only on a change
+		};
+		SheetState g_sheet;  // main thread (the journal's frame and its input both run there)
 		std::array<std::vector<std::uint16_t>, 3> g_before;  // main thread: the control's keys when the remap began
 		unbinder::GameplaySnapshot g_beforeAll;             // main thread: every Gameplay control's keys when the remap began
 
@@ -204,11 +231,22 @@ namespace controlslist
 		// is chosen further down. A row carrying a name this mod invented - "LT" - matches no art and draws no tile
 		// at all, which is what happened (the owner, 2026-09-16).
 		//
-		// On the keyboard the column shows the key's own name, which is what this mod already has.
+		// On the keyboard and mouse the column shows the name the GAME gives the key (BSInputDeviceManager's own lookup,
+		// the one its real rows use), because the key tile is drawn from that name: "Esc" has a tile, this mod's INI name
+		// "Escape" does not and came out as small text on the 1.1.1 menu rows (Menus: Cancel). This mod's own name is the
+		// fallback when the game has none.
 		std::string RowButtonName(std::uint16_t a_key, int a_device)
 		{
 			if (a_key == kUnmappedID) { return {}; }
 			if (a_device == 2) { return unbinder::GamepadButtonName(a_key); }
+			if (auto* devices = RE::BSInputDeviceManager::GetSingleton())
+			{
+				RE::BSFixedString gameName;
+				if (devices->GetButtonNameFromID(static_cast<RE::INPUT_DEVICE>(a_device), static_cast<std::int32_t>(a_key), gameName) && gameName.c_str() && gameName.c_str()[0])
+				{
+					return gameName.c_str();
+				}
+			}
 			const char* name = unbinder::ButtonName(a_key, a_device);
 			return (name && name[0]) ? std::string(name) : std::format("0x{:02x}", a_key);
 		}
@@ -228,7 +266,8 @@ namespace controlslist
 		void CloneRowMembers(const RE::GFxValue& a_template, RE::GFxValue& a_row, const char* a_forRow)
 		{
 			if (!a_template.IsObject() || !a_row.IsObject()) { return; }
-			static const std::set<std::string> kOwn = { "text", "buttonName", "buttonID", "sortIndex", "_uvcAdded", "_uvcFunction", "_uvcBaseName" };
+			static const std::set<std::string> kOwn = { "text", "buttonName", "buttonID", "sortIndex", "_uvcAdded", "_uvcFunction", "_uvcBaseName", "_uvcRowKey", "_uvcTitle",
+			                                             "_uvcBlank" };
 			std::string copied;
 			a_template.VisitMembers([&](const char* a_name, const RE::GFxValue& a_value) {
 				if (!a_name || kOwn.count(a_name)) { return; }
@@ -264,6 +303,19 @@ namespace controlslist
 			NumberMember(a_entry, "sortIndex", f.sortIndex);
 			RE::GFxValue added;
 			f.added = a_entry.GetMember("_uvcAdded", &added) && added.IsBool() && added.GetBool();
+			// A menu row or a block title (1.1.1): its label is an action name that can also be a Gameplay control's
+			// ("Toggle Always Run", "Run"), so it is never looked up as one. It is blank only when it has no key.
+			RE::GFxValue rowKey;
+			if (a_entry.GetMember("_uvcRowKey", &rowKey) && rowKey.IsString() && rowKey.GetString() && rowKey.GetString()[0])
+			{
+				f.function = true;
+				if (f.buttonName.empty())
+				{
+					f.blank = true;
+					f.why = std::string_view(rowKey.GetString()).rfind("title:", 0) == 0 ? "a block title" : "a menu row with no key on this device";
+				}
+				return f;
+			}
 			// An extra row ([Functions]) is not a user event, so the live map knows nothing about it: its key comes
 			// from the row's own binding, and the row is blank until the player gives it one.
 			if (IEqualsView(f.text, unbinder::kModifierRowName))
@@ -358,13 +410,126 @@ namespace controlslist
 			return false;
 		}
 
+		// THE LAYOUT (the owner, 2026-09-28: "align all the control page rows to the left so that their text is to the left and
+		// that they all have the same font size and that the controls are arranged in blocks that are distinct, like for menus
+		// block and then other blocks"). The list is split into blocks, each opened by a title row - GAMEPLAY over the game's
+		// own controls, EXTRA CONTROLS over this mod's extra rows, then one per menu (MENUS, ITEMS, INVENTORY ...) - and every
+		// row's name is drawn left-aligned at the list's own size in a column wide enough that nothing is shrunk to fit.
+		//
+		// A title row is an entry like any other (a row the list draws) with no key; pressing it sets nothing. Inside a menu
+		// block a row is labelled by its action alone ("Cancel"), so names repeat between blocks and a row this mod adds is
+		// identified by _uvcRowKey instead of its text.
+		constexpr const char* kGameplayTitle = "GAMEPLAY";
+		constexpr const char* kExtraTitle = "EXTRA CONTROLS";
+		constexpr double kNameWidth = 212.0;  // the name column: the field starts at 0 and the key tile at 228
+
+		std::string RowKey(const RE::GFxValue& a_entry)
+		{
+			const std::string key = StringMember(a_entry, "_uvcRowKey");
+			return key.empty() ? StringMember(a_entry, "text") : key;
+		}
+
+		std::string TitleKey(std::string_view a_title) { return "title:" + std::string(a_title); }
+
+		RE::GFxValue MakeTitleRow(RE::GFxMovieView* a_movie, const RE::GFxValue* a_template, std::string_view a_title)
+		{
+			RE::GFxValue value;
+			a_movie->CreateObject(&value);
+			const std::string text(a_title);
+			if (a_template && a_template->IsObject()) { CloneRowMembers(*a_template, value, text.c_str()); }
+			value.SetMember("text", RE::GFxValue(text.c_str()));
+			value.SetMember("buttonName", RE::GFxValue(""));
+			value.SetMember("buttonID", RE::GFxValue(static_cast<double>(kUnmappedID)));
+			value.SetMember("_uvcAdded", RE::GFxValue(true));
+			value.SetMember("_uvcFunction", RE::GFxValue(true));  // never the row that decides the device family
+			value.SetMember("_uvcTitle", RE::GFxValue(true));
+			value.SetMember("_uvcRowKey", RE::GFxValue(TitleKey(a_title).c_str()));
+			value.SetMember("_uvcBaseName", RE::GFxValue(""));
+			return value;
+		}
+
+		// Appends a title row unless one with that key is already in the list.
+		bool AppendTitle(RE::GFxMovieView* a_movie, RE::GFxValue& a_entries, std::vector<std::string>& a_present, std::string_view a_title)
+		{
+			const std::string key = TitleKey(a_title);
+			if (std::find(a_present.begin(), a_present.end(), key) != a_present.end()) { return false; }
+			RE::GFxValue last;
+			const bool haveLast = a_entries.GetArraySize() > 0 && a_entries.GetElement(a_entries.GetArraySize() - 1, &last) && last.IsObject();
+			RE::GFxValue value = MakeTitleRow(a_movie, haveLast ? &last : nullptr, a_title);
+			double sortIndex = 0.0;
+			if (haveLast && NumberMember(last, "sortIndex", sortIndex)) { value.SetMember("sortIndex", RE::GFxValue(sortIndex + 1.0)); }
+			const auto size = a_entries.GetArraySize();
+			a_entries.SetArraySize(size + 1);
+			a_entries.SetElement(size, value);
+			a_present.push_back(key);
+			return true;
+		}
+
+		// GAMEPLAY goes above the game's own rows: the array is rebuilt with the title first, the way AddMissingRows puts
+		// rows back, and its sortIndex is one below the first row's.
+		bool AddGameplayTitle(RE::GFxMovieView* a_movie, RE::GFxValue& a_entries)
+		{
+			const std::uint32_t count = a_entries.GetArraySize();
+			if (count == 0) { return false; }
+			RE::GFxValue first;
+			if (!a_entries.GetElement(0, &first) || !first.IsObject()) { return false; }
+			if (RowKey(first) == TitleKey(kGameplayTitle)) { return false; }
+			std::vector<RE::GFxValue> rows;
+			rows.reserve(count + 1);
+			RE::GFxValue title = MakeTitleRow(a_movie, &first, kGameplayTitle);
+			double sortIndex = 0.0;
+			if (NumberMember(first, "sortIndex", sortIndex)) { title.SetMember("sortIndex", RE::GFxValue(sortIndex - 1.0)); }
+			rows.push_back(title);
+			for (std::uint32_t i = 0; i < count; ++i)
+			{
+				RE::GFxValue v;
+				if (a_entries.GetElement(i, &v)) { rows.push_back(v); }
+			}
+			a_entries.SetArraySize(static_cast<std::uint32_t>(rows.size()));
+			for (std::uint32_t i = 0; i < rows.size(); ++i) { a_entries.SetElement(i, rows[i]); }
+			return true;
+		}
+
+		// Every row clip on stage: the name left-aligned at the list's own size, in the full name column, never shrunk.
+		// Set on the clip each frame it differs - the list reuses clips as it scrolls - and a title row is drawn in the
+		// list's highlight gold so a block is told apart at a glance.
+		void LayOutRowClip(RE::GFxValue& a_clip, bool a_title, double a_width = kNameWidth)
+		{
+			RE::GFxValue field;
+			if (!a_clip.GetMember("textField", &field) || !field.IsDisplayObject()) { return; }
+			double width = 0.0;
+			if (!NumberMember(field, "_width", width) || width != a_width) { field.SetMember("_width", RE::GFxValue(a_width)); }
+			RE::GFxValue autoSize;
+			if (!field.GetMember("textAutoSize", &autoSize) || !autoSize.IsString() || std::string_view(autoSize.GetString()) != "none")
+			{
+				field.SetMember("textAutoSize", RE::GFxValue("none"));
+			}
+			RE::GFxValue format;
+			if (!field.Invoke("getTextFormat", &format, nullptr, 0) || !format.IsObject()) { return; }
+			const std::string align = StringMember(format, "align");
+			double color = -1.0;
+			NumberMember(format, "color", color);
+			const double wantColor = a_title ? static_cast<double>(0xC8A96E) : static_cast<double>(0xFFFFFF);
+			const bool colorOwned = a_title || color == static_cast<double>(0xC8A96E);  // only undo the gold this mod set
+			if (align == "left" && (!colorOwned || color == wantColor)) { return; }
+			format.SetMember("align", RE::GFxValue("left"));
+			if (colorOwned) { format.SetMember("color", RE::GFxValue(wantColor)); }
+			field.Invoke("setTextFormat", nullptr, &format, 1);
+			field.Invoke("setNewTextFormat", nullptr, &format, 1);
+			if (colorOwned) { field.SetMember("textColor", RE::GFxValue(wantColor)); }
+		}
+
 		// The game leaves a control with no key out of the list altogether. Every control the INI list unbinds on the
 		// device family being shown is put back as a row with no key, where controlmap.txt orders it, with a sortIndex
 		// between its neighbours' so the list's own re-sorts (after a remap) keep it there. Returns true when rows were
 		// added (the caller redraws the list).
 		bool AddMissingRows(RE::GFxMovieView* a_movie, RE::GFxValue& a_entries, bool a_gamepad)
 		{
-			const auto missing = unbinder::ListedKeylessOnFamily(a_gamepad);
+			auto missing = unbinder::ListedKeylessOnFamily(a_gamepad);
+			for (auto& bound : unbinder::BoundOnFamily(a_gamepad))
+			{
+				if (std::none_of(missing.begin(), missing.end(), [&](const unbinder::KeylessControl& a_k) { return a_k.event == bound.event; })) { missing.push_back(std::move(bound)); }
+			}
 			if (missing.empty()) { return false; }
 
 			struct Row
@@ -384,7 +549,7 @@ namespace controlslist
 				if (!a_entries.GetElement(i, &r.value)) { continue; }
 				if (r.value.IsObject())
 				{
-					r.text = StringMember(r.value, "text");
+					r.text = RowKey(r.value);
 					r.order = r.text.empty() ? -1 : unbinder::OrderInContext(r.text);
 					r.hasSort = NumberMember(r.value, "sortIndex", r.sortIndex);
 				}
@@ -452,7 +617,7 @@ namespace controlslist
 			for (std::uint32_t i = 0; i < count; ++i)
 			{
 				RE::GFxValue value;
-				if (a_entries.GetElement(i, &value) && value.IsObject()) { present.push_back(StringMember(value, "text")); }
+				if (a_entries.GetElement(i, &value) && value.IsObject()) { present.push_back(RowKey(value)); }
 				else { present.emplace_back(); }
 			}
 
@@ -479,6 +644,15 @@ namespace controlslist
 				}
 				else
 				{
+					{
+						std::vector<std::string> keys;
+						for (std::uint32_t i = 0; i < a_entries.GetArraySize(); ++i)
+						{
+							RE::GFxValue v;
+							keys.push_back(a_entries.GetElement(i, &v) && v.IsObject() ? RowKey(v) : std::string());
+						}
+						if (AppendTitle(a_movie, a_entries, keys, kExtraTitle)) { ++added; }
+					}
 					RE::GFxValue value;
 					a_movie->CreateObject(&value);
 					RE::GFxValue last;
@@ -567,6 +741,84 @@ namespace controlslist
 			return added > 0;
 		}
 
+		// The menu actions this mod turned from links into separate mappings (Unbinder, 1.1.1), one row each, after the
+		// extra rows: "Inventory: Charge Item", "Menus: Cancel". A row is listed on the family its links were on - the
+		// keyboard page shows the keyboard key (the mouse button when the keyboard has none), the gamepad page the button.
+		// Drawn the way an extra row is: the game has no row for a menu action, so the key tile is this mod's.
+		std::string DelinkedKeyText(const unbinder::DelinkedAction& a_d, bool a_gamepad)
+		{
+			for (const int device : a_gamepad ? std::vector<int>{ 2 } : std::vector<int>{ 0, 1 })
+			{
+				for (const std::uint16_t k : unbinder::LiveKeysIn(a_d.context, a_d.event, device))
+				{
+					if (k != kUnmappedID) { return RowButtonName(k, device); }
+				}
+			}
+			return {};
+		}
+
+		bool AddDelinkedRows(RE::GFxMovieView* a_movie, RE::GFxValue& a_entries, bool a_gamepad)
+		{
+			auto list = unbinder::GetDelinked();
+			if (list.empty()) { return false; }
+			// One block per column, in the game's context order; inside a block, controlmap.txt's order. A row may be listed in
+			// another menu's column (Charge Item under ITEMS), and hidden rows are left off (2026-09-28).
+			std::erase_if(list, [](const unbinder::DelinkedAction& a_d) { return a_d.hidden; });
+			if (list.empty()) { return false; }
+			std::stable_sort(list.begin(), list.end(), [](const unbinder::DelinkedAction& a_l, const unbinder::DelinkedAction& a_r) { return a_l.sheetContext < a_r.sheetContext; });
+			std::vector<std::string> present;
+			for (std::uint32_t i = 0; i < a_entries.GetArraySize(); ++i)
+			{
+				RE::GFxValue value;
+				present.push_back(a_entries.GetElement(i, &value) && value.IsObject() ? RowKey(value) : std::string());
+			}
+			int added = 0;
+			for (const auto& d : list)
+			{
+				if (a_gamepad ? !d.gamepad : !d.keyboardFamily) { continue; }
+				if (AppendTitle(a_movie, a_entries, present, d.title)) { ++added; }
+				const std::string keyText = DelinkedKeyText(d, a_gamepad);
+				const auto at = std::find(present.begin(), present.end(), d.row);
+				if (at != present.end())
+				{
+					RE::GFxValue entry;
+					const auto index = static_cast<std::uint32_t>(std::distance(present.begin(), at));
+					if (a_entries.GetElement(index, &entry) && entry.IsObject() && StringMember(entry, "buttonName") != keyText)
+					{
+						entry.SetMember("buttonName", RE::GFxValue(keyText.c_str()));
+						entry.SetMember("_uvcBaseName", RE::GFxValue(keyText.c_str()));
+						++added;
+					}
+					continue;
+				}
+				RE::GFxValue value;
+				a_movie->CreateObject(&value);
+				RE::GFxValue last;
+				double sortIndex = 0.0;
+				bool hasSort = false;
+				if (a_entries.GetArraySize() > 0 && a_entries.GetElement(a_entries.GetArraySize() - 1, &last) && last.IsObject())
+				{
+					CloneRowMembers(last, value, d.row.c_str());
+					hasSort = NumberMember(last, "sortIndex", sortIndex);
+				}
+				value.SetMember("text", RE::GFxValue(d.action.c_str()));
+				value.SetMember("_uvcRowKey", RE::GFxValue(d.row.c_str()));
+				value.SetMember("buttonName", RE::GFxValue(keyText.c_str()));
+				value.SetMember("buttonID", RE::GFxValue(static_cast<double>(kUnmappedID)));
+				if (hasSort) { value.SetMember("sortIndex", RE::GFxValue(sortIndex + 1.0)); }
+				value.SetMember("_uvcAdded", RE::GFxValue(true));
+				value.SetMember("_uvcFunction", RE::GFxValue(true));
+				value.SetMember("_uvcBaseName", RE::GFxValue(keyText.c_str()));
+				const auto size = a_entries.GetArraySize();
+				a_entries.SetArraySize(size + 1);
+				a_entries.SetElement(size, value);
+				present.push_back(d.row);
+				++added;
+				logger::debug("controls list: menu row \"{}\" added to the {} list (key \"{}\")", d.row, a_gamepad ? "gamepad" : "keyboard", keyText.empty() ? "none" : keyText);
+			}
+			return added > 0;
+		}
+
 		// Records the first key pressed while a remap is on. Runs on the main thread when the game dispatches input,
 		// before the menus handle it.
 		class InputSink : public RE::BSTEventSink<RE::InputEvent*>
@@ -601,13 +853,23 @@ namespace controlslist
 									 unbinder::DeviceName(static_cast<int>(e->GetDevice())), button->GetIDCode(), user.c_str() ? user.c_str() : "", button->Value(),
 									 button->HeldDuration(), button->IsDown() ? " DOWN" : " UP");
 					}
-					if (!g_remapArmed.load() || !button->IsDown()) { continue; }
+					if (!g_remapArmed.load()) { continue; }
 					std::scoped_lock l(g_pressLock);
-					if (!g_hasPress)
+					const PressedKey now{ static_cast<int>(e->GetDevice()), button->GetIDCode() };
+					if (button->IsDown())
 					{
-						g_pressed = { static_cast<int>(e->GetDevice()), button->GetIDCode() };
-						g_hasPress = true;
+						if (!g_hasPress)
+						{
+							g_pressed = now;
+							g_hasPress = true;
+						}
+						else if (!g_hasPress2 && !g_firstReleased && (now.device != g_pressed.device || now.code != g_pressed.code))
+						{
+							g_pressed2 = now;
+							g_hasPress2 = true;
+						}
 					}
+					else if (button->IsUp() && g_hasPress && now.device == g_pressed.device && now.code == g_pressed.code) { g_firstReleased = true; }
 				}
 				return RE::BSEventNotifyControl::kContinue;
 			}
@@ -633,6 +895,12 @@ namespace controlslist
 
 			const std::string pressedText = hasPress ? std::format("{} 0x{:02x}", unbinder::DeviceName(pressed.device), pressed.code) : std::string("nothing recorded");
 
+			if (event.rfind("title:", 0) == 0)
+			{
+				SetRemapResult(std::format("\"{}\" is a block title; nothing to set", event.substr(6)));
+				return;
+			}
+
 			// The Modifier row first - it is this mod's own, not a user event and not a [Functions] row.
 			if (IEqualsView(event, unbinder::kModifierRowName))
 			{
@@ -649,6 +917,55 @@ namespace controlslist
 				unbinder::ApplyAll("modifier row changed");
 				const std::string text = same ? std::format("\"{}\": its own button pressed again ({}); the designated modifier is cleared", event, pressedText) :
 												std::format("\"{}\": the designated modifier is now {}; every \"Modifier\" combination follows it", event, pressedText);
+				SetRemapResult(text);
+				logger::info("controls list: {}", text);
+				return;
+			}
+
+			// A menu row (a linked action made separate, 1.1.1): the press is the whole answer, as for an extra row. Its own key
+			// again unbinds it in that menu ([Unbound]); any other key becomes its [Bound] line in that menu's context, and
+			// is refused when another action of that menu already holds it. The Favourite button's row never changes.
+			unbinder::DelinkedAction menuRow;
+			if (unbinder::FindDelinkedRow(event, menuRow))
+			{
+				if (!hasPress || pressed.device < 0 || pressed.device > 2)
+				{
+					SetRemapResult(std::format("\"{}\": the remap ended with no key recorded; the row is unchanged", event));
+					return;
+				}
+				if (menuRow.fixed)
+				{
+					const std::string text = std::format("\"{}\" is fixed to F on the keyboard and Y on the controller; {} ignored", event, pressedText);
+					SetRemapResult(text);
+					logger::info("controls list: {}", text);
+					return;
+				}
+				const auto keys = unbinder::LiveKeysIn(menuRow.context, menuRow.event, pressed.device);
+				const bool own = std::any_of(keys.begin(), keys.end(), [&](std::uint16_t a_k) { return a_k == pressed.code; });
+				std::string text;
+				if (own)
+				{
+					std::string why;
+					unbinder::RemoveBind(menuRow.context, menuRow.event, pressed.device);
+					const bool ok = unbinder::Unbind(menuRow.context, menuRow.event, pressed.device, why);
+					text = ok ? std::format("\"{}\": its own key pressed again ({}); unbound on the {}", event, pressedText, unbinder::DeviceName(pressed.device)) :
+					            std::format("\"{}\": its own key pressed again ({}), but unbinding failed: {}", event, pressedText, why);
+				}
+				else
+				{
+					unbinder::Forget(menuRow.context, menuRow.event, pressed.device);
+					unbinder::SetBind(menuRow.context, menuRow.event, pressed.device, static_cast<std::uint16_t>(pressed.code));
+					unbinder::ApplyAll("menu row set");
+					const auto now = unbinder::LiveKeysIn(menuRow.context, menuRow.event, pressed.device);
+					if (std::find(now.begin(), now.end(), static_cast<std::uint16_t>(pressed.code)) == now.end())
+					{
+						unbinder::RemoveBind(menuRow.context, menuRow.event, pressed.device);
+						unbinder::ApplyAll("menu row refused");
+						text = std::format("\"{}\": {} refused - another action in that menu holds it (see the log)", event, pressedText);
+					}
+					else { text = std::format("\"{}\": bound to {}", event, pressedText); }
+				}
+				settings::Save();
 				SetRemapResult(text);
 				logger::info("controls list: {}", text);
 				return;
@@ -760,7 +1077,8 @@ namespace controlslist
 		{
 			const std::string page = PagePathCopy();
 			RE::GFxValue flag;
-			const bool remap = !page.empty() && a_movie->GetVariable(&flag, (page + ".bRemapMode").c_str()) && flag.IsBool() && flag.GetBool();
+			const bool remap = !page.empty() && a_movie->GetVariable(&flag, (page + ".bRemapMode").c_str()) && flag.IsBool() && flag.GetBool() && !g_sheet.capture &&
+			                   g_sheet.releaseAtMs == 0;
 			if (remap && !g_remapActive.load())
 			{
 				double selected = -1.0;
@@ -768,7 +1086,7 @@ namespace controlslist
 				RE::GFxValue entry;
 				if (NumberMember(a_list, "iSelectedIndex", selected) && selected >= 0 && a_entries.GetElement(static_cast<std::uint32_t>(selected), &entry) && entry.IsObject())
 				{
-					event = StringMember(entry, "text");
+					event = RowKey(entry);
 				}
 				g_remapEvent = event;
 				for (int d = 0; d < 3; ++d) { g_before[d] = unbinder::LiveKeys(event, d); }
@@ -776,6 +1094,8 @@ namespace controlslist
 				{
 					std::scoped_lock l(g_pressLock);
 					g_hasPress = false;
+					g_hasPress2 = false;
+					g_firstReleased = false;
 				}
 				g_remapActive.store(true);
 				g_remapArmed.store(true);
@@ -880,6 +1200,8 @@ namespace controlslist
 				// Both are asked, and the order matters: the vanilla rows this mod puts back are placed by
 				// controlmap.txt order, and the extra rows go after all of them.
 				changed = AddFunctionRows(a_movie, entries, gamepad) || changed;
+				changed = AddDelinkedRows(a_movie, entries, gamepad) || changed;
+				changed = AddGameplayTitle(a_movie, entries) || changed;
 			}
 			if (changed)
 			{
@@ -909,6 +1231,10 @@ namespace controlslist
 				if (!entries.GetElement(static_cast<std::uint32_t>(idx), &entry) || !entry.IsObject()) { continue; }
 
 				const RowFacts row = ReadRow(entry, gamepad);
+				{
+					RE::GFxValue titleMark;
+					LayOutRowClip(clip, entry.GetMember("_uvcTitle", &titleMark) && titleMark.IsBool() && titleMark.GetBool());
+				}
 				RE::GFxValue mark;
 				const bool wasBlank = clip.GetMember("_uvcBlank", &mark) && mark.IsBool() && mark.GetBool();
 				if (row.blank)
@@ -977,7 +1303,7 @@ namespace controlslist
 				// The guard is a PREFIX test, not "is the composed string different from what is there". This runs
 				// every frame, and after the first write the row already reads "Left Shift + Q", so composing again
 				// would give "Left Shift + Left Shift + Q" and grow without bound.
-				if (!row.blank && !row.text.empty() && !row.buttonName.empty())
+				if (!row.blank && !row.function && !row.text.empty() && !row.buttonName.empty())
 				{
 					const int device = gamepad ? 2 : 0;
 					std::uint16_t modifier = 0;
@@ -1004,6 +1330,621 @@ namespace controlslist
 			g_rowsBlankNow.store(blankNow);
 		}
 
+		// THE CONTROLS SHEET (the owner, 2026-09-28, in turn: "break up all these different control rows so that they're not
+		// just vertical, but are also separated horizontally ... each column would be for a different context"; "There's no
+		// need to have the bumpers navigate anything or to have tabs. This is just one continuous sheet of D-pad selectable
+		// options"; "the gameplay section of the controls should be two columns wide. And the gameplay header title should
+		// be centered over these two columns ... all the game controls are in one area and don't need to scroll").
+		//
+		// The game's list stays the source of every row - its entries are what the game remaps, and this mod already adds
+		// its own rows and block titles to them - but it is no longer drawn. The sheet draws the same entries in columns:
+		// GAMEPLAY across two columns under one centred title, then EXTRA CONTROLS, then one column per menu. The D-pad moves
+		// freely over it (left from the first column goes back to the System list, as the game's own list does) and the
+		// sheet slides sideways to keep the selection on screen.
+		//
+		// Accept on a game control starts the game's own remap for it (the page's onInputMappingPress, with the row selected
+		// in the hidden list, so the remap watch and the INI recording work exactly as before). Accept on a row of this
+		// mod's - an extra row or a menu action - waits for the key itself: those rows are named after actions ("Run",
+		// "Zoom In") that are also Gameplay controls, and the game's remap would move the Gameplay control of that name.
+		//
+		// A cell is a copy of the list's Entry0 drawn by the list's own SetEntry, so its key tile is this journal's.
+		constexpr double kColWidth = 225.0;  // four columns and their key tiles inside the screen
+		constexpr double kCellNameWidth = 160.0;
+		constexpr double kCellArtX = 168.0;
+		constexpr double kSlotPitch = 29.0;
+		constexpr std::uint32_t kDimColor = 0x6E6E6E;  // this journal lifts greys: 0x808080 still reads white
+		constexpr int kInputMappingState = 6;  // SystemPage.INPUT_MAPPING_STATE
+
+		bool IsTitleEntry(const RE::GFxValue& a_entry)
+		{
+			RE::GFxValue v;
+			return a_entry.GetMember("_uvcTitle", &v) && v.IsBool() && v.GetBool();
+		}
+
+		// A row this mod draws and owns (an extra row, the Modifier row, a menu action): its key is captured by this mod.
+		bool IsOwnRow(const RE::GFxValue& a_entry)
+		{
+			RE::GFxValue v;
+			if (a_entry.GetMember("_uvcRowKey", &v) && v.IsString()) { return true; }
+			return a_entry.GetMember("_uvcFunction", &v) && v.IsBool() && v.GetBool();
+		}
+
+		std::vector<SheetColumn> BuildSheet(const RE::GFxValue& a_entries)
+		{
+			struct Block
+			{
+				std::string title;
+				std::vector<std::string> rows;
+			};
+			std::vector<Block> blocks;
+			for (std::uint32_t i = 0; i < a_entries.GetArraySize(); ++i)
+			{
+				RE::GFxValue entry;
+				if (!a_entries.GetElement(i, &entry) || !entry.IsObject()) { continue; }
+				if (IsTitleEntry(entry)) { blocks.push_back({ StringMember(entry, "text"), {} }); continue; }
+				if (blocks.empty()) { blocks.push_back({ "", {} }); }
+				blocks.back().rows.push_back(RowKey(entry));
+			}
+			std::vector<SheetColumn> out;
+			const std::size_t perColumn = kSheetSlots - 1;
+			for (const auto& b : blocks)
+			{
+				if (b.rows.empty()) { continue; }
+				const bool gameplay = b.title == kGameplayTitle;
+				// GAMEPLAY is always two columns, split evenly; any other block runs on into more columns only if it is long.
+				const std::size_t split = gameplay ? (b.rows.size() + 1) / 2 : perColumn;
+				for (std::size_t at = 0; at < b.rows.size(); at += split)
+				{
+					SheetColumn c;
+					c.title = at == 0 ? b.title : std::string();
+					c.titleSpans = gameplay && at == 0;
+					c.rows.assign(b.rows.begin() + static_cast<std::ptrdiff_t>(at), b.rows.begin() + static_cast<std::ptrdiff_t>(std::min(b.rows.size(), at + split)));
+					out.push_back(std::move(c));
+				}
+			}
+			return out;
+		}
+
+		bool PageInControls(RE::GFxMovieView* a_movie, RE::GFxValue& a_page)
+		{
+			const std::string path = PagePathCopy();
+			if (path.empty() || !a_movie->GetVariable(&a_page, path.c_str()) || !a_page.IsObject()) { return false; }
+			double state = -1.0;
+			return NumberMember(a_page, "iCurrentState", state) && static_cast<int>(state) == kInputMappingState;
+		}
+
+		void SheetMessage(RE::GFxValue& a_page, const char* a_text)
+		{
+			RE::GFxValue error;
+			if (!a_page.GetMember("ErrorText", &error) || !error.IsDisplayObject()) { return; }
+			if (a_text && a_text[0])
+			{
+				RE::GFxValue arg(a_text);
+				error.Invoke("SetText", nullptr, &arg, 1);
+			}
+			else { a_page.Invoke("HideErrorText", nullptr, nullptr, 0); }
+		}
+
+		void KeepSelectionOnScreen()
+		{
+			const int count = static_cast<int>(g_sheet.columns.size());
+			g_sheet.col = std::clamp(g_sheet.col, 0, std::max(0, count - 1));
+			if (count > 0) { g_sheet.row = std::clamp(g_sheet.row, 0, std::max(0, static_cast<int>(g_sheet.columns[g_sheet.col].rows.size()) - 1)); }
+			// GAMEPLAY's two columns come on screen together.
+			int wantFirst = g_sheet.firstCol;
+			const int start = (g_sheet.col > 0 && g_sheet.columns[g_sheet.col].title.empty() && g_sheet.columns[g_sheet.col - 1].titleSpans) ? g_sheet.col - 1 : g_sheet.col;
+			if (start < wantFirst) { wantFirst = start; }
+			if (g_sheet.col >= wantFirst + kSheetCols) { wantFirst = g_sheet.col - kSheetCols + 1; }
+			g_sheet.firstCol = std::clamp(wantFirst, 0, std::max(0, count - kSheetCols));
+		}
+
+		// Accept on the selected cell.
+		void ActivateCell(RE::GFxMovieView* a_movie, RE::GFxValue& a_page)
+		{
+			if (g_sheet.columns.empty()) { return; }
+			const auto& column = g_sheet.columns[g_sheet.col];
+			if (g_sheet.row >= static_cast<int>(column.rows.size())) { return; }
+			const std::string key = column.rows[g_sheet.row];
+			RE::GFxValue list;
+			if (!FindList(a_movie, list)) { return; }
+			RE::GFxValue entries;
+			if (!list.GetMember("EntriesA", &entries) || !entries.IsArray()) { return; }
+			for (std::uint32_t i = 0; i < entries.GetArraySize(); ++i)
+			{
+				RE::GFxValue entry;
+				if (!entries.GetElement(i, &entry) || !entry.IsObject() || RowKey(entry) != key) { continue; }
+				{
+					unbinder::DelinkedAction menuRow;
+					g_sheet.capture = true;
+					a_page.SetMember("bRemapMode", RE::GFxValue(true));  // the page keeps every input to itself meanwhile
+					SheetMessage(a_page, "$Press a button to map to this action.");
+					g_remapEvent = key;
+					for (auto& b : g_before) { b.clear(); }
+					g_beforeAll = unbinder::SnapshotGameplay();
+					{
+						std::scoped_lock l(g_pressLock);
+						g_hasPress = false;
+						g_hasPress2 = false;
+						g_firstReleased = false;
+					}
+					g_remapArmed.store(true);
+					// Which rule set the key goes through: a game control (context 0), a menu action (its own context), or an
+					// extra row / the Modifier row (EvaluateRemap, which writes into the owning mod's file).
+					g_sheet.captureContext = -1;
+					g_sheet.captureEvent.clear();
+					if (unbinder::FindDelinkedRow(key, menuRow))
+					{
+						g_sheet.captureContext = menuRow.context;
+						g_sheet.captureEvent = menuRow.event;
+					}
+					else if (!IsOwnRow(entry))
+					{
+						g_sheet.captureContext = 0;
+						g_sheet.captureEvent = StringMember(entry, "text");
+					}
+					logger::debug("controls list: sheet cell \"{}\" waits for a key", key);
+					return;
+				}
+			}
+		}
+
+		// The page's handleInput, wrapped: the sheet takes the D-pad and Accept while the Controls panel is open.
+		class SheetInput : public RE::GFxFunctionHandler
+		{
+		public:
+			void Call(Params& a_params) override
+			{
+				bool handled = false;
+				if (a_params.thisPtr && a_params.argCount >= 1 && a_params.args && a_params.args[0].IsObject())
+				{
+					handled = Handle(a_params.movie, *a_params.thisPtr, a_params.args[0]);
+				}
+				if (handled)
+				{
+					if (a_params.retVal) { a_params.retVal->SetBoolean(true); }
+					return;
+				}
+				RE::GFxValue original;
+				if (!a_params.thisPtr || !a_params.thisPtr->GetMember("_uvcHandleInput", &original) || original.IsUndefined()) { return; }
+				std::vector<RE::GFxValue> args;
+				args.push_back(*a_params.thisPtr);
+				for (std::uint32_t i = 0; i < a_params.argCount; ++i) { args.push_back(a_params.args[i]); }
+				RE::GFxValue result;
+				original.Invoke("call", &result, args.data(), args.size());
+				if (a_params.retVal) { *a_params.retVal = result; }
+			}
+
+		private:
+			static bool Handle(RE::GFxMovie* a_movie, RE::GFxValue& a_page, const RE::GFxValue& a_details)
+			{
+				double state = -1.0;
+				if (!NumberMember(a_page, "iCurrentState", state) || static_cast<int>(state) != kInputMappingState) { return false; }
+				RE::GFxValue remap;
+				if (a_page.GetMember("bRemapMode", &remap) && remap.IsBool() && remap.GetBool()) { return g_sheet.capture; }
+				if (g_sheet.columns.empty()) { return false; }
+				const std::string value = StringMember(a_details, "value");
+				const std::string nav = StringMember(a_details, "navEquivalent");
+				{
+					double code = -1.0;
+					NumberMember(a_details, "code", code);
+					logger::trace("controls sheet: input value \"{}\" nav \"{}\" code {} (column {}, row {})", value, nav, code, g_sheet.col, g_sheet.row);
+				}
+				if (value != "keyDown" && value != "keyHold") { return false; }
+				if (nav == "up") { --g_sheet.row; }
+				else if (nav == "down") { ++g_sheet.row; }
+				else if (nav == "left")
+				{
+					if (g_sheet.col == 0) { return false; }  // the page turns it into Tab: back to the System list
+					--g_sheet.col;
+				}
+				else if (nav == "right") { ++g_sheet.col; }
+				else if (nav == "enter-gamepad_A")
+				{
+					if (value != "keyDown") { return true; }
+					auto* movie = static_cast<RE::GFxMovieView*>(a_movie);
+					if (movie) { ActivateCell(movie, a_page); }
+					return true;
+				}
+				else { return false; }
+				KeepSelectionOnScreen();
+				return true;
+			}
+		};
+
+		// The mouse on the sheet (the owner, 2026-09-28: "the mouse couldnt select a control to change and it was locked to
+		// one entry"). A cell is a duplicate of the list's Entry0, and duplicateMovieClip does not carry the rollover and
+		// press handlers the list gave its own rows - which are hidden - so nothing answered the mouse. Each cell gets its
+		// own: rolling over selects it, a press selects it and starts the remap exactly as Accept does.
+		class SheetMouse : public RE::GFxFunctionHandler
+		{
+		public:
+			explicit SheetMouse(bool a_press) :
+				press(a_press) {}
+
+			void Call(Params& a_params) override
+			{
+				if (!a_params.thisPtr || !a_params.movie || g_sheet.capture || g_sheet.columns.empty()) { return; }
+				double col = -1.0, slot = -1.0;
+				if (!NumberMember(*a_params.thisPtr, "_uvcCol", col) || !NumberMember(*a_params.thisPtr, "_uvcSlot", slot) || slot < 1.0) { return; }
+				const int column = g_sheet.firstCol + static_cast<int>(col);
+				const int row = static_cast<int>(slot) - 1;
+				if (column < 0 || column >= static_cast<int>(g_sheet.columns.size()) || row >= static_cast<int>(g_sheet.columns[column].rows.size())) { return; }
+				auto* movie = static_cast<RE::GFxMovieView*>(a_params.movie);
+				RE::GFxValue page;
+				if (!PageInControls(movie, page)) { return; }
+				RE::GFxValue remap;
+				if (page.GetMember("bRemapMode", &remap) && remap.IsBool() && remap.GetBool()) { return; }
+				if (g_sheet.col != column || g_sheet.row != row) { logger::trace("controls sheet: mouse {} column {}, row {}", press ? "press" : "over", column, row); }
+				g_sheet.col = column;
+				g_sheet.row = row;
+				if (press) { ActivateCell(movie, page); }
+			}
+
+		private:
+			bool press;
+		};
+
+		void GiveCellTheMouse(RE::GFxMovieView* a_movie, RE::GFxValue& a_cell, int a_col, int a_slot)
+		{
+			static SheetMouse* over = new SheetMouse(false);
+			static SheetMouse* press = new SheetMouse(true);
+			a_cell.SetMember("_uvcCol", RE::GFxValue(static_cast<double>(a_col)));
+			a_cell.SetMember("_uvcSlot", RE::GFxValue(static_cast<double>(a_slot)));
+			RE::GFxValue fnOver, fnPress;
+			a_movie->CreateFunction(&fnOver, over);
+			a_movie->CreateFunction(&fnPress, press);
+			a_cell.SetMember("onRollOver", fnOver);
+			a_cell.SetMember("onPress", fnPress);
+		}
+
+		void InstallSheetInput(RE::GFxMovieView* a_movie, RE::GFxValue& a_page)
+		{
+			RE::GFxValue installed;
+			if (a_page.GetMember("_uvcHandleInput", &installed) && !installed.IsUndefined()) { return; }
+			RE::GFxValue original;
+			if (!a_page.GetMember("handleInput", &original) || original.IsUndefined()) { logger::warn("controls list: the System page has no handleInput; the controls sheet cannot take the D-pad"); return; }
+			static SheetInput* handler = new SheetInput();
+			RE::GFxValue fn;
+			a_movie->CreateFunction(&fn, handler);
+			a_page.SetMember("_uvcHandleInput", original);
+			a_page.SetMember("handleInput", fn);
+			logger::debug("controls list: the System page's input now reaches the controls sheet first");
+		}
+
+		void HideSheet(RE::GFxValue& a_list)
+		{
+			for (int c = 0; c < kSheetCols; ++c)
+			{
+				for (int s = 0; s < kSheetSlots; ++s)
+				{
+					RE::GFxValue cell;
+					if (a_list.GetMember(std::format("uvcCell{}_{}", c, s).c_str(), &cell) && cell.IsDisplayObject() && IsVisible(cell)) { SetVisible(cell, false); }
+				}
+			}
+			g_sheet.drawn.clear();
+		}
+
+		// The list is the data; the sheet is what is seen. Its own rows, arrows and scrollbar are hidden every frame
+		// (the list shows them again whenever it redraws).
+		void HideListChrome(RE::GFxValue& a_list)
+		{
+			for (int i = 0; i < kMaxRowClips; ++i)
+			{
+				RE::GFxValue clip;
+				if (!a_list.GetMember(std::format("Entry{}", i).c_str(), &clip) || !clip.IsDisplayObject()) { break; }
+				if (IsVisible(clip)) { SetVisible(clip, false); }
+			}
+			for (const char* name : { "ScrollUp", "ScrollDown", "scrollbar" })
+			{
+				RE::GFxValue part;
+				if (a_list.GetMember(name, &part) && part.IsDisplayObject() && IsVisible(part)) { SetVisible(part, false); }
+			}
+		}
+
+		// A key combination ("PS3_LT + PS3_RT", "L-Shift + Q") drawn as its tiles: InputMappingArt draws several tiles when
+		// its name map gives an array, so the combination is added to that map, from the codes the map already has for
+		// each part. Without it the art falls back to the text.
+		void TeachCombo(RE::GFxMovieView* a_movie, RE::GFxValue& a_cell, const std::string& a_key)
+		{
+			if (a_key.find(" + ") == std::string::npos) { return; }
+			RE::GFxValue art;
+			RE::GFxValue map;
+			if (!a_cell.GetMember("buttonArt", &art) || !art.IsDisplayObject() || !art.GetMember("_buttonNameMap", &map) || !map.IsObject()) { return; }
+			auto lower = [](std::string a_s) {
+				for (auto& ch : a_s) { ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch))); }
+				return a_s;
+			};
+			const std::string whole = lower(a_key);
+			RE::GFxValue known;
+			if (map.GetMember(whole.c_str(), &known) && known.IsArray()) { return; }
+			RE::GFxValue codes;
+			a_movie->CreateArray(&codes);
+			std::size_t pos = 0;
+			while (pos <= whole.size())
+			{
+				const std::size_t cut = whole.find(" + ", pos);
+				const std::string part = whole.substr(pos, cut == std::string::npos ? std::string::npos : cut - pos);
+				RE::GFxValue code;
+				if (!map.GetMember(part.c_str(), &code) || !code.IsNumber()) { return; }
+				codes.PushBack(code);
+				if (cut == std::string::npos) { break; }
+				pos = cut + 3;
+			}
+			map.SetMember(whole.c_str(), codes);
+		}
+
+		// The FONT colour in a field's html, replaced: the way a colour reaches a duplicated field in this journal (its
+		// textColor does not redraw).
+		void SetHtmlColor(RE::GFxValue& a_field, std::uint32_t a_rgb)
+		{
+			RE::GFxValue html;
+			if (!a_field.GetMember("htmlText", &html) || !html.IsString() || !html.GetString()) { return; }
+			std::string text = html.GetString();
+			const std::string want = std::format("COLOR=\"#{:06X}\"", a_rgb);
+			bool changed = false;
+			for (std::size_t at = text.find("COLOR=\"#"); at != std::string::npos; at = text.find("COLOR=\"#", at + want.size()))
+			{
+				if (text.compare(at, want.size(), want) != 0)
+				{
+					text.replace(at, want.size(), want);
+					changed = true;
+				}
+			}
+			if (changed) { a_field.SetMember("htmlText", RE::GFxValue(text.c_str())); }
+		}
+
+		// A key captured on the sheet for a game control or a menu action, applied as a [Bound] line in that control's context:
+		// its own key again (no Modifier) unbinds it; a key another control of that context holds is SWAPPED with this one's
+		// old key when both are Gameplay controls the game lets the player remap - the game's own rule - and refused
+		// otherwise ("That button is reserved.").
+		std::string ApplySheetBind(int a_context, const std::string& a_event, int a_device, std::uint16_t a_key, bool a_combo, bool& a_refused)
+		{
+			a_refused = false;
+			std::uint16_t oldKey = kUnmappedID, oldMod = 0;
+			unbinder::LiveBinding(a_context, a_event, a_device, oldKey, oldMod);
+			const std::uint16_t wantMod = a_combo ? unbinder::ModifierFor(a_device) : 0;
+			const std::string keyText = std::format("{} 0x{:02x}{}", unbinder::DeviceName(a_device), a_key, a_combo ? " + Modifier" : "");
+			if (!a_combo && a_key == oldKey && oldMod == 0)
+			{
+				std::string why;
+				unbinder::RemoveBind(a_context, a_event, a_device);
+				const bool ok = unbinder::Unbind(a_context, a_event, a_device, why);
+				return ok ? std::format("\"{}\": its own key pressed again ({}); unbound", a_event, keyText) : std::format("\"{}\": unbinding failed: {}", a_event, why);
+			}
+			unbinder::Holder holder;
+			std::string swapped;
+			if (unbinder::HolderOf(a_context, a_device, a_key, wantMod, holder) && !IEqualsView(holder.event, a_event))
+			{
+				if (a_context != 0 || !holder.remappable || oldKey == kUnmappedID)
+				{
+					a_refused = true;
+					return std::format("\"{}\": {} refused - \"{}\" holds it", a_event, keyText, holder.event);
+				}
+				unbinder::Forget(a_context, holder.event, a_device);
+				unbinder::SetBind(a_context, holder.event, a_device, oldKey, oldMod != 0);
+				swapped = holder.event;
+			}
+			unbinder::Forget(a_context, a_event, a_device);
+			unbinder::SetBind(a_context, a_event, a_device, a_key, a_combo);
+			unbinder::ApplyAll("controls sheet");
+			std::uint16_t nowKey = kUnmappedID, nowMod = 0;
+			unbinder::LiveBinding(a_context, a_event, a_device, nowKey, nowMod);
+			if (nowKey != a_key || nowMod != wantMod)
+			{
+				unbinder::RemoveBind(a_context, a_event, a_device);
+				if (!swapped.empty()) { unbinder::RemoveBind(a_context, swapped, a_device); }
+				unbinder::ApplyAll("controls sheet refused");
+				a_refused = true;
+				return std::format("\"{}\": {} refused (see the log)", a_event, keyText);
+			}
+			return swapped.empty() ? std::format("\"{}\": bound to {}", a_event, keyText) :
+			                         std::format("\"{}\": bound to {}; \"{}\" took its old key", a_event, keyText, swapped);
+		}
+
+		void UpdateSheet(RE::GFxMovieView* a_movie)
+		{
+			RE::GFxValue list;
+			if (!FindList(a_movie, list)) { return; }
+			RE::GFxValue page;
+			if (!PageInControls(a_movie, page))
+			{
+				HideSheet(list);
+				return;
+			}
+			InstallSheetInput(a_movie, page);
+			HideListChrome(list);
+
+			// A capture of this mod's: the key the sink recorded is the answer, handled the way the rows' remap always was.
+			if (g_sheet.capture)
+			{
+				bool pressed = false;
+				{
+					std::scoped_lock l(g_pressLock);
+					pressed = g_hasPress;
+				}
+				PressedKey first, second;
+				bool hasSecond = false, released = false;
+				{
+					std::scoped_lock l(g_pressLock);
+					first = g_pressed;
+					second = g_pressed2;
+					hasSecond = g_hasPress2;
+					released = g_firstReleased;
+				}
+				// The designated Modifier pressed first: wait for the button pressed while it is held (or its release, which
+				// makes the Modifier button itself the key).
+				const bool firstIsModifier = pressed && first.device >= 0 && first.device <= 2 && unbinder::ModifierFor(first.device) == first.code;
+				if (pressed && firstIsModifier && !hasSecond && !released) { pressed = false; }
+				if (pressed)
+				{
+					g_remapArmed.store(false);
+					g_sheet.capture = false;
+					const bool combo = firstIsModifier && hasSecond && second.device == first.device;
+					const PressedKey key = combo ? second : first;
+					bool refused = false;
+					std::string result;
+					if (g_sheet.captureContext >= 0 && key.device >= 0 && key.device <= 2)
+					{
+						result = ApplySheetBind(g_sheet.captureContext, g_sheet.captureEvent, key.device, static_cast<std::uint16_t>(key.code), combo, refused);
+						settings::Save();
+						SetRemapResult(result);
+						logger::info("controls list: {}", result);
+					}
+					else
+					{
+						{
+							std::scoped_lock l(g_pressLock);
+							g_pressed = key;
+						}
+						EvaluateRemap();
+						result = g_lastRemap;
+						refused = result.find("refused") != std::string::npos;
+					}
+					g_beforeAll = {};
+					SheetMessage(page, refused ? "$That button is reserved." : "");
+					g_sheet.releaseAtMs = SteadyNowMs() + 200;  // the key's own release must not reach the page
+					g_sheet.drawn.clear();
+				}
+			}
+			if (!g_sheet.capture && g_sheet.releaseAtMs && SteadyNowMs() >= g_sheet.releaseAtMs)
+			{
+				g_sheet.releaseAtMs = 0;
+				page.SetMember("bRemapMode", RE::GFxValue(false));
+			}
+
+			RE::GFxValue entries;
+			if (!list.GetMember("EntriesA", &entries) || !entries.IsArray() || entries.GetArraySize() == 0) { HideSheet(list); return; }
+			const bool gamepad = ListShowsGamepad(entries);
+			g_sheet.columns = BuildSheet(entries);
+			if (g_sheet.columns.empty()) { HideSheet(list); return; }
+			KeepSelectionOnScreen();
+			std::map<std::string, std::uint32_t> index;
+			for (std::uint32_t i = 0; i < entries.GetArraySize(); ++i)
+			{
+				RE::GFxValue entry;
+				if (entries.GetElement(i, &entry) && entry.IsObject()) { index.emplace(RowKey(entry), i); }
+			}
+
+			RE::GFxValue first;
+			if (!list.GetMember("Entry0", &first) || !first.IsDisplayObject()) { return; }
+			double top = 0.0;
+			NumberMember(first, "_y", top);
+
+			g_sheet.drawn.resize(static_cast<std::size_t>(kSheetCols * kSheetSlots));
+			for (int c = 0; c < kSheetCols; ++c)
+			{
+				const int columnIndex = g_sheet.firstCol + c;
+				const SheetColumn* column = columnIndex < static_cast<int>(g_sheet.columns.size()) ? &g_sheet.columns[columnIndex] : nullptr;
+				for (int s = 0; s < kSheetSlots; ++s)
+				{
+					const std::size_t slot = static_cast<std::size_t>(c * kSheetSlots + s);
+					const std::string name = std::format("uvcCell{}_{}", c, s);
+					RE::GFxValue cell;
+					if (!list.GetMember(name.c_str(), &cell) || !cell.IsDisplayObject())
+					{
+						RE::GFxValue args[2] = { RE::GFxValue(name.c_str()), RE::GFxValue(static_cast<double>(20000 + slot)) };
+						first.Invoke("duplicateMovieClip", nullptr, args, 2);
+						if (!list.GetMember(name.c_str(), &cell) || !cell.IsDisplayObject())
+						{
+							if (g_loggedRows.insert("sheet|nocell").second) { logger::warn("controls list: a sheet cell could not be made from Entry0; the controls sheet is not drawn"); }
+							return;
+						}
+						cell.SetMember("_x", RE::GFxValue(c * kColWidth));
+						cell.SetMember("_y", RE::GFxValue(top + s * kSlotPitch));
+						GiveCellTheMouse(a_movie, cell, c, s);
+					}
+					const bool isTitle = s == 0;
+					RE::GFxValue entry;
+					bool haveEntry = false;
+					if (column && !isTitle && s - 1 < static_cast<int>(column->rows.size()))
+					{
+						const auto it = index.find(column->rows[s - 1]);
+						haveEntry = it != index.end() && entries.GetElement(it->second, &entry) && entry.IsObject();
+					}
+					if (!column || (isTitle ? column->title.empty() : !haveEntry))
+					{
+						if (IsVisible(cell)) { SetVisible(cell, false); }
+						g_sheet.drawn[slot].clear();
+						continue;
+					}
+					const bool selected = !isTitle && columnIndex == g_sheet.col && s - 1 == g_sheet.row;
+					const bool capturing = selected && g_sheet.capture;
+					std::string text = isTitle ? column->title : StringMember(entry, "text");
+					// The two favourite rows named apart (the owner, 2026-09-28: "favorites has two rows, one for the menu and
+					// one for the action of favoriting an item"): the Gameplay control opens the Favorites menu; ITEMS holds
+					// "Favorite Item".
+					if (!isTitle && !IsOwnRow(entry) && IEqualsView(text, "Favorites")) { text = "Favorites Menu"; }
+					std::string key;
+					if (!isTitle && !capturing)
+					{
+						const RowFacts facts = ReadRow(entry, gamepad);
+						key = facts.blank ? std::string() : facts.buttonName;
+						// A game control is read from the live map: the game names a row's key only when it builds the list,
+						// and never learns of a bind this sheet made ("Shout" on LB + Modifier still read R2).
+						if (!IsOwnRow(entry))
+						{
+							key.clear();
+							for (const int device : gamepad ? std::vector<int>{ 2 } : std::vector<int>{ 0, 1 })
+							{
+								std::uint16_t k = kUnmappedID, mod = 0;
+								if (!unbinder::LiveBinding(0, facts.text, device, k, mod) || k == kUnmappedID) { continue; }
+								key = RowButtonName(k, device);
+								if (mod != 0 && mod != kUnmappedID) { key = RowButtonName(mod, device) + " + " + key; }
+								break;
+							}
+						}
+					}
+					// a title has no key tile, so it takes the whole column ("IN FAVORITES MENU" is not shrunk)
+					const double nameWidth = isTitle ? (column->titleSpans ? 2 * kColWidth - 60.0 : kColWidth - 12.0) : kCellNameWidth;
+					const std::string signature = std::format("{}|{}|{}|{}|{}", text, key, capturing ? 1 : 0, nameWidth, selected ? 1 : 0);
+					if (!IsVisible(cell)) { SetVisible(cell, true); }
+					if (g_sheet.drawn[slot] == signature) { continue; }
+					TeachCombo(a_movie, cell, key);
+
+					RE::GFxValue shown;
+					a_movie->CreateObject(&shown);
+					shown.SetMember("text", RE::GFxValue(text.c_str()));
+					shown.SetMember("buttonName", RE::GFxValue(key.c_str()));
+					RE::GFxValue args[2] = { cell, shown };
+					list.Invoke("SetEntry", nullptr, args, 2);
+
+					bool artReady = true;
+					RE::GFxValue art;
+					if (cell.GetMember("buttonArt", &art) && art.IsDisplayObject())
+					{
+						art.SetMember("_x", RE::GFxValue(kCellArtX));
+						art.SetMember("_alpha", RE::GFxValue(100.0));
+						SetVisible(art, !key.empty());
+						// InputMappingArt builds its tile list in onLoad, which a duplicated clip runs on the NEXT frame.
+						RE::GFxValue tiles;
+						artReady = key.empty() || (art.GetMember("buttonArt", &tiles) && tiles.IsArray() && tiles.GetArraySize() > 0);
+					}
+					RE::GFxValue field;
+					if (cell.GetMember("textField", &field) && field.IsDisplayObject())
+					{
+						field.SetMember("_alpha", RE::GFxValue(100.0));
+						field.SetMember("textAutoSize", RE::GFxValue("none"));
+						field.SetMember("_width", RE::GFxValue(nameWidth));
+						RE::GFxValue label;
+						if (field.GetMember("text", &label) && label.IsString() && label.GetString() && label.GetString()[0] == '$')
+						{
+							field.SetMember("text", RE::GFxValue(label.GetString() + 1));
+						}
+						RE::GFxValue format;
+						if (field.Invoke("getTextFormat", &format, nullptr, 0) && format.IsObject())
+						{
+							format.SetMember("align", RE::GFxValue(isTitle && column->titleSpans ? "center" : "left"));
+							field.Invoke("setTextFormat", nullptr, &format, 1);
+						}
+						// Titles gold; the selected row's name white and every other name grey - the list's own 70/100
+						// alpha does not read in this journal, and the tiles stay at full strength so the sheet stays legible.
+						SetHtmlColor(field, isTitle ? 0xC8A96Eu : (selected ? 0xFFFFFFu : kDimColor));
+					}
+					g_sheet.drawn[slot] = artReady ? signature : std::string();
+				}
+			}
+		}
+
 		struct AdvanceMovie
 		{
 			static void thunk(RE::JournalMenu* a_this, float a_interval, std::uint32_t a_currentTime)
@@ -1012,6 +1953,7 @@ namespace controlslist
 				if (!a_this || !a_this->uiMovie || !settings::general::enabled) { return; }
 				systemmenu::OnFrame(a_this->uiMovie.get());  // [SystemMenu] rows (SystemMenu.h)
 				FixRows(a_this->uiMovie.get());
+				UpdateSheet(a_this->uiMovie.get());
 			}
 			static inline REL::Relocation<decltype(thunk)> func;
 		};
@@ -1124,6 +2066,7 @@ namespace controlslist
 		}
 		g_loggedRows.clear();
 		g_searchFailedLogged = false;
+		g_sheet = {};
 		g_blankFrames.store(0);
 		g_rowsBlankNow.store(0);
 		g_rowsAdded.store(0);
@@ -1180,6 +2123,111 @@ namespace controlslist
 		}
 		out += "]}";
 		return out;
+	}
+
+	// DevBench op=rowclips (journal open, Controls shown): the row clips on stage and their text field - position, size,
+	// alignment, font size and auto-size modes - so a layout change is made against what this journal actually draws.
+	std::string RowClipsJson()
+	{
+		auto* movie = JournalMovie();
+		if (!movie) { return R"({"ok":false,"op":"rowclips","error":"the journal is not open"})"; }
+		RE::GFxValue list;
+		if (!FindList(movie, list)) { return R"({"ok":false,"op":"rowclips","error":"no Controls list in this journal"})"; }
+		auto num = [](const RE::GFxValue& a_obj, const char* a_name) {
+			RE::GFxValue v;
+			return a_obj.GetMember(a_name, &v) && v.IsNumber() ? std::format("{:.1f}", v.GetNumber()) : std::string("null");
+		};
+		auto str = [](const RE::GFxValue& a_obj, const char* a_name) {
+			RE::GFxValue v;
+			if (!a_obj.GetMember(a_name, &v)) { return std::string("null"); }
+			if (v.IsString() && v.GetString()) { return "\"" + EscapeJson(v.GetString()) + "\""; }
+			if (v.IsBool()) { return std::string(v.GetBool() ? "true" : "false"); }
+			if (v.IsNumber()) { return std::format("{:.1f}", v.GetNumber()); }
+			return std::string("\"?\"");
+		};
+		std::string out = std::format(R"({{"ok":true,"op":"rowclips","list":{{"x":{},"y":{},"width":{},"iMaxItemsShown":{}}},"clips":[)", num(list, "_x"), num(list, "_y"),
+									  num(list, "_width"), num(list, "iMaxItemsShown"));
+		bool first = true;
+		std::vector<std::string> names;
+		for (int i = 0; i < kMaxRowClips; ++i) { names.push_back(std::format("Entry{}", i)); }
+		for (int c = 0; c < kSheetCols; ++c)
+		{
+			for (int s = 0; s < kSheetSlots; ++s) { names.push_back(std::format("uvcCell{}_{}", c, s)); }
+		}
+		for (std::size_t i = 0; i < names.size(); ++i)
+		{
+			RE::GFxValue clip;
+			if (!list.GetMember(names[i].c_str(), &clip) || !clip.IsDisplayObject()) { continue; }
+			std::string members;
+			clip.VisitMembers([&](const char* a_name, const RE::GFxValue&) { members += (members.empty() ? "" : ",") + std::string("\"") + EscapeJson(a_name) + "\""; });
+			std::string field = "null";
+			RE::GFxValue tf;
+			if (clip.GetMember("textField", &tf) && tf.IsDisplayObject())
+			{
+				std::string fmt = "null";
+				RE::GFxValue f;
+				if (tf.Invoke("getTextFormat", &f, nullptr, 0) && f.IsObject())
+				{
+					fmt = std::format(R"({{"align":{},"size":{},"font":{},"color":{},"leftMargin":{},"indent":{}}})", str(f, "align"), str(f, "size"), str(f, "font"), str(f, "color"), str(f, "leftMargin"), str(f, "indent"));
+				}
+				field = std::format(R"({{"x":{},"y":{},"width":{},"height":{},"autoSize":{},"textAutoSize":{},"textColor":{},"alpha":{},"html":{},"text":{},"format":{}}})", num(tf, "_x"), num(tf, "_y"),
+									num(tf, "_width"), num(tf, "_height"), str(tf, "autoSize"), str(tf, "textAutoSize"), str(tf, "textColor"), num(tf, "_alpha"), str(tf, "html"), str(tf, "text"), fmt);
+			}
+			std::string art = "null";
+			for (const char* name : { "ButtonArt", "buttonArt" })
+			{
+				RE::GFxValue a;
+				if (clip.GetMember(name, &a) && a.IsDisplayObject()) { art = std::format(R"({{"name":"{}","x":{},"y":{},"width":{}}})", name, num(a, "_x"), num(a, "_y"), num(a, "_width")); break; }
+			}
+			if (!first) { out += ","; }
+			first = false;
+			out += std::format(R"({{"clip":"{}","x":{},"y":{},"visible":{},"itemIndex":{},"members":[{}],"textField":{},"art":{}}})", names[i], num(clip, "_x"), num(clip, "_y"), str(clip, "_visible"),
+							   num(clip, "itemIndex"), members, field, art);
+		}
+		out += "]}";
+		return out;
+	}
+
+	// DevBench op=gfxget / op=gfxset (test only): read or write one member of an object in the journal movie, by its path
+	// relative to the Controls list ("uvcCell0_1.textField") - for trying a look live before it is written into the mod.
+	std::string GfxMember(std::string_view a_path, std::string_view a_member, std::string_view a_value, bool a_set)
+	{
+		auto* movie = JournalMovie();
+		if (!movie) { return R"({"ok":false,"error":"the journal is not open"})"; }
+		RE::GFxValue obj;
+		if (!FindList(movie, obj)) { return R"({"ok":false,"error":"no Controls list"})"; }
+		std::size_t pos = 0;
+		const std::string path(a_path);
+		while (pos < path.size())
+		{
+			const std::size_t dot = path.find('.', pos);
+			const std::string part = path.substr(pos, dot == std::string::npos ? std::string::npos : dot - pos);
+			RE::GFxValue next;
+			if (part.empty() || !obj.GetMember(part.c_str(), &next) || next.IsUndefined()) { return std::format(R"({{"ok":false,"error":"no member {}"}})", EscapeJson(part)); }
+			obj = next;
+			if (dot == std::string::npos) { break; }
+			pos = dot + 1;
+		}
+		const std::string member(a_member);
+		if (a_set)
+		{
+			const std::string value(a_value);
+			char* end = nullptr;
+			const double number = std::strtod(value.c_str(), &end);
+			if (value == "true" || value == "false") { obj.SetMember(member.c_str(), RE::GFxValue(value == "true")); }
+			else if (!value.empty() && end && *end == '\0') { obj.SetMember(member.c_str(), RE::GFxValue(number)); }
+			else { obj.SetMember(member.c_str(), RE::GFxValue(value.c_str())); }
+		}
+		RE::GFxValue v;
+		std::string shown = "undefined";
+		if (obj.GetMember(member.c_str(), &v))
+		{
+			if (v.IsString() && v.GetString()) { shown = "\"" + EscapeJson(v.GetString()) + "\""; }
+			else if (v.IsNumber()) { shown = std::format("{}", v.GetNumber()); }
+			else if (v.IsBool()) { shown = v.GetBool() ? "true" : "false"; }
+			else if (v.IsObject()) { shown = "\"(object)\""; }
+		}
+		return std::format(R"({{"ok":true,"path":"{}","member":"{}","value":{}}})", EscapeJson(path), EscapeJson(member), shown);
 	}
 
 	std::string StateJson()

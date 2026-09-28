@@ -1,4 +1,4 @@
-#include "PCH.h"
+﻿#include "PCH.h"
 
 #include "Unbinder.h"
 
@@ -15,6 +15,7 @@
 #include <format>
 #include <map>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -262,56 +263,255 @@ namespace unbinder
 			return s_keys;
 		}
 
-		int g_lastLinked = 0;  // menu actions given a key at the last apply
+		int g_lastConverted = 0;  // links turned into separate mappings at the last apply
+		int g_convertedTotal = 0;  // and this session
 
-		// A menu action controlmap.txt links to a gameplay control (the inventory's "ChargeItem !0,Wait") takes that
-		// control's key whenever the game resolves its links, so unbinding the control empties the action too - the
-		// owner chose to keep such actions working. Every action linked to a control in the list gets the control's
-		// default key back on that device. Caller holds g_lock.
-		int KeepLinkedActions(RE::ControlMap* a_map, const char* a_reason)
+		// controlmap.txt defines many menu actions by LINKING them to a gameplay control (`!0,Wait` - the inventory's
+		// ChargeItem takes whatever key Wait has), so the engine copies the gameplay key into the menu action every time it
+		// resolves the links - a saved ControlMap_Custom.txt at startup, a Controls-menu remap. Moving or unbinding a
+		// gameplay control then moved or emptied menu buttons with it. The owner (2026-09-28): "convert all of the linked
+		// mappings ... into context-aware separate mappings". Every link is removed and the menu action keeps a key of its
+		// own in its own context: the key the linked control has BY DEFAULT on that device in the controlmap.txt in force
+		// (so a controls replacer is respected), or, for a link to a control that file does not define for Gameplay, the key
+		// the action has now. Runs at the start of every apply, before the [Unbound] and [Bound] lists, so a line naming a
+		// menu action still wins. Caller holds g_lock.
+		// Every menu action converted this session, in controlmap.txt order: the Controls page gives each its own row.
+		std::vector<DelinkedAction> g_delinked;
+
+		// The row's name on the Controls page: the menu, then the action in words, short enough that the list does not
+		// shrink the text. Engine ids whose job differs from page to page keep their own name, spaced ("Skills: Y Button").
+		void DelinkedNames(int a_context, std::string_view a_event, std::string& a_block, std::string& a_action)
 		{
-			auto& links = a_map->GetRuntimeData().linkedMappings;
-			static bool s_loggedCount = false;
-			if (!s_loggedCount)
+			static const std::map<std::string, std::string> contexts{
+				{ "menu mode", "Menus" }, { "item menus", "Items" }, { "inventory", "Inventory" }, { "favorites", "Favorites" },
+				{ "map", "Map" }, { "stats", "Skills" }, { "journal", "Journal" }, { "lockpicking", "Lockpicking" }, { "favor", "Followers" },
+				{ "book", "Book" }, { "console", "Console" }, { "cursor", "Cursor" }, { "tfc", "Free Camera" }
+			};
+			static const std::map<std::string, std::string> actions{
+				{ "item menus|ybutton", "Favorite Item" }, { "item menus|xbutton", "Drop" }, { "item menus|leftequip", "Equip Left" },
+				{ "item menus|rightequip", "Equip Right" }, { "item menus|item zoom", "Inspect" }, { "inventory|chargeitem", "Charge Item" },
+				{ "journal|tabswitch", "Switch Tab" }, { "lockpicking|rotatelock", "Rotate Lock" },
+				// The menu copies of Run and Toggle Always Run sit beside the GAMEPLAY rows of the same name; the Skills YButton
+				// is the Legendary prompt (the owner agreed the renames, 2026-09-28)
+				{ "menu mode|run", "Run in Menus" }, { "menu mode|toggle always run", "Always Run in Menus" },
+				{ "stats|ybutton", "Make Legendary" }
+			};
+			const std::string ctxName = ContextName(a_context);
+			const auto c = contexts.find(Lower(ctxName));
+			std::string action;
+			const auto a = actions.find(Lower(ctxName) + "|" + Lower(a_event));
+			if (a != actions.end()) { action = a->second; }
+			else
 			{
-				s_loggedCount = true;
-				logger::info("links: the control map holds {} linked menu action(s)", links.size());
-			}
-			int kept = 0;
-			for (const auto& e : g_entries)
-			{
-				const int ctx = ContextIndex(e.context);
-				if (ctx != 0 || e.device < 0 || e.device > 2) { continue; }  // controlmap.txt defaults are read for Gameplay only
-				const auto& defaults = GameplayDefaults();
-				const auto it = defaults.find(Lower(e.event));
-				if (it == defaults.end()) { continue; }
-				const std::uint16_t key = it->second.key[e.device];
-				if (key == kUnmapped) { continue; }
-				for (const auto& link : links)
+				// "XButton" -> "X Button", "ZoomIn" stays readable, names with spaces are kept as they are
+				for (std::size_t i = 0; i < a_event.size(); ++i)
 				{
-					if (static_cast<int>(link.linkFromContext) != ctx || static_cast<int>(link.device) != e.device) { continue; }
-					if (!link.linkFromName.c_str() || !IEquals(link.linkFromName.c_str(), e.event)) { continue; }
-					auto* target = MappingsFor(a_map, static_cast<int>(link.linkedMappingContext), e.device);
-					if (!target || !link.linkedMappingName.c_str()) { continue; }
-					bool changed = false;
-					for (auto* m : Find(*target, link.linkedMappingName.c_str()))
-					{
-						if (m->inputKey != key)
-						{
-							m->inputKey = key;
-							changed = true;
-							++kept;
-						}
-					}
-					if (changed)
-					{
-						SortByKey(*target);
-						logger::debug("apply ({}): {}|{}|{} is linked to {}, which is unbound - given {}", a_reason, ContextName(static_cast<int>(link.linkedMappingContext)),
-									  link.linkedMappingName.c_str(), DeviceName(e.device), e.event, Hex(key));
-					}
+					const auto at = [&](std::size_t a_i) { return static_cast<unsigned char>(a_event[a_i]); };
+					const bool startsWord = i > 0 && std::isupper(at(i)) && a_event[i - 1] != ' ' &&
+					                        (std::islower(at(i - 1)) || (i + 1 < a_event.size() && std::islower(at(i + 1)) && std::isupper(at(i - 1))));
+					if (startsWord) { action += ' '; }
+					action += a_event[i];
 				}
 			}
-			return kept;
+			a_block = c != contexts.end() ? c->second : ctxName;
+			a_action = action;
+		}
+
+
+		void RecordDelinked(int a_context, std::string_view a_event, int a_device)
+		{
+			auto it = std::find_if(g_delinked.begin(), g_delinked.end(), [&](const DelinkedAction& d) { return d.context == a_context && IEquals(d.event, a_event); });
+			if (it == g_delinked.end())
+			{
+				DelinkedAction d;
+				d.context = a_context;
+				d.event = std::string(a_event);
+				DelinkedNames(a_context, a_event, d.block, d.action);
+				d.row = d.block + ": " + d.action;
+				// A block that holds the controls INSIDE a menu the GAMEPLAY rows open says so, so "Favorites Menu" (opens it)
+				// and the Favorites block (Up, Down, Accept inside it) do not read as the same thing
+				static const std::map<std::string, std::string> titles{
+					{ "favorites", "IN FAVORITES MENU" }, { "map", "IN MAP" }, { "lockpicking", "IN LOCKPICKING" }
+				};
+				const auto t = titles.find(Lower(ContextName(a_context)));
+				if (t != titles.end()) { d.title = t->second; }
+				else
+				{
+					d.title = d.block;
+					for (auto& c : d.title) { c = static_cast<char>(std::toupper(static_cast<unsigned char>(c))); }
+				}
+				// The sheet's columns (the owner, 2026-09-28): "charge item can just be added to the items column", "make
+				// legendary be in menus column", and IN FAVORITES MENU, IN LOCKPICKING, FOLLOWERS and JOURNAL taken away -
+				// the Favorites menu has the same controls as MENUS, and Lockpicking and Followers only a Cancel that is Back
+				// anyway. A hidden row keeps its separate mapping on its default key; the row's identity (d.row) is unchanged,
+				// so a bind already saved for it still matches.
+				d.sheetContext = a_context;
+				const std::string ctx = Lower(ContextName(a_context));
+				const std::string key = ctx + "|" + Lower(a_event);
+				if (key == "inventory|chargeitem")
+				{
+					d.title = "ITEMS";
+					d.sheetContext = static_cast<int>(RE::UserEvents::INPUT_CONTEXT_ID::kItemMenu);
+				}
+				else if (key == "stats|ybutton")
+				{
+					d.title = "MENUS";
+					d.sheetContext = static_cast<int>(RE::UserEvents::INPUT_CONTEXT_ID::kMenuMode);
+				}
+				else if (ctx == "favorites" || ctx == "lockpicking" || ctx == "favor" || ctx == "journal")
+				{
+					d.hidden = true;
+				}
+				d.fixed = false;  // Favorite Item is rebindable (2026-09-28); nothing is locked
+				g_delinked.push_back(std::move(d));
+				it = std::prev(g_delinked.end());
+			}
+			if (a_device == 2) { it->gamepad = true; }
+			else { it->keyboardFamily = true; }
+		}
+
+		int ConvertLinkedMappings(RE::ControlMap* a_map, const char* a_reason)
+		{
+			auto& links = a_map->GetRuntimeData().linkedMappings;
+			if (links.empty()) { return 0; }
+			const auto& defaults = GameplayDefaults();
+
+			// One action can be linked several times on a device ("Cancel !0,Tween Menu,!0,Pause" - Tab AND Esc), and then it
+			// has one mapping per link. Grouped per (context, device, action) so each link's key lands on its own mapping.
+			struct Group
+			{
+				int context = 0;
+				int device = 0;
+				std::string event;
+				std::vector<std::uint16_t> keys;  // the linked controls' default keys, where controlmap.txt gives one
+				std::vector<std::string> from;
+			};
+			std::vector<Group> groups;
+			for (const auto& link : links)
+			{
+				if (!link.linkedMappingName.c_str()) { continue; }
+				const int device = static_cast<int>(link.device);
+				const int ctx = static_cast<int>(link.linkedMappingContext);
+				if (device < 0 || device > 2) { continue; }
+				auto g = std::find_if(groups.begin(), groups.end(), [&](const Group& a_g) {
+					return a_g.context == ctx && a_g.device == device && IEquals(a_g.event, link.linkedMappingName.c_str());
+				});
+				if (g == groups.end())
+				{
+					groups.push_back({ ctx, device, link.linkedMappingName.c_str(), {}, {} });
+					g = std::prev(groups.end());
+				}
+				const char* from = link.linkFromName.c_str() ? link.linkFromName.c_str() : "";
+				g->from.emplace_back(from);
+				if (static_cast<int>(link.linkFromContext) == 0)
+				{
+					const auto it = defaults.find(Lower(from));
+					if (it != defaults.end()) { g->keys.push_back(it->second.key[device]); }
+				}
+			}
+
+			int converted = 0;
+			std::vector<Mappings*> dirty;
+			for (auto& g : groups)
+			{
+				auto* target = MappingsFor(a_map, g.context, g.device);
+				if (!target) { continue; }
+				auto found = Find(*target, g.event);
+				if (found.empty()) { continue; }
+				// A mapping already on one of the keys keeps it; the keys left over go to the mappings left over. The mappings
+				// of one action differ only in their key, so which one takes which key does not matter. A link to a control
+				// controlmap.txt gives no Gameplay default leaves its mapping on the key it has now.
+				std::vector<bool> placed(found.size(), false);
+				std::vector<std::uint16_t> left;
+				for (const std::uint16_t k : g.keys)
+				{
+					bool done = false;
+					for (std::size_t i = 0; i < found.size() && !done; ++i)
+					{
+						if (!placed[i] && found[i]->inputKey == k) { placed[i] = true; done = true; }
+					}
+					if (!done) { left.push_back(k); }
+				}
+				std::size_t next = 0;
+				for (std::size_t i = 0; i < found.size() && next < left.size(); ++i)
+				{
+					if (placed[i]) { continue; }
+					found[i]->inputKey = left[next++];
+					placed[i] = true;
+				}
+				std::string keysNow;
+				for (auto* m : found)
+				{
+					m->linked = false;
+					keysNow += (keysNow.empty() ? "" : ",") + Hex(m->inputKey);
+				}
+				std::string fromText;
+				for (const auto& f : g.from) { fromText += (fromText.empty() ? "" : ",") + f; }
+				++converted;
+				RecordDelinked(g.context, g.event, g.device);
+				if (std::find(dirty.begin(), dirty.end(), target) == dirty.end()) { dirty.push_back(target); }
+				logger::debug("apply ({}): {}|{}|{} was linked to {}; now its own mapping on {}", a_reason, ContextName(g.context), g.event, DeviceName(g.device), fromText, keysNow);
+			}
+			links.clear();  // nothing left for the engine to resolve
+			for (auto* m : dirty) { SortByKey(*m); }
+			return converted;
+		}
+
+		int g_lastFavourite = 0;  // Favourite-button keys set at the last apply
+		int g_favouriteLinksCut = 0;  // links to the Favourite button removed this session
+
+		// The Favourite button (Item Menus "YButton", the inventory and magic menus' favourite prompt) has no key of its own in
+		// controlmap.txt: it borrows Toggle POV's (keyboard, mouse) and Jump's (gamepad) through a link, so unbinding or moving
+		// either control - through our list, the Controls menu or a saved ControlMap_Custom.txt - left it on 0xFF and SkyUI drew
+		// [???]. The owner (2026-09-28): "it should be hard coded to triangle or F". The links are removed so no later
+		// resolution can reach it, and its keys are set on every apply BEFORE the lists: F on the keyboard, Y / triangle on the
+		// gamepad, nothing on the mouse. Real keys mean the prompt is drawn from the game's own button art, with or without a
+		// UI overhaul. Later the same day, once every link was a separate mapping, the owner asked for it to be rebindable
+		// ("Favorite Item" on the Controls page): a line of the player's own is applied after this and wins, so this is the
+		// default, never a lock. Caller holds g_lock.
+		int PinFavouriteButton(RE::ControlMap* a_map, const char* a_reason)
+		{
+			constexpr std::string_view kEvent = "YButton";
+			constexpr int kItemMenus = static_cast<int>(RE::UserEvents::INPUT_CONTEXT_ID::kItemMenu);
+			constexpr std::uint16_t kKeys[3] = { 0x21, kUnmapped, 0x8000 };  // keyboard F, mouse none, gamepad Y / triangle
+			auto& links = a_map->GetRuntimeData().linkedMappings;
+			for (auto it = links.begin(); it != links.end();)
+			{
+				if (static_cast<int>(it->linkedMappingContext) == kItemMenus && it->linkedMappingName.c_str() && IEquals(it->linkedMappingName.c_str(), kEvent))
+				{
+					logger::info("apply ({}): Item Menus|{}|{} was linked to {}; link removed, the key is fixed", a_reason, kEvent, DeviceName(static_cast<int>(it->device)),
+								 it->linkFromName.c_str() ? it->linkFromName.c_str() : "?");
+					it = links.erase(it);
+					++g_favouriteLinksCut;
+				}
+				else { ++it; }
+			}
+			int set = 0;
+			for (int d = 0; d < 3; ++d)
+			{
+				auto* mappings = MappingsFor(a_map, kItemMenus, d);
+				if (!mappings) { logger::warn("apply ({}): Item Menus|{}|{} - no such device list; the Favourite key could not be fixed", a_reason, kEvent, DeviceName(d)); continue; }
+				auto found = Find(*mappings, kEvent);
+				if (found.empty()) { logger::warn("apply ({}): Item Menus|{}|{} - the game has no such control", a_reason, kEvent, DeviceName(d)); continue; }
+				bool changed = false;
+				for (auto* m : found)
+				{
+					if (m->inputKey != kKeys[d] || m->modifier != 0 || m->linked)
+					{
+						m->inputKey = kKeys[d];
+						m->modifier = 0;
+						m->linked = false;
+						changed = true;
+						++set;
+					}
+				}
+				if (changed)
+				{
+					SortByKey(*mappings);
+					logger::info("apply ({}): Item Menus|{}|{} set to {}", a_reason, kEvent, DeviceName(d), Hex(kKeys[d]));
+				}
+			}
+			return set;
 		}
 
 		// AMF's reserved keys (DEFAULT-KEYS.md, runtime check 1): the framework's live menu key and its navigation keys,
@@ -840,6 +1040,105 @@ namespace unbinder
 		return "";
 	}
 
+	std::vector<DelinkedAction> GetDelinked()
+	{
+		std::scoped_lock l(g_lock);
+		return g_delinked;
+	}
+
+	bool FindDelinkedRow(std::string_view a_row, DelinkedAction& a_out)
+	{
+		std::scoped_lock l(g_lock);
+		for (const auto& d : g_delinked)
+		{
+			if (d.row == a_row) { a_out = d; return true; }
+		}
+		return false;
+	}
+
+	std::vector<std::uint16_t> LiveKeysIn(int a_context, std::string_view a_event, int a_device)
+	{
+		std::vector<std::uint16_t> out;
+		auto* map = RE::ControlMap::GetSingleton();
+		auto* mappings = map ? MappingsFor(map, a_context, a_device) : nullptr;
+		if (!mappings) { return out; }
+		for (auto* m : Find(*mappings, a_event)) { out.push_back(m->inputKey); }
+		return out;
+	}
+
+	void SetBind(int a_context, std::string_view a_event, int a_device, std::uint16_t a_key, bool a_withModifier)
+	{
+		std::scoped_lock l(g_lock);
+		const char* context = ContextName(a_context);
+		for (auto& b : g_binds)
+		{
+			if (b.device != a_device || !IEquals(b.context, context) || !IEquals(b.event, a_event)) { continue; }
+			logger::info("bind {}|{}|{}: set from the Controls menu, {} -> {}{}", b.context, b.event, DeviceName(a_device), Hex(b.key), Hex(a_key), a_withModifier ? " + Modifier" : "");
+			b.key = a_key;
+			b.modifier = 0;
+			b.useDesignatedModifier = a_withModifier;
+			return;
+		}
+		Bind b;
+		b.context = context;
+		b.event = std::string(a_event);
+		b.device = a_device;
+		b.key = a_key;
+		b.useDesignatedModifier = a_withModifier;
+		logger::info("bind {}|{}|{}: added from the Controls menu -> {}{}", b.context, b.event, DeviceName(a_device), Hex(a_key), a_withModifier ? " + Modifier" : "");
+		g_binds.push_back(std::move(b));
+	}
+
+	bool HolderOf(int a_context, int a_device, std::uint16_t a_key, std::uint16_t a_modifier, Holder& a_out)
+	{
+		auto* map = RE::ControlMap::GetSingleton();
+		auto* mappings = map ? MappingsFor(map, a_context, a_device) : nullptr;
+		if (!mappings) { return false; }
+		for (const auto& m : *mappings)
+		{
+			if (m.inputKey != a_key || m.modifier != a_modifier || !m.eventID.c_str()) { continue; }
+			a_out.event = m.eventID.c_str();
+			a_out.remappable = m.remappable;
+			return true;
+		}
+		return false;
+	}
+
+	bool LiveBinding(int a_context, std::string_view a_event, int a_device, std::uint16_t& a_key, std::uint16_t& a_modifier)
+	{
+		auto* map = RE::ControlMap::GetSingleton();
+		auto* mappings = map ? MappingsFor(map, a_context, a_device) : nullptr;
+		if (!mappings) { return false; }
+		const auto found = Find(*mappings, a_event);
+		if (found.empty()) { return false; }
+		a_key = found.front()->inputKey;
+		a_modifier = found.front()->modifier;
+		return true;
+	}
+
+	std::vector<KeylessControl> BoundOnFamily(bool a_gamepad)
+	{
+		std::vector<std::pair<std::string, int>> events;
+		{
+			std::scoped_lock l(g_lock);
+			for (const auto& b : g_binds)
+			{
+				if (!IEquals(b.context, "Gameplay") || b.key == kUnmapped) { continue; }
+				if (a_gamepad ? b.device != 2 : (b.device != 0 && b.device != 1)) { continue; }
+				events.emplace_back(b.event, 0);
+			}
+		}
+		std::vector<KeylessControl> out;
+		for (const auto& [event, unused] : events)
+		{
+			const int order = OrderInContext(event);
+			if (order < 0) { continue; }
+			if (std::any_of(out.begin(), out.end(), [&](const KeylessControl& a_k) { return IEquals(a_k.event, event); })) { continue; }
+			out.push_back({ event, order });
+		}
+		return out;
+	}
+
 	bool UpdateBind(int a_context, std::string_view a_event, int a_device, std::uint16_t a_key)
 	{
 		std::scoped_lock l(g_lock);
@@ -922,6 +1221,13 @@ namespace unbinder
 		auto* map = RE::ControlMap::GetSingleton();
 		if (!map) { logger::warn("apply ({}): the ControlMap singleton is null; nothing applied", a_reason); return; }
 		std::scoped_lock l(g_lock);
+		g_lastConverted = ConvertLinkedMappings(map, a_reason);  // before the lists, bEnabled=0 included
+		g_convertedTotal += g_lastConverted;
+		if (g_lastConverted) { logger::info("apply ({}): {} linked menu mapping(s) turned into separate mappings", a_reason, g_lastConverted); }
+		// The DEFAULT F / Y, before the lists: an [Unbound] or [Bound] line for Item Menus|YButton - the Favorite Item row -
+		// is applied after it and wins (the owner, 2026-09-28: "they should be rebindable now that they are properly
+		// separated from their linked mappings"). bEnabled=0 included.
+		g_lastFavourite = PinFavouriteButton(map, a_reason);
 		if (!settings::general::enabled)
 		{
 			logger::info("apply ({}): bEnabled=0; {} entr{} left as the game has them", a_reason, g_entries.size(), g_entries.size() == 1 ? "y" : "ies");
@@ -952,8 +1258,6 @@ namespace unbinder
 		for (auto* m : dirty) { SortByKey(*m); }
 		g_lastRemappable = ApplyRemappable(map, a_reason);
 		g_lastBound = ApplyBinds(map, a_reason);
-		g_lastLinked = KeepLinkedActions(map, a_reason);
-		if (g_lastLinked) { logger::info("apply ({}): {} menu action(s) linked to an unbound control given their key", a_reason, g_lastLinked); }
 		g_lastApply = a_reason;
 		++g_applyCount;
 		g_lastTouched = touched;
@@ -1343,8 +1647,9 @@ namespace unbinder
 	std::string StateJson()
 	{
 		std::scoped_lock l(g_lock);
-		std::string out = std::format(R"("unbinder":{{"contextCount":{},"lastApply":"{}","applyCount":{},"lastTouched":{},"linkedKept":{},"sink":{},"entries":[)",
-									  ContextCount(), EscapeJson(g_lastApply), g_applyCount, g_lastTouched, g_lastLinked, g_sinkInstalled ? "true" : "false");
+		std::string out = std::format(R"("unbinder":{{"contextCount":{},"lastApply":"{}","applyCount":{},"lastTouched":{},"linksConverted":{},"linksConvertedSession":{},"favouriteSet":{},"favouriteLinksCut":{},"sink":{},"entries":[)",
+									  ContextCount(), EscapeJson(g_lastApply), g_applyCount, g_lastTouched, g_lastConverted, g_convertedTotal, g_lastFavourite, g_favouriteLinksCut,
+									  g_sinkInstalled ? "true" : "false");
 		bool first = true;
 		for (const auto& e : g_entries)
 		{

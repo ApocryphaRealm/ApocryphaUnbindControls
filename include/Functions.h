@@ -46,6 +46,7 @@ namespace functions
 		// keeps a single key and `section` holds it whichever device it came from.
 		std::string gamepadSection;
 		std::string key;          // e.g. "iKeycode"
+		const std::string& KeyFor(int a_device) const { return a_device == 2 && !gamepadKey.empty() ? gamepadKey : key; }
 		std::string modifierKey;  // e.g. "iModifierKey"; empty when the target has no modifier setting
 		int none = -1;            // what the target writes for "no key" (OCPA uses -1)
 		// A file whose presence means the TARGET MOD IS INSTALLED, relative to Data. A row whose mod is not
@@ -53,6 +54,11 @@ namespace functions
 		// without One Click Power Attack, Stances NG or Wheeler adds no rows for them and writes no settings
 		// file on their behalf. Empty falls back to the target file itself.
 		std::string requiresFile;
+		// The gamepad setting's own NAME when it differs from `key` (1.1.1, the Back Pocket row): Back Pocket keeps
+		// both in [input], as toggle_item_scan_code and controller_toggle_item_key_code. Written in the INI as
+		// "Section:Key" in the GamepadSection field; empty means the gamepad section uses `key` too. Last, so the
+		// shipped rows' positional initialisers keep their meaning.
+		std::string gamepadKey;
 	};
 
 	struct Binding
