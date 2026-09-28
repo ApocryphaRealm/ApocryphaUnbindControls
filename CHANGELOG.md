@@ -7,7 +7,7 @@ Rule 61: this mod's own history, kept beside the code it describes.
 > number; at `.9` the MINOR rolls. The next number is LAST WORKING + 1; failed/scratch/
 > untested numbers are reused. Numbers come from version-gate.ps1.
 
-## 1.1.2 - 2026-09-28 - untested
+## 1.1.2 - 2026-09-28 - working
 
 ### Changed
 - **Ships at info**: `uLogLevel=2` in the INI and as the compiled default (rule 14, amended 2026-09-26 - every INI of ours ships at info, not trace). 1.1.1 was tagged with the trace default, so the fix takes the next number; nothing else changes.
