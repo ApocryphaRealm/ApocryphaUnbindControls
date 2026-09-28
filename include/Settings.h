@@ -11,7 +11,7 @@ namespace settings
 {
 	namespace debug
 	{
-		inline std::uint32_t logLevel = 0;  // uLogLevel:Debug
+		inline std::uint32_t logLevel = 2;  // uLogLevel:Debug - ships at info (rule 14, 2026-09-26)
 	}
 
 	namespace general

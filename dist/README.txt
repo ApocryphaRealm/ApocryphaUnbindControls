@@ -1,5 +1,5 @@
 ﻿Unbind Vanilla Controls
-Version 1.1.1
+Version 1.1.2
 
 Skyrim's own Controls menu can only move a control to another key. It cannot leave a control with no
 key at all. This mod can: every control listed in its INI has no key while you play, so pressing the
@@ -107,6 +107,9 @@ Send the log for any bug you find:
 Documents\My Games\Skyrim Special Edition\SKSE\UnbindControls.log
 
 WHAT CHANGED
+
+Version 1.1.2
+The log is written at info out of the box (uLogLevel=2), with more detail available by lowering it in the INI.
 
 Version 1.1.1
 Fixed the Favorite button in the inventory and magic menus showing [???] instead of a key. It borrowed Toggle POV's key on the keyboard and Jump's on the controller, so moving or unbinding either control left it with none. It is now a control of its own - F on the keyboard and Y (triangle) on the controller out of the box - and you can move it on the Controls page (Favorite Item).
