@@ -187,7 +187,12 @@ namespace unbinder
 		// game has saved a control as empty in ControlMap_Custom.txt it is already 0xFF when the game starts.
 		struct DefaultKeys
 		{
-			std::uint16_t key[3]{ kUnmapped, kUnmapped, kUnmapped };  // keyboard, mouse, gamepad
+			std::uint16_t key[3]{ kUnmapped, kUnmapped, kUnmapped };  // keyboard, mouse, gamepad: the FIRST key
+			// Every key, sorted. A control can have several on one device - Favorites is "0x0001,0x0002" on the gamepad
+			// (D-pad up AND down) - and "is this control back on its default?" has to compare the whole set: comparing
+			// the first key alone took Favorites on D-pad up only for its default and dropped its INI lines, and the next
+			// start gave it both buttons again (1.1.3, a Nexus report).
+			std::vector<std::uint16_t> all[3];
 		};
 
 		// "0x14"; "0x02,0x4f" (the first key); "0x2a+0x0f" (key+modifier, the key); "!0,Wait" (a link, no key of its own).
@@ -203,6 +208,23 @@ namespace unbinder
 			{
 				return kUnmapped;
 			}
+		}
+
+		// Every key of a field, sorted: "0x0001,0x0002" -> { 0x0001, 0x0002 }; "0x2a+0x0f" -> { 0x2a }; a link or 0xff -> {}.
+		std::vector<std::uint16_t> ParseKeys(std::string_view a_field)
+		{
+			std::vector<std::uint16_t> out;
+			if (a_field.empty() || a_field.front() == '!') { return out; }
+			while (!a_field.empty())
+			{
+				const std::size_t comma = a_field.find(',');
+				const std::uint16_t key = ParseKey(a_field.substr(0, comma));
+				if (key != kUnmapped) { out.push_back(key); }
+				if (comma == std::string_view::npos) { break; }
+				a_field.remove_prefix(comma + 1);
+			}
+			std::sort(out.begin(), out.end());
+			return out;
 		}
 
 		const std::map<std::string, DefaultKeys>& GameplayDefaults()
@@ -256,7 +278,11 @@ namespace unbinder
 				}
 				if (fields.size() < 4) { continue; }
 				DefaultKeys keys;
-				for (int d = 0; d < 3; ++d) { keys.key[d] = ParseKey(fields[1 + d]); }
+				for (int d = 0; d < 3; ++d)
+				{
+					keys.key[d] = ParseKey(fields[1 + d]);
+					keys.all[d] = ParseKeys(fields[1 + d]);
+				}
 				s_keys.emplace(Lower(fields[0]), keys);
 			}
 			logger::info("defaults: {} gameplay control(s) read from controlmap.txt", s_keys.size());
@@ -639,8 +665,18 @@ namespace unbinder
 						continue;
 					}
 					auto found = Find(*mappings, b->event);
-					// Already exactly there: BOTH halves must match, or a bind that only changes its modifier is skipped.
-					if (!found.empty() && found.front()->inputKey == b->key && found.front()->modifier == wantModifier) { continue; }
+					// Already exactly there: BOTH halves must match, or a bind that only changes its modifier is skipped - and the
+					// control's OTHER mappings on this device must have no key. controlmap.txt gives some controls several keys
+					// on one device (Favorites: D-pad up AND down); a bind means "this key and only this key", so testing the
+					// first mapping alone skipped Favorites|gamepad|DPadUp at every start (its first mapping is already Up after
+					// the key sort) and left D-pad down on it as well (1.1.3, a Nexus report).
+					// Exactly one mapping on the key, every other one empty (0xFF can sort before a controller key such as Y).
+					if (!found.empty())
+					{
+						const auto onKey = std::count_if(found.begin(), found.end(), [&](const RE::ControlMap::UserEventMapping* a_m) { return a_m->inputKey == b->key && a_m->modifier == wantModifier; });
+						const auto empty = std::count_if(found.begin(), found.end(), [](const RE::ControlMap::UserEventMapping* a_m) { return a_m->inputKey == kUnmapped; });
+						if (onKey == 1 && onKey + empty == static_cast<std::ptrdiff_t>(found.size())) { continue; }
+					}
 
 					const RE::ControlMap::UserEventMapping* holder = nullptr;
 					for (const auto& m : *mappings)
@@ -799,9 +835,10 @@ namespace unbinder
 	std::vector<Entry> DefaultEntries()
 	{
 		// The owner's own list for 1.0.5 (2026-09-14, picked in the Controls menu with the fixed control map installed: "let's
-		// ship it with my current unbound keys as the default"): the Tween Menu's shortcuts plus Favorites, Quicksave,
-		// Quickload, Auto-Move and Toggle Always Run on the keyboard; Wait and Journal on the controller, where Start opens the
-		// System tab instead (DefaultBinds). Device: 0 keyboard, 2 gamepad.
+		// ship it with my current unbound keys as the default"): the Tween Menu's shortcuts plus Quicksave, Quickload,
+		// Auto-Move and Toggle Always Run on the keyboard; Wait and Journal on the controller, where Start opens the System tab
+		// instead (DefaultBinds). Device: 0 keyboard, 2 gamepad. Favorites stays BOUND since 1.1.3 (the owner, 2026-10-20, after
+		// a player lost the Favorites menu on Q): the author's Wheeler setup that unbinds it is a commented line in the INI.
 		constexpr std::pair<const char*, int> kDefaults[] = {
 			{ "Journal", 0 },
 			{ "Quick Inventory", 0 },
@@ -811,7 +848,6 @@ namespace unbinder
 			{ "Wait", 0 },
 			{ "Wait", 2 },
 			{ "Journal", 2 },
-			{ "Favorites", 0 },
 			{ "Quicksave", 0 },
 			{ "Quickload", 0 },
 			{ "Auto-Move", 0 },
@@ -941,12 +977,14 @@ namespace unbinder
 
 	// The gamepad attack controls. Apostasy's control map, like vanilla's, clears their gamepad remappable flag, so
 	// without this the controller's Controls page has no normal-attack row for either hand and refuses their buttons
-	// to any other row as "reserved".
+	// to any other row as "reserved". Favorites on the gamepad likewise (1.1.3): the game clears its flag there, so it had no
+	// row on the controller page to bind it on.
 	std::vector<Remappable> DefaultRemappable()
 	{
 		return {
 			{ "Gameplay", "Right Attack/Block", 2 },
 			{ "Gameplay", "Left Attack/Block", 2 },
+			{ "Gameplay", "Favorites", 2 },
 		};
 	}
 
@@ -965,13 +1003,30 @@ namespace unbinder
 
 	std::vector<Bind> DefaultBinds()
 	{
-		// System Tab (the Pause control) on Start, where the unbound controller Journal was.
-		Bind b;
-		b.context = "Gameplay";
-		b.event = "Pause";
-		b.device = 2;
-		b.key = 0x0010;
-		return { b };
+		// The shipped INI's [Bound] lines (rule 16): System Tab (the Pause control) on Start, where the unbound controller
+		// Journal was; Tween Menu on Back; Shout on RT; Right Attack/Block on RB; Left Attack/Block on LB; Sprint on B; Toggle
+		// POV on D-pad up; Favorites on D-pad down alone (1.1.3: the game gives it up AND down, and up is Toggle POV's).
+		constexpr std::pair<const char*, std::uint16_t> kDefaults[] = {
+			{ "Pause", 0x0010 },
+			{ "Tween Menu", 0x0020 },
+			{ "Shout", 0x000a },
+			{ "Right Attack/Block", 0x0200 },
+			{ "Left Attack/Block", 0x0100 },
+			{ "Sprint", 0x2000 },
+			{ "Toggle POV", 0x0001 },
+			{ "Favorites", 0x0002 },
+		};
+		std::vector<Bind> out;
+		for (const auto& [event, key] : kDefaults)
+		{
+			Bind b;
+			b.context = "Gameplay";
+			b.event = event;
+			b.device = 2;
+			b.key = key;
+			out.push_back(std::move(b));
+		}
+		return out;
 	}
 
 	bool BindModifier(std::string_view a_event, int a_device, std::uint16_t& a_modifier)
@@ -1111,8 +1166,13 @@ namespace unbinder
 		if (!mappings) { return false; }
 		const auto found = Find(*mappings, a_event);
 		if (found.empty()) { return false; }
-		a_key = found.front()->inputKey;
-		a_modifier = found.front()->modifier;
+		// The first mapping that HAS a key: a control with several mappings on one device (Favorites on the gamepad) keeps
+		// the unused ones on 0xFF, and 0xFF sorts before a controller key such as Y (0x8000), so the front one can be empty
+		// while the control is bound.
+		const auto real = std::find_if(found.begin(), found.end(), [](const RE::ControlMap::UserEventMapping* a_m) { return a_m->inputKey != kUnmapped; });
+		const auto* m = real != found.end() ? *real : found.front();
+		a_key = m->inputKey;
+		a_modifier = m->modifier;
 		return true;
 	}
 
@@ -1345,6 +1405,21 @@ namespace unbinder
 			return a_keys;
 		}
 
+		// The control's live keys on a_device are exactly the keys controlmap.txt gives it there - the whole set, not the
+		// first key: Favorites on D-pad up alone is NOT its default of D-pad up and down (1.1.3).
+		bool OnDefaultKeys(std::string_view a_event, int a_device, const std::vector<std::uint16_t>& a_live)
+		{
+			if (a_device < 0 || a_device > 2) { return false; }
+			const auto& defaults = GameplayDefaults();
+			const auto it = defaults.find(Lower(a_event));
+			if (it == defaults.end()) { return false; }
+			std::vector<std::uint16_t> real;
+			for (const auto k : a_live) { if (k != kUnmapped) { real.push_back(k); } }
+			std::sort(real.begin(), real.end());
+			real.erase(std::unique(real.begin(), real.end()), real.end());
+			return real == it->second.all[a_device];
+		}
+
 		// Caller holds g_lock. Gameplay|a_event on a_device now has a_live keys: make the INI lists say so.
 		int RecordLocked(std::string_view a_event, int a_device, const std::vector<std::uint16_t>& a_live, const char* a_reason)
 		{
@@ -1374,7 +1449,7 @@ namespace unbinder
 				return changed;
 			}
 			if (entry != g_entries.end()) { g_entries.erase(entry); ++changed; }
-			if (std::find(a_live.begin(), a_live.end(), def) != a_live.end())
+			if (OnDefaultKeys(a_event, a_device, a_live))
 			{
 				if (bind != g_binds.end()) { g_binds.erase(bind); ++changed; }
 				if (changed) { logger::info("own remaps ({}): {}|{}|{} is back on its controlmap.txt key {} - its INI lines are dropped", a_reason, context, a_event, DeviceName(a_device), Hex(def)); }
@@ -1480,7 +1555,7 @@ namespace unbinder
 				});
 				if (bound) { continue; }
 				const bool hasKey = std::any_of(keys.begin(), keys.end(), [](std::uint16_t a_k) { return a_k != kUnmapped; });
-				const bool same = hasKey ? std::find(keys.begin(), keys.end(), def->second.key[d]) != keys.end() : def->second.key[d] == kUnmapped;
+				const bool same = hasKey ? OnDefaultKeys(live.events[i], d, keys) : def->second.key[d] == kUnmapped;
 				if (same) { continue; }
 				changed += RecordLocked(live.events[i], d, keys, a_reason);
 			}
@@ -1559,6 +1634,25 @@ namespace unbinder
 			{
 				if (!IEquals(e.context, "Gameplay") || a_gamepad != (e.device == 2)) { continue; }
 				if (std::none_of(events.begin(), events.end(), [&](const std::string& a_have) { return IEquals(a_have, e.event); })) { events.push_back(e.event); }
+			}
+		}
+		// The game leaves a control with no key off its Controls list, whatever took the key. A control it lets the player
+		// remap on this family is put back too, not only the INI list's, so no control can be unbound out of reach (the owner,
+		// 2026-10-20, after a player found no row to bind Favorites back). A keyless control the game does not let the player
+		// remap on this family stays off the page, as the game has it.
+		if (auto* map = RE::ControlMap::GetSingleton(); map)
+		{
+			if (auto* ctx = Context(map, 0); ctx)
+			{
+				for (int d = a_gamepad ? 2 : 0; d <= (a_gamepad ? 2 : 1); ++d)
+				{
+					for (const auto& m : ctx->deviceMappings[d])
+					{
+						const char* id = m.eventID.c_str();
+						if (!id || !*id || !m.remappable) { continue; }
+						if (std::none_of(events.begin(), events.end(), [&](const std::string& a_have) { return IEquals(a_have, id); })) { events.emplace_back(id); }
+					}
+				}
 			}
 		}
 		std::vector<KeylessControl> out;

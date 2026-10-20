@@ -1,16 +1,18 @@
 ﻿Unbind Vanilla Controls
-Version 1.1.2
+Version 1.1.3
 
 Skyrim's own Controls menu can only move a control to another key. It cannot leave a control with no
 key at all. This mod can: every control listed in its INI has no key while you play, so pressing the
 key it had does nothing and the key is free for something else.
 
 WHAT IT UNBINDS OUT OF THE BOX
-Keyboard: Journal, Quick Inventory, Quick Magic, Quick Map, Quick Stats, Wait, Favorites, Quicksave,
-Quickload, Auto-Move and Toggle Always Run.
+Keyboard: Journal, Quick Inventory, Quick Magic, Quick Map, Quick Stats, Wait, Quicksave, Quickload,
+Auto-Move and Toggle Always Run.
 Controller: Wait (Back) and Journal (Start).
-Every other control keeps its key, Toggle POV included. A menu action the game ties to an unbound
-control keeps its key.
+Every other control keeps its key. Favorites stays on Q, and on the controller it is on D-pad down, so
+that D-pad up can be Toggle POV. A menu action the game ties to an unbound control keeps its key.
+If you use Wheeler on Q or the D-pad instead of the Favorites menu, the INI has the author's two
+Favorites lines ready to switch on, with what to change beside them.
 
 SYSTEM TAB ON THE CONTROLLER
 Skyrim gives the System tab no controller button. This mod puts it on Start: pressing Start opens the
@@ -51,9 +53,11 @@ Quicksave, Save, Load, Installed Content, Creations, Settings, Mod Configuration
 Quit.
 bEnabled=0 turns the [Unbound] and [Bound] lists off. The INI explains the names.
 
-In the game's Controls menu (Journal > System > Controls) an unbound control's row shows no key.
-Pressing a control's own key again when the menu asks for a key unbinds it on that device; giving an
-unbound control a key there keeps that key.
+In the game's Controls menu (Journal > System > Controls) an unbound control's row shows no key, and
+every unbound control keeps its row, so it can always be bound again. Pressing a control's own key
+again when the menu asks for a key unbinds it on that device; giving an unbound control a key there
+keeps that key, and only that key. A control the game gives two buttons (Favorites: D-pad up and down)
+keeps just the one you press.
 
 MENU BUTTONS HAVE THEIR OWN KEYS
 The game's control map gives many menu buttons no key of their own: they borrow a gameplay control's key
@@ -107,6 +111,16 @@ Send the log for any bug you find:
 Documents\My Games\Skyrim Special Edition\SKSE\UnbindControls.log
 
 WHAT CHANGED
+
+Version 1.1.3
+Fixed Favorites coming back on D-pad up AND down after a restart when you had set it to D-pad up only.
+The game gives Favorites both buttons; your choice is now kept exactly as you set it.
+Changed Favorites to stay bound out of the box: Q on the keyboard, D-pad down on the controller (D-pad
+up stays Toggle POV). The author's Wheeler setup, which unbinds it, is now an optional pair of lines in
+the INI. An INI you already have keeps its own lines: to get Favorites back, delete the two Favorites
+lines in its [Unbound] section, or bind Favorites Menu again on the Controls page.
+Fixed an unbound control having no row on the Controls page when something other than this mod's list
+took its key. Favorites now also has a row on the controller page.
 
 Version 1.1.2
 The log is written at info out of the box (uLogLevel=2), with more detail available by lowering it in the INI.

@@ -1704,7 +1704,12 @@ namespace controlslist
 			unbinder::LiveBinding(a_context, a_event, a_device, oldKey, oldMod);
 			const std::uint16_t wantMod = a_combo ? unbinder::ModifierFor(a_device) : 0;
 			const std::string keyText = std::format("{} 0x{:02x}{}", unbinder::DeviceName(a_device), a_key, a_combo ? " + Modifier" : "");
-			if (!a_combo && a_key == oldKey && oldMod == 0)
+			// Its own key pressed again unbinds it - when that is its ONLY key. A control the game gives several keys on this
+			// device (Favorites: D-pad up and down) pressed on one of them is set to that key alone, which is what the player
+			// is asking for ("just have up on the dpad activate favorites", 1.1.3).
+			const auto liveKeys = unbinder::LiveKeysIn(a_context, a_event, a_device);
+			const auto realKeys = std::count_if(liveKeys.begin(), liveKeys.end(), [](std::uint16_t a_k) { return a_k != kUnmappedID; });
+			if (!a_combo && a_key == oldKey && oldMod == 0 && realKeys <= 1)
 			{
 				std::string why;
 				unbinder::RemoveBind(a_context, a_event, a_device);

@@ -183,8 +183,10 @@ namespace unbinder
 	// The game's Controls list shows either the keyboard AND mouse keys or the gamepad buttons, for the Gameplay context.
 	// KeylessOnFamily: a_event has at least one mapping on that family and every one is 0xFF on the live map; a_order
 	// gets its indexInContext (the order controlmap.txt lists it in). OrderInContext: that index on any device, -1 when
-	// the event is not in Gameplay. ListedKeylessOnFamily: the INI list's Gameplay controls for that family that are
-	// keyless right now (empty when the list is switched off).
+	// the event is not in Gameplay. ListedKeylessOnFamily: the Gameplay controls that are keyless on that family right now
+	// and that the page would otherwise lose - the INI list's, and (1.1.3) every control the game lets the player remap on
+	// that family, whatever took its key (a ControlMap_Custom.txt, a controls replacer), so an unbound control always has a
+	// row to bind it again (empty when the list is switched off).
 	struct KeylessControl
 	{
 		std::string event;

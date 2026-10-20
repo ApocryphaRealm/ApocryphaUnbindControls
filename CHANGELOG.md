@@ -7,6 +7,15 @@ Rule 61: this mod's own history, kept beside the code it describes.
 > number; at `.9` the MINOR rolls. The next number is LAST WORKING + 1; failed/scratch/
 > untested numbers are reused. Numbers come from version-gate.ps1.
 
+## 1.1.3 - 2026-10-20 - untested
+
+### Fixed
+- **Every unbound control keeps a row on the Controls page.** The game leaves a control with no key off its list; the mod already put the [Unbound] list's controls back, and now also any control the game lets you remap on that page whatever took its key (a ControlMap_Custom.txt, a controls replacer). Favorites is forced remappable on the controller ([Remappable]), so it has a row on the controller page too.
+- **Favorites set to D-pad up comes back as D-pad up only after a restart** (a Nexus report: bound to up, it came back on up AND down). The game gives Favorites both D-pad buttons, and two things put the second one back: at every start the bind was skipped as already applied because only the control's first button was compared (up, after the sort), and recording a remap counted a control as back on its default when it held the default's FIRST button, which dropped its INI line. A bind now means that button and only that button, and a control is back on its default only when it has every default button and no other. Pressing one of a two-button control's buttons on the Controls page sets it to that button alone instead of unbinding it, and a control whose unused second mapping sorts first (a button such as Y) no longer reads as having no key.
+
+### Changed
+- **Favorites ships bound** (a Nexus report: Q did nothing and the classic menu was gone). It is off the shipped [Unbound] list on both devices: Q on the keyboard, and D-pad down alone on the controller (a new [Bound] line), so D-pad up stays Toggle POV. The author's Wheeler setup, which unbinds Favorites on Q and the D-pad, is a commented optional pair of lines in [Unbound] with what to change beside it. An INI you already have keeps its own lines: delete its two Favorites lines in [Unbound], or bind Favorites Menu again on the Controls page. The compiled defaults now match the shipped [Unbound], [Bound] and [Remappable] lists.
+
 ## 1.1.2 - 2026-09-28 - working
 
 ### Changed
