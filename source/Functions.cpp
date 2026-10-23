@@ -343,9 +343,10 @@ namespace functions
 		}
 
 		// POWER ATTACK. One Click Power Attack is the shipped "Power Attack" row (DefaultFunctions). BFCO keeps its own
-		// power-attack key and modifier (MCM Helper, SCSI-ACTbfco-Main).
+		// power-attack key and modifier (MCM Helper, SCSI-ACTbfco-Main). Told apart by its plugin, not BFCO.dll: BFCO NG
+		// ships a BFCO.dll too but keeps its keys in Input Manager, which has no file this row could write.
 		add("Power Attack (BFCO)", target("MCM\\Settings\\SCSI-ACTbfco-Main.ini", "Controls", "iKeyAttackPowerNUM", "iKeyAttackPowerNUMmodf", -1,
-										  "SKSE\\Plugins\\BFCO.dll"));
+										  "SCSI-ACTbfco-Main.esp"));
 
 		// TARGET LOCK. True Directional Movement keeps ONE uTargetLockKey for every device, and on a pad the lock follows
 		// the Toggle POV button unless bTargetLockUsePOVSwitchGamepad is 0 (the owner, 2026-10-23: "when the player binds
