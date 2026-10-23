@@ -1,0 +1,4 @@
+; fixture for Unbind Vanilla Controls' "Dodge (TK Dodge RE Addon)" row - where the mod keeps its key
+; source: TK Dodge RE Addon: tk-dodge.toml defaults, tk-dodge_custom.toml overrides; [Settings] uDodgeKey, input handler skips 1
+[Settings]
+uDodgeKey = 0

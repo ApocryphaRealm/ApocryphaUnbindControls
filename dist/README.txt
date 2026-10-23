@@ -1,5 +1,5 @@
 ﻿Unbind Vanilla Controls
-Version 1.1.3
+Version 1.2.0
 
 Skyrim's own Controls menu can only move a control to another key. It cannot leave a control with no
 key at all. This mod can: every control listed in its INI has no key while you play, so pressing the
@@ -79,6 +79,23 @@ Favorite Item (ITEMS - favourites the highlighted item), which starts on F / Y (
 like any other. The Favorites menu, lockpicking, follower and journal buttons keep their own keys but get
 no row: they only repeat the MENUS ones.
 
+ROWS FOR OTHER MODS' KEYS
+EXTRA CONTROLS also holds rows for keys that other mods keep in their own settings. Binding one there
+writes the key into that mod's settings file, so the player sets it once, on the game's own page. Each
+row shows only while its mod is installed, is named after it, and at first shows the key that mod
+already uses:
+  Call Horse    Simplest Horses (hold to call, tap: follow / wait), Press H to Horse
+  Dodge         TK Dodge RE / TK Dodge NG, TK Dodge RE Addon, TK Dodge AIO, Dodge - MCO (DMCO)
+  Power Attack  One Click Power Attack, BFCO
+  Target Lock   True Directional Movement, Simple Lock-On
+  Also: Stance (Stances NG), Wheel Menu (Wheeler) and Back Pocket (Back Pocket for Controller)
+On a controller, a Target Lock (True Directional Movement) button also stops the lock following the
+Toggle POV button, and clearing the row gives it back to Toggle POV. Binding Dodge (DMCO) turns its
+dodge-on-Sprint off; clearing the row turns it back on. A mod uses the new key when it next reads its
+settings: One Click Power Attack when the journal closes, True Directional Movement and Dodge - MCO when
+their own MCM page closes, the others at the next game load. Mods that keep their key in the save (the
+original TK Dodge SE, The Ultimate Dodge Mod) cannot be set from here.
+
 YOUR CONTROLS STAY IN THE MOD'S OWN FILE
 Every change you make in the Controls menu is written into this mod's INI: a control left with no key
 goes into [Unbound], a control given another key goes into [Bound], and a control put back on the
@@ -111,6 +128,12 @@ Send the log for any bug you find:
 Documents\My Games\Skyrim Special Edition\SKSE\UnbindControls.log
 
 WHAT CHANGED
+
+Version 1.2.0
+Added rows on the Controls page for Call Horse, Dodge, Power Attack and Target Lock that set the key of
+whichever supported mod you use (see ROWS FOR OTHER MODS' KEYS).
+A row for a mod that uses MCM Helper now shows that mod's default key before you have changed it in its
+MCM, instead of no key.
 
 Version 1.1.3
 Fixed Favorites coming back on D-pad up AND down after a restart when you had set it to D-pad up only.

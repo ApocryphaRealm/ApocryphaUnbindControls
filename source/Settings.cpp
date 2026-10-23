@@ -179,7 +179,7 @@ namespace settings
 						if (bar == std::string::npos) { break; }
 						from = bar + 1;
 					}
-					if (parts.size() < 7 || parts.size() > 11) { ++a_badLines; logger::warn("INI [Functions] line \"{}\" is not Name|Device|Button|Modifier|File|Section|Key[|ModifierKey[|NoKeyValue[|GamepadSection[|RequiresFile]]]]; ignored", t); continue; }
+					if (parts.size() < 7 || parts.size() > 12) { ++a_badLines; logger::warn("INI [Functions] line \"{}\" is not Name|Device|Button|Modifier|File|Section|Key[|ModifierKey[|NoKeyValue[|GamepadSection[|RequiresFile[|Options]]]]]; ignored", t); continue; }
 					functions::Function f;
 					f.name = parts[0];
 					if (f.name.empty()) { ++a_badLines; logger::warn("INI [Functions] line \"{}\" has no name; ignored", t); continue; }
@@ -200,7 +200,13 @@ namespace settings
 					}
 					// A file whose presence means the target MOD is installed. Without it the row is not shown
 					// and writes nothing, so this mod is safe to install without the mods its rows point at.
-					if (parts.size() == 11) { f.target.requiresFile = parts[10]; }
+					if (parts.size() >= 11) { f.target.requiresFile = parts[10]; }
+					// 1.2.0: padfirst / padswitch=Section:Key=Bound/Unbound (True Directional Movement's target lock).
+					if (parts.size() == 12 && !parts[11].empty())
+					{
+						std::string why;
+						if (!f.target.ParseOptions(parts[11], why)) { ++a_badLines; logger::warn("INI [Functions] line \"{}\": {}; ignored", t, why); continue; }
+					}
 					// What the TARGET writes for "no key" - not a constant across mods: One Click Power Attack uses
 					// -1, Stances NG uses 0 ("0 is to deactivate the key entirely"). Writing the wrong one would
 					// leave a cleared row pointing at a real key.
@@ -320,6 +326,15 @@ namespace settings
 			const std::size_t remappableCount = sawRemappable ? remappable.size() : unbinder::GetRemappable().size();
 			if (sawRemappable) { unbinder::SetRemappable(std::move(remappable)); }
 			logger::info("controls forced remappable: {}{}", remappableCount, sawRemappable ? "" : " (no [Remappable] section - shipped list kept)");
+			// The built-in adapter rows (1.2.0) join whatever the INI listed, so an INI from an older version gets them;
+			// a row the INI already has for the same mod setting keeps its place and its name.
+			if (sawFunctions)
+			{
+				if (const int merged = functions::MergeBuiltIns(funcs); merged > 0)
+				{
+					logger::info("[Functions]: {} built-in adapter row(s) added to the INI's list", merged);
+				}
+			}
 			const std::size_t functionCount = sawFunctions ? funcs.size() : functions::GetFunctions().size();
 			if (sawFunctions) { functions::SetFunctions(std::move(funcs)); }
 			// Declared AND present, because they differ whenever a row points at a mod that is not installed -
@@ -412,7 +427,11 @@ namespace settings
 		unbinder::SetEntries(unbinder::DefaultEntries());
 		unbinder::SetBinds(unbinder::DefaultBinds());
 		systemmenu::SetHidden(systemmenu::DefaultHidden());
-		functions::SetFunctions(functions::DefaultFunctions());
+		{
+			auto shipped = functions::DefaultFunctions();
+			functions::MergeBuiltIns(shipped);
+			functions::SetFunctions(std::move(shipped));
+		}
 		unbinder::SetRemappable(unbinder::DefaultRemappable());
 		unbinder::SetModifiers(unbinder::DefaultModifiers());
 
@@ -479,7 +498,9 @@ namespace settings
 		for (const auto& f : functions::GetFunctions())
 		{
 			std::string device, keyText, modText;
-			for (int d = 0; d < 3; ++d)
+			// The line holds one device's binding: the one the target takes (padfirst: the gamepad), so a reload
+			// delivers the same key it did before the save.
+			for (const int d : f.target.gamepadFirst ? std::array<int, 3>{ 2, 0, 1 } : std::array<int, 3>{ 0, 1, 2 })
 			{
 				if (f.bind[d].key == 0xFF) { continue; }
 				device = unbinder::DeviceName(d);
@@ -494,7 +515,15 @@ namespace settings
 			}
 			// Nine fields only when there is neither a gamepad section nor a RequiresFile: the short form had dropped
 			// the eleventh field on every save, so Power Attack and Stance lost their DLL probe (found 2026-09-28).
-			if (f.target.gamepadSection.empty() && f.target.requiresFile.empty())
+			if (f.target.HasOptions())
+			{
+				// Twelve fields (1.2.0): the options follow RequiresFile.
+				functionLines.push_back(std::format("{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}", f.name, device, keyText, modText,
+													f.target.file, f.target.section, f.target.key, f.target.modifierKey, f.target.none,
+													f.target.gamepadKey.empty() ? f.target.gamepadSection : f.target.gamepadSection + ":" + f.target.gamepadKey,
+													f.target.requiresFile, f.target.OptionsText()));
+			}
+			else if (f.target.gamepadSection.empty() && f.target.requiresFile.empty())
 			{
 				functionLines.push_back(std::format("{}|{}|{}|{}|{}|{}|{}|{}|{}", f.name, device, keyText, modText,
 													f.target.file, f.target.section, f.target.key, f.target.modifierKey, f.target.none));

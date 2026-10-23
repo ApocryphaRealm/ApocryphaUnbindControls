@@ -59,6 +59,29 @@ namespace functions
 		// "Section:Key" in the GamepadSection field; empty means the gamepad section uses `key` too. Last, so the
 		// shipped rows' positional initialisers keep their meaning.
 		std::string gamepadKey;
+		// 1.2.0 (the INI's twelfth field, "Options", ';'-separated):
+		//   padfirst  - a single-key target takes the GAMEPAD binding when both families are bound (the default is
+		//               keyboard first). True Directional Movement keeps one uTargetLockKey for every device.
+		//   padswitch=Section:Key=Bound/Unbound - a second setting the row writes with its key: Bound while the row has
+		//               a gamepad button, Unbound while it has none. True Directional Movement's target lock follows
+		//               the Toggle POV button on a pad unless bTargetLockUsePOVSwitchGamepad is 0, so a pad button bound
+		//               on the row turns that off, and clearing it gives the lock back to Toggle POV.
+		//   switch=Section:Key=Bound/Unbound - the same, for a binding on ANY device. DodgeFramework (Dodge - MCO)
+		//               ignores uDodgeKey while bUseSprintButton is 1, so a bound row sets it to 0.
+		//   defaults=File - where the target's value lives while the target file does not hold it (read only, for
+		//               adopting). TK Dodge RE Addon reads tk-dodge.toml and then the player's tk-dodge_custom.toml.
+		//               MCM Helper targets (MCM\Settings\<id>.ini) need no option: their defaults are found by name.
+		struct Switch
+		{
+			std::string section, key, bound, unbound;
+			bool padOnly = false;
+		};
+		bool gamepadFirst = false;
+		std::vector<Switch> switches;
+		std::string defaultsFile;
+		bool HasOptions() const { return gamepadFirst || !switches.empty() || !defaultsFile.empty(); }
+		std::string OptionsText() const;          // the twelfth field as it is written back
+		bool ParseOptions(const std::string& a_text, std::string& a_why);
 	};
 
 	struct Binding
@@ -88,6 +111,14 @@ namespace functions
 	// UNBOUND on every device - a row that arrives already holding a button would take that button away from whatever
 	// the player has there, and the point of the row is that the player picks.
 	std::vector<Function> DefaultFunctions();
+	// The BUILT-IN adapter rows (1.2.0, the owner, 2026-10-23: "make sure it can read and write to those mods to change
+	// its control setting", whatever mod the player uses): Call Horse, Dodge, Power Attack and Target Lock, one row per
+	// supported mod, named "<Function> (<Mod>)". They are added to the INI's list at load (MergeBuiltIns) so an INI
+	// written by an older version gets them too, and like every row they show only while their mod is installed.
+	std::vector<Function> BuiltInAdapters();
+	// Adds each built-in adapter the list does not already have - by name, or by a row that already writes the same
+	// file, section and key (a player's own row for that mod keeps its place). Returns how many were added.
+	int MergeBuiltIns(std::vector<Function>& a_list);
 
 	// True when a_name is one of the function rows (the Controls list asks this once per visible row per frame, so it
 	// must not copy the vector). a_index gets its position in the list.

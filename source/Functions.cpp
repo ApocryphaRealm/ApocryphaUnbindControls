@@ -223,6 +223,161 @@ namespace functions
 		return out;
 	}
 
+	std::string Target::OptionsText() const
+	{
+		std::string out;
+		if (gamepadFirst) { out = "padfirst"; }
+		for (const auto& s : switches)
+		{
+			out += std::format("{}{}={}:{}={}/{}", out.empty() ? "" : ";", s.padOnly ? "padswitch" : "switch", s.section, s.key, s.bound, s.unbound);
+		}
+		if (!defaultsFile.empty()) { out += std::format("{}defaults={}", out.empty() ? "" : ";", defaultsFile); }
+		return out;
+	}
+
+	bool Target::ParseOptions(const std::string& a_text, std::string& a_why)
+	{
+		std::size_t from = 0;
+		while (from <= a_text.size())
+		{
+			const auto semi = a_text.find(';', from);
+			const std::string token = Trim(a_text.substr(from, semi == std::string::npos ? std::string::npos : semi - from));
+			from = semi == std::string::npos ? a_text.size() + 1 : semi + 1;
+			if (token.empty()) { continue; }
+			if (IEquals(token, "padfirst"))
+			{
+				gamepadFirst = true;
+				continue;
+			}
+			const auto startsWith = [&](std::string_view a_prefix) {
+				return token.size() > a_prefix.size() && IEquals(std::string_view(token).substr(0, a_prefix.size()), a_prefix);
+			};
+			constexpr std::string_view kDefaults = "defaults=";
+			if (startsWith(kDefaults))
+			{
+				defaultsFile = Trim(token.substr(kDefaults.size()));
+				continue;
+			}
+			const bool padOnly = startsWith("padswitch=");
+			if (padOnly || startsWith("switch="))
+			{
+				// Section:Key=Bound/Unbound
+				const std::string spec = token.substr(token.find('=') + 1);
+				const auto colon = spec.find(':');
+				const auto eq = spec.find('=', colon == std::string::npos ? 0 : colon);
+				const auto slash = spec.find('/', eq == std::string::npos ? 0 : eq);
+				if (colon == std::string::npos || eq == std::string::npos || slash == std::string::npos || colon == 0 || eq == colon + 1)
+				{
+					a_why = std::format("{} is Section:Key=Bound/Unbound", padOnly ? "padswitch" : "switch");
+					return false;
+				}
+				Switch s;
+				s.section = Trim(spec.substr(0, colon));
+				s.key = Trim(spec.substr(colon + 1, eq - colon - 1));
+				s.bound = Trim(spec.substr(eq + 1, slash - eq - 1));
+				s.unbound = Trim(spec.substr(slash + 1));
+				s.padOnly = padOnly;
+				switches.push_back(std::move(s));
+				continue;
+			}
+			a_why = std::format("unknown option \"{}\"", token);
+			return false;
+		}
+		return true;
+	}
+
+	// The built-in adapters (1.2.0). One row per supported mod, named "<Function> (<Mod>)" so the row says which mod
+	// it drives; each is shown only while that mod's file is there, and ships unbound - at the first load it adopts the
+	// key the mod already has. Only mods that READ their key from a file can have one: a key kept in the save by a
+	// Papyrus MCM (Immersive Horses, Convenient Horses ...) has no file to write, so those mods get no row - see
+	// DEFAULT-KEYS.md. Where each key lives was read from the mods' own files and source (2026-10-23). A mod picks the
+	// new key up when IT reads its file: One Click Power Attack when the Journal closes, True Directional Movement and
+	// DodgeFramework when their own MCM page closes, and the rest at the next game load (Simplest Horses, Press H to
+	// Horse and BFCO read the key through a Papyrus script; the TK Dodge builds and Simple Lock-On at start-up).
+	std::vector<Function> BuiltInAdapters()
+	{
+		std::vector<Function> out;
+		const auto add = [&](const char* a_name, Target a_target) {
+			Function f;
+			f.name = a_name;
+			f.target = std::move(a_target);
+			out.push_back(std::move(f));
+		};
+		const auto target = [](const char* a_file, const char* a_section, const char* a_key, const char* a_modifierKey, int a_none,
+								  const char* a_requires) {
+			Target t;
+			t.file = a_file;
+			t.section = a_section;
+			t.key = a_key;
+			t.modifierKey = a_modifierKey;
+			t.none = a_none;
+			t.requiresFile = a_requires;
+			return t;
+		};
+
+		// CALL HORSE. Simplest Horses: hold the key (0.7 s) and let go to call the horse, tap to make it follow or wait
+		// (MCM Helper; RegisterForKey takes SKSE codes, so a pad button works). Press H to Horse: its horse key (MCM
+		// Helper; hold 0.9 s for the treat / horse menu).
+		add("Call Horse (Simplest Horses)", target("MCM\\Settings\\SimplestHorses.ini", "Main", "iHorse_hotkey", "", -1, "SimplestHorses.esp"));
+		add("Call Horse (Press H to Horse)", target("MCM\\Settings\\H2Horse.ini", "General", "iHorseKey", "", -1, "H2Horse.esp"));
+
+		// DODGE. The four TK Dodge "RE" builds all ship TK_Dodge_RE.dll, so each is told apart by its own settings file.
+		// TK Dodge RE and TK Dodge NG: [Main] DodgeHotkey, no "none" of their own - 0 is a key no input produces.
+		add("Dodge (TK Dodge RE)", target("SKSE\\Plugins\\TK Dodge RE.ini", "Main", "DodgeHotkey", "", 0, "SKSE\\Plugins\\TK Dodge RE.ini"));
+		// TK Dodge RE Addon: tk-dodge.toml holds the defaults, the player's tk-dodge_custom.toml overrides it; its input
+		// handler skips 1 ("no key").
+		{
+			Target t = target("SKSE\\Plugins\\tk-dodge_custom.toml", "Settings", "uDodgeKey", "", 1, "SKSE\\Plugins\\tk-dodge.toml");
+			t.defaultsFile = "SKSE\\Plugins\\tk-dodge.toml";
+			add("Dodge (TK Dodge RE Addon)", std::move(t));
+		}
+		// TK Dodge AIO (ours): the Addon's settings under its own file; 1 is "no key" as in the Addon.
+		add("Dodge (TK Dodge AIO)", target("SKSE\\Plugins\\TK Dodge AIO.ini", "Settings", "uDodgeKey", "", 1, "SKSE\\Plugins\\TK Dodge AIO.ini"));
+		// Dodge - MCO's DodgeFramework reads only the player's MCM Helper file, and ignores uDodgeKey while
+		// bUseSprintButton is 1 (its default: dodge on a tap of Sprint) - so a bound row turns that off, and clearing
+		// the row gives the dodge back to Sprint.
+		{
+			Target t = target("MCM\\Settings\\DodgeFramework.ini", "Controls", "uDodgeKey", "", -1, "SKSE\\Plugins\\DodgeFramework.dll");
+			t.switches.push_back({ "Controls", "bUseSprintButton", "0", "1", false });
+			add("Dodge (DMCO)", std::move(t));
+		}
+
+		// POWER ATTACK. One Click Power Attack is the shipped "Power Attack" row (DefaultFunctions). BFCO keeps its own
+		// power-attack key and modifier (MCM Helper, SCSI-ACTbfco-Main).
+		add("Power Attack (BFCO)", target("MCM\\Settings\\SCSI-ACTbfco-Main.ini", "Controls", "iKeyAttackPowerNUM", "iKeyAttackPowerNUMmodf", -1,
+										  "SKSE\\Plugins\\BFCO.dll"));
+
+		// TARGET LOCK. True Directional Movement keeps ONE uTargetLockKey for every device, and on a pad the lock follows
+		// the Toggle POV button unless bTargetLockUsePOVSwitchGamepad is 0 (the owner, 2026-10-23: "when the player binds
+		// a gamepad button, set UsePOVSwitchGamepad=0 so the dedicated key wins"). So the pad binding wins the key, and
+		// clearing it gives the lock back to Toggle POV.
+		{
+			Target t = target("MCM\\Settings\\TrueDirectionalMovement.ini", "Keys", "uTargetLockKey", "", -1, "SKSE\\Plugins\\TrueDirectionalMovement.dll");
+			t.gamepadFirst = true;
+			t.switches.push_back({ "TargetLock", "bTargetLockUsePOVSwitchGamepad", "0", "1", true });
+			add("Target Lock (True Directional Movement)", std::move(t));
+		}
+		// Simple Lock-On SE: [Settings] uHotKey; a code past the last SKSE button never matches, so -1 is "no key".
+		add("Target Lock (Simple Lock-On)", target("SKSE\\Plugins\\SimpleLockOn.ini", "Settings", "uHotKey", "", -1, "SKSE\\Plugins\\SimpleLockOn.dll"));
+		return out;
+	}
+
+	int MergeBuiltIns(std::vector<Function>& a_list)
+	{
+		int added = 0;
+		for (auto& b : BuiltInAdapters())
+		{
+			const bool have = std::any_of(a_list.begin(), a_list.end(), [&](const Function& a_f) {
+				return IEquals(a_f.name, b.name) ||
+				       (IEquals(a_f.target.file, b.target.file) && IEquals(a_f.target.section, b.target.section) && IEquals(a_f.target.key, b.target.key));
+			});
+			if (have) { continue; }
+			a_list.push_back(std::move(b));
+			++added;
+		}
+		return added;
+	}
+
 	bool IsFunctionRow(std::string_view a_name, std::size_t* a_index)
 	{
 		std::scoped_lock l(g_lock);
@@ -365,6 +520,38 @@ namespace functions
 			}
 			return {};
 		}
+
+		// MCM Helper keeps a mod's DEFAULTS in MCM\Config\<id>\settings.ini and writes MCM\Settings\<id>.ini only once
+		// the player changes something in its menu. A target in MCM\Settings whose file or key is not there yet is in
+		// force at its default, so that is what a row adopts (1.2.0: Simplest Horses' H was "no key" on the page while
+		// H called the horse). "" when the target is not an MCM Helper settings file.
+		std::filesystem::path McmDefaultsFor(const std::string& a_file)
+		{
+			constexpr std::string_view kPrefix = "MCM\\Settings\\";
+			if (a_file.size() <= kPrefix.size() + 4 || !IEquals(std::string_view(a_file).substr(0, kPrefix.size()), kPrefix)) { return {}; }
+			std::string id = a_file.substr(kPrefix.size());
+			if (id.find('\\') != std::string::npos || !IEquals(std::string_view(id).substr(id.size() - 4), ".ini")) { return {}; }
+			id.resize(id.size() - 4);
+			return std::filesystem::path(g_dataPath) / "MCM" / "Config" / id / "settings.ini";
+		}
+
+		// The value in force for a target setting: the file itself, else MCM Helper's default for it.
+		std::string ReadTargetValue(const Target& a_target, const std::string& a_section, const std::string& a_key)
+		{
+			std::string value = ReadKey(std::filesystem::path(g_dataPath) / a_target.file, a_section, a_key);
+			if (value.empty() && !a_target.defaultsFile.empty())
+			{
+				value = ReadKey(std::filesystem::path(g_dataPath) / a_target.defaultsFile, a_section, a_key);
+			}
+			if (value.empty())
+			{
+				if (const auto defaults = McmDefaultsFor(a_target.file); !defaults.empty())
+				{
+					value = ReadKey(defaults, a_section, a_key);
+				}
+			}
+			return value;
+		}
 	}
 
 	int Adopt(const char* a_reason)
@@ -389,8 +576,7 @@ namespace functions
 			const bool bound = std::any_of(f.bind.begin(), f.bind.end(), [](const Binding& a_b) { return a_b.key != kUnbound; });
 			if (bound && f.target.gamepadSection.empty()) { continue; }
 
-			const std::filesystem::path path = std::filesystem::path(g_dataPath) / f.target.file;
-
+			// Read through ReadTargetValue: the target file, else MCM Helper's default for it (1.2.0).
 			// A split target holds one key per device, so each section is read into the device it belongs to and
 			// the row can end up bound on both. A single-key target keeps the old behaviour: whichever device the
 			// number decodes to is the one it lands on.
@@ -406,7 +592,7 @@ namespace functions
 						std::scoped_lock l(g_lock);
 						if (i < g_functions.size() && g_functions[i].bind[forDevice].key != kUnbound) { continue; }
 					}
-					const std::string raw = ReadKey(path, sectionName, f.target.KeyFor(forDevice));
+					const std::string raw = ReadTargetValue(f.target, sectionName, f.target.KeyFor(forDevice));
 					if (raw.empty()) { continue; }
 					int code = f.target.none;
 					try { code = std::stoi(raw); } catch (...) { continue; }
@@ -418,7 +604,7 @@ namespace functions
 					std::uint16_t modifier = 0;
 					if (!f.target.modifierKey.empty())
 					{
-						const std::string modRaw = ReadKey(path, sectionName, f.target.modifierKey);
+						const std::string modRaw = ReadTargetValue(f.target, sectionName, f.target.modifierKey);
 						int modCode = f.target.none;
 						try { modCode = std::stoi(modRaw); } catch (...) { modCode = f.target.none; }
 						if (modCode != f.target.none)
@@ -443,7 +629,7 @@ namespace functions
 				continue;
 			}
 
-			const std::string value = ReadKey(path, f.target.section, f.target.key);
+			const std::string value = ReadTargetValue(f.target, f.target.section, f.target.key);
 			if (value.empty()) { continue; }
 			int code = f.target.none;
 			try { code = std::stoi(value); } catch (...) { continue; }
@@ -455,7 +641,7 @@ namespace functions
 			std::uint16_t modifier = 0;
 			if (!f.target.modifierKey.empty())
 			{
-				const std::string modValue = ReadKey(path, f.target.section, f.target.modifierKey);
+				const std::string modValue = ReadTargetValue(f.target, f.target.section, f.target.modifierKey);
 				int modCode = f.target.none;
 				try { modCode = std::stoi(modValue); } catch (...) { modCode = f.target.none; }
 				if (modCode != f.target.none)
@@ -573,11 +759,20 @@ namespace functions
 
 				int code = f.target.none;
 				int device = -1;
-				for (int d : { 0, 1, 2 })
+				// Keyboard first, unless the target says the gamepad wins (padfirst, 1.2.0).
+				const std::array<int, 3> order = f.target.gamepadFirst ? std::array<int, 3>{ 2, 0, 1 } : std::array<int, 3>{ 0, 1, 2 };
+				for (int d : order)
 				{
 					if (f.bind[d].key != kUnbound) { code = ToInputCode(f.bind[d].key, d); device = d; break; }
 				}
 				WriteKey(lines, f.target.section, f.target.key, std::to_string(code));
+				for (const auto& s : f.target.switches)
+				{
+					// padswitch follows the gamepad binding; switch follows a binding on any device
+					const bool on = s.padOnly ? f.bind[2].key != kUnbound : device >= 0;
+					WriteKey(lines, s.section, s.key, on ? s.bound : s.unbound);
+					applied += std::format("{}\"{}\" {} -> {}", applied.empty() ? "" : ", ", f.name, s.key, on ? s.bound : s.unbound);
+				}
 				int modifierWritten = f.target.none;
 				if (!f.target.modifierKey.empty())
 				{

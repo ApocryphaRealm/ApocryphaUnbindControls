@@ -7,6 +7,34 @@ Rule 61: this mod's own history, kept beside the code it describes.
 > number; at `.9` the MINOR rolls. The next number is LAST WORKING + 1; failed/scratch/
 > untested numbers are reused. Numbers come from version-gate.ps1.
 
+## 1.2.0 - 2026-10-23 - untested
+
+### Added
+- **Built-in Controls-page rows for Call Horse, Dodge, Power Attack and Target Lock that set the key of whichever
+  supported mod is installed** (the owner, 2026-10-23: "make sure it can read and write to those mods to change its
+  control setting ... so that no matter what mod they're using"; Target Lock: "a target lock row ... that ties into or
+  reads and writes to True Directional Movement"). One row per mod, named after it ("Call Horse (Simplest Horses)"),
+  shown only while that mod is installed, shipped unbound and adopting the key the mod already has:
+  Simplest Horses and Press H to Horse; TK Dodge RE / NG, TK Dodge RE Addon, TK Dodge AIO and Dodge - MCO's
+  DodgeFramework; BFCO (One Click Power Attack keeps its "Power Attack" row); True Directional Movement and Simple
+  Lock-On. Where each mod keeps its key was read from its own files and source (survey 2026-10-23); mods that keep the
+  key in the save (the original TK Dodge SE, The Ultimate Dodge Mod, Simple Horse) have no file to write and get no
+  row, and Immersive Horses' JSON is not written yet. The rows are added at load to an INI from an older version
+  (functions::MergeBuiltIns), unless a row of the player's already sets the same mod setting - the owner's own "Call
+  Horse" row keeps its place and name. Translation tokens in all eleven languages.
+- `[Functions]` lines take a twelfth field, Options: `padfirst` (a one-key target takes the controller binding),
+  `padswitch=` / `switch=Section:Key=Bound/Unbound` (a second setting written with the key) and `defaults=File`.
+  True Directional Movement: a controller button bound on the row sets bTargetLockUsePOVSwitchGamepad=0 so the
+  dedicated button wins, and clearing it sets 1 again (the lock follows Toggle POV). DodgeFramework: a bound row sets
+  bUseSprintButton=0, which otherwise makes it ignore its dodge key.
+- tools\check_adapters.py: every built-in adapter's file, section and key checked against a fixture and, where the
+  mod is installed in Njordlinger, against the mod's own defaults file.
+
+### Changed
+- A row whose target is an MCM Helper settings file (MCM\Settings\<id>.ini) that does not hold the key yet adopts the
+  mod's default from MCM\Config\<id>\settings.ini, so the page shows the key in force (Simplest Horses' H showed as no
+  key while H called the horse). This applies to the existing Power Attack row too.
+
 ## 1.1.3 - 2026-10-20 - working
 
 ### Fixed
