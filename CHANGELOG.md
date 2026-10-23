@@ -7,7 +7,7 @@ Rule 61: this mod's own history, kept beside the code it describes.
 > number; at `.9` the MINOR rolls. The next number is LAST WORKING + 1; failed/scratch/
 > untested numbers are reused. Numbers come from version-gate.ps1.
 
-## 1.1.3 - 2026-10-20 - untested
+## 1.1.3 - 2026-10-20 - working
 
 ### Fixed
 - **Every unbound control keeps a row on the Controls page.** The game leaves a control with no key off its list; the mod already put the [Unbound] list's controls back, and now also any control the game lets you remap on that page whatever took its key (a ControlMap_Custom.txt, a controls replacer). Favorites is forced remappable on the controller ([Remappable]), so it has a row on the controller page too.
