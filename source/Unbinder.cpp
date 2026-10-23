@@ -519,6 +519,11 @@ namespace unbinder
 				if (!mappings) { logger::warn("apply ({}): Item Menus|{}|{} - no such device list; the Favourite key could not be fixed", a_reason, kEvent, DeviceName(d)); continue; }
 				auto found = Find(*mappings, kEvent);
 				if (found.empty()) { logger::warn("apply ({}): Item Menus|{}|{} - the game has no such control", a_reason, kEvent, DeviceName(d)); continue; }
+				// The Favorite Item row, whether or not the control map linked the button. Rows for menu actions came only from
+				// the links ConvertLinkedMappings turned into mappings, and a control map that gives YButton keys of its own
+				// (the installer's Controlmap.txt Fixed and Cleaned: 0x21 / 0x8000) has no link to turn, so the row was missing
+				// on both pages and the Favourite button could not be rebound (a Nexus report, 2026-10-23; 1.1.3).
+				RecordDelinked(kItemMenus, kEvent, d);
 				bool changed = false;
 				for (auto* m : found)
 				{

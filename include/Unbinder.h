@@ -155,7 +155,8 @@ namespace unbinder
 	// Menu actions controlmap.txt LINKED to a gameplay control, turned into separate mappings of their own (1.1.1; the
 	// owner, 2026-09-28: "convert all of the linked mappings ... into context-aware separate mappings" and "make sure that
 	// the game's controls area gets rows for each of these new entries"). Each one gets its own row on the Controls page,
-	// on the device family its links were on. The Favourite button's row is shown but fixed (F / Y).
+	// on the device family its links were on. The Favourite button (Item Menus YButton) always has its row, on both
+	// families, linked or not (1.1.3): its default is F / Y and it is rebindable.
 	struct DelinkedAction
 	{
 		int context = 0;

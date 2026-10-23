@@ -121,6 +121,9 @@ the INI. An INI you already have keeps its own lines: to get Favorites back, del
 lines in its [Unbound] section, or bind Favorites Menu again on the Controls page.
 Fixed an unbound control having no row on the Controls page when something other than this mod's list
 took its key. Favorites now also has a row on the controller page.
+Fixed the Favorite Item row (ITEMS, the button that favourites the highlighted item) missing from the
+Controls page with the installer's control map, so the Favourite button could not be moved. It now
+has its row on the keyboard and the controller page whichever control map you use.
 
 Version 1.1.2
 The log is written at info out of the box (uLogLevel=2), with more detail available by lowering it in the INI.
