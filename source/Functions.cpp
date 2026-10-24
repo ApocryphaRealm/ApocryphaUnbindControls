@@ -281,8 +281,9 @@ namespace functions
 	// it drives; each is shown only while that mod's file is there, and ships unbound - at the first load it adopts the
 	// key the mod already has. Only mods that READ their key from a file can have one: a key kept in the save by a
 	// Papyrus MCM (Convenient Horses ...) has no file to write, so those mods get no row - see DEFAULT-KEYS.md
-	// (Immersive Horses ships a JSON file, but which keys it holds and when the mod reads it are not known yet, so it has
-	// no row either). A mod that keeps its key in Input Manager (BFCO NG, Dodge for All) is driven through Input Manager's
+	// (Immersive Horses 3.0 keeps its hotkeys in SKSE\plugins\Immersive Horses\Immersive Horses.json, "int" object, SKSE
+	// codes, -1 = none - but its MCM script reads them only in OnConfigInit, once per save when SkyUI first starts its
+	// menu; from then on the keys live in the save. A row would change nothing in the game being played, so it has none.) A mod that keeps its key in Input Manager (BFCO NG, Dodge for All) is driven through Input Manager's
 	// API instead of a file (api=InputManager). Where each key lives was read from the mods' own files and source (2026-10-23). A mod picks the
 	// new key up when IT reads its file: One Click Power Attack when the Journal closes, True Directional Movement and
 	// DodgeFramework when their own MCM page closes, and the rest at the next game load (Simplest Horses, Press H to

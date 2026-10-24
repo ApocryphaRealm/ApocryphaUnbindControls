@@ -63,8 +63,10 @@ Rule 61: this mod's own history, kept beside the code it describes.
     load. include\InputManagerApi.h holds the interface declarations (Input Manager, GPL-3.0).
   - include\JsonValueCore.h: reads and writes one value in another mod's JSON with the same rule as the INI fix - an
     equal value (numbers by value) leaves the file untouched, a changed one is replaced in place, a missing key is never
-    added. Used to read BFCO NG's Settings.json. tools\json_value_check.bat (13 checks). No Immersive Horses row yet:
-    which keys its JSON holds and when the mod reads it could not be established from public sources.
+    added. Used to read BFCO NG's Settings.json. tools\json_value_check.bat (13 checks). No Immersive Horses row: its
+    3.0 scripts (read from its BSA, 2026-10-24) keep the hotkeys in Immersive Horses.json ("int" object, SKSE codes,
+    -1 = none) but read them only in the MCM's OnConfigInit - once per save, when SkyUI first starts its menu - and keep
+    them in the save after that, so a key written to the file would not reach the game being played.
   - True Directional Movement's Target Lock Extension by staalo18 (Nexus 160556) ships the same DLL and the same MCM
     Helper file, section and keys, so the existing Target Lock row drives it; adapter-fixtures\...\forks.ini records
     that and check_adapters.py fails if the row and the fork ever disagree.
