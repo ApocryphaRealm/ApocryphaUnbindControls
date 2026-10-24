@@ -42,7 +42,15 @@ and can be remapped on the controller, and Journal has no controller button.
 Credits carried from that page: DavidJCobb for the original Cobb Controlmap Fix, and mistaabushido for Controlmap.txt Fixed
 and Cleaned, which were the basis of that mod; Hawkbar for Skyrim Control Mapper.
 
+## Input Manager API declarations (include/InputManagerApi.h)
+
+https://github.com/vinymayan/Input-Manager (`include/InputManagerAPI.h`), Input Manager by RetiredViny (Nexus 174545),
+GPL-3.0. The interface declarations this mod calls Input Manager through - struct layouts and the virtual functions in their
+order, which the calls depend on - are taken from that public header. No other Input Manager code is included; Input
+Manager itself is a separate mod the player installs.
+
 ## Notes
 
-* This mod ships no code from any other mod: the DLL is original code built on CommonLibSSE-NG (above).
+* Apart from the Input Manager interface declarations above, this mod ships no code from any other mod: the DLL is
+  original code built on CommonLibSSE-NG (above).
 * devbench.dll is a separate, optional program this mod only talks to through the DevBench consumer API.

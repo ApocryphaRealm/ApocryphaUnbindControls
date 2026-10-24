@@ -40,9 +40,12 @@ namespace
 			break;
 		case SKSE::MessagingInterface::kPostLoadGame:
 			unbinder::ApplyAll("game loaded");
+			// Input Manager fills its action list in its own kDataLoaded handler, which may come after ours (1.2.0)
+			if (functions::ApiRowsAtFirstLoad("game loaded") > 0) { settings::Save(); }
 			break;
 		case SKSE::MessagingInterface::kNewGame:
 			unbinder::ApplyAll("new game");
+			if (functions::ApiRowsAtFirstLoad("new game") > 0) { settings::Save(); }
 			break;
 		default:
 			break;

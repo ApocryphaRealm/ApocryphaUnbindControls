@@ -76,10 +76,19 @@ namespace functions
 			std::string section, key, bound, unbound;
 			bool padOnly = false;
 		};
+		//   api=InputManager - the key is not in a file: it is an Input Manager action, set through Input Manager's own API
+		//               (1.2.0, BFCO NG and Dodge for All). File is then SKSE\Plugins\InputManager.dll (the row also needs
+		//               it there), Section is empty, and Key names the actions: "Dodge Step,Dodge Roll,Dash" by name, or
+		//               "ids=<Data-relative JSON>:<array key>" for a mod that keeps the action ids in its own settings
+		//               (BFCO NG: SKSE\Plugins\BFCO NG\Settings.json:PowerAttackActionIDs). The FIRST action is the row's;
+		//               the others follow it while they share its key (Dodge for All's step, roll and dash are one key
+		//               tapped once, twice or with a modifier). Like a split target, the keyboard page drives the action's
+		//               PC key and the gamepad page its gamepad key.
 		bool gamepadFirst = false;
 		std::vector<Switch> switches;
 		std::string defaultsFile;
-		bool HasOptions() const { return gamepadFirst || !switches.empty() || !defaultsFile.empty(); }
+		std::string api;  // "" or "InputManager"
+		bool HasOptions() const { return gamepadFirst || !switches.empty() || !defaultsFile.empty() || !api.empty(); }
 		std::string OptionsText() const;          // the twelfth field as it is written back
 		bool ParseOptions(const std::string& a_text, std::string& a_why);
 	};
@@ -155,6 +164,12 @@ namespace functions
 	// over the target mod's own setting. True (the Controls menu, the DevBench tool) writes the "none" value as well,
 	// because there the player unbinding the row IS the instruction to clear it. Main thread only.
 	int Deliver(const char* a_reason, bool a_writeUnbound = true);
+
+	// The api=InputManager rows, once per session, at the first game load or new game: Input Manager builds its action
+	// list in ITS kDataLoaded handler, which may run after this mod's, so the rows that drive it may have been skipped at
+	// data load. Adopts and delivers those rows only (file rows are left to data load, as before). Returns the rows that
+	// took a value; the caller saves the INI. Main thread.
+	int ApiRowsAtFirstLoad(const char* a_reason);
 
 	// The SKSE Input Script code for a key on a device, and back. kUnbound / the target's "none" value round-trip.
 	int ToInputCode(std::uint16_t a_key, int a_device);

@@ -3,6 +3,8 @@
 #include "Functions.h"
 
 #include "IniLineCore.h"
+#include "InputManagerApi.h"
+#include "JsonValueCore.h"
 
 #include "Unbinder.h"
 #include "utils/Logger.h"
@@ -117,7 +119,13 @@ namespace functions
 		const std::string& probe = a_function.target.requiresFile.empty() ? a_function.target.file : a_function.target.requiresFile;
 		if (probe.empty()) { return false; }
 		std::error_code ec;
-		return std::filesystem::exists(std::filesystem::path(g_dataPath) / probe, ec) && !ec;
+		if (!std::filesystem::exists(std::filesystem::path(g_dataPath) / probe, ec) || ec) { return false; }
+		// An Input Manager row needs Input Manager too (its File is InputManager.dll), as well as the mod it is for.
+		if (!a_function.target.api.empty() && !a_function.target.requiresFile.empty())
+		{
+			return std::filesystem::exists(std::filesystem::path(g_dataPath) / a_function.target.file, ec) && !ec;
+		}
+		return true;
 	}
 
 	bool IsPresentAt(std::size_t a_index)
@@ -202,6 +210,7 @@ namespace functions
 			out += std::format("{}{}={}:{}={}/{}", out.empty() ? "" : ";", s.padOnly ? "padswitch" : "switch", s.section, s.key, s.bound, s.unbound);
 		}
 		if (!defaultsFile.empty()) { out += std::format("{}defaults={}", out.empty() ? "" : ";", defaultsFile); }
+		if (!api.empty()) { out += std::format("{}api={}", out.empty() ? "" : ";", api); }
 		return out;
 	}
 
@@ -226,6 +235,18 @@ namespace functions
 			if (startsWith(kDefaults))
 			{
 				defaultsFile = Trim(token.substr(kDefaults.size()));
+				continue;
+			}
+			constexpr std::string_view kApi = "api=";
+			if (startsWith(kApi))
+			{
+				api = Trim(token.substr(kApi.size()));
+				if (!IEquals(api, "InputManager"))
+				{
+					a_why = std::format("api={} is not one this version drives (InputManager)", api);
+					return false;
+				}
+				api = "InputManager";
 				continue;
 			}
 			const bool padOnly = startsWith("padswitch=");
@@ -259,8 +280,10 @@ namespace functions
 	// The built-in adapters (1.2.0). One row per supported mod, named "<Function> (<Mod>)" so the row says which mod
 	// it drives; each is shown only while that mod's file is there, and ships unbound - at the first load it adopts the
 	// key the mod already has. Only mods that READ their key from a file can have one: a key kept in the save by a
-	// Papyrus MCM (Immersive Horses, Convenient Horses ...) has no file to write, so those mods get no row - see
-	// DEFAULT-KEYS.md. Where each key lives was read from the mods' own files and source (2026-10-23). A mod picks the
+	// Papyrus MCM (Convenient Horses ...) has no file to write, so those mods get no row - see DEFAULT-KEYS.md
+	// (Immersive Horses ships a JSON file, but which keys it holds and when the mod reads it are not known yet, so it has
+	// no row either). A mod that keeps its key in Input Manager (BFCO NG, Dodge for All) is driven through Input Manager's
+	// API instead of a file (api=InputManager). Where each key lives was read from the mods' own files and source (2026-10-23). A mod picks the
 	// new key up when IT reads its file: One Click Power Attack when the Journal closes, True Directional Movement and
 	// DodgeFramework when their own MCM page closes, and the rest at the next game load (Simplest Horses, Press H to
 	// Horse and BFCO read the key through a Papyrus script; the TK Dodge builds and Simple Lock-On at start-up).
@@ -311,14 +334,41 @@ namespace functions
 			t.switches.push_back({ "Controls", "bUseSprintButton", "0", "1", false });
 			add("Dodge (DMCO)", std::move(t));
 		}
+		// Dodge for All: its own Input Manager actions, found by name - one key tapped once to step, twice to roll, and
+		// with Left Shift held to dash. The row moves the step's key, and the roll and dash with it while they share it.
+		{
+			Target t = target("SKSE\\Plugins\\InputManager.dll", "", "Dodge Step,Dodge Roll,Dash", "", 0, "SKSE\\Plugins\\DodgeAll.dll");
+			t.api = "InputManager";
+			add("Dodge (Dodge for All)", std::move(t));
+		}
 
 		// POWER ATTACK. One Click Power Attack is the shipped "Power Attack" row (DefaultFunctions). BFCO keeps its own
 		// power-attack key and modifier (MCM Helper, SCSI-ACTbfco-Main). Told apart by its plugin, not BFCO.dll: BFCO NG
 		// ships a BFCO.dll too but keeps its keys in Input Manager, which has no file this row could write.
 		add("Power Attack (BFCO)", target("MCM\\Settings\\SCSI-ACTbfco-Main.ini", "Controls", "iKeyAttackPowerNUM", "iKeyAttackPowerNUMmodf", -1,
 										  "SCSI-ACTbfco-Main.esp"));
+		// Simple Power Attack SKSE: [General] in SimplePowerAttack.ini, SKSE codes, 0 = no key for keys and modifiers alike.
+		// It reads the file once, at data load (or from its own "Reload from INI" button), so a key set here applies at the
+		// next game start - and its "Save to INI" button writes back what IT holds, over an edit made since that start.
+		add("Power Attack (Simple Power Attack)", target("SKSE\\Plugins\\SimplePowerAttack.ini", "General", "iKeycode", "iRightMod", 0,
+														  "SKSE\\Plugins\\SimplePowerAttack.dll"));
+		add("Left Power Attack (Simple Power Attack)", target("SKSE\\Plugins\\SimplePowerAttack.ini", "General", "iLeftKeycode", "iLeftMod", 0,
+															   "SKSE\\Plugins\\SimplePowerAttack.dll"));
+		add("Dual Power Attack (Simple Power Attack)", target("SKSE\\Plugins\\SimplePowerAttack.ini", "General", "iDualKeycode", "iDualMod", 0,
+															   "SKSE\\Plugins\\SimplePowerAttack.dll"));
+		// BFCO NG keeps no key of its own: the player picks which Input Manager actions are its power attack, and it saves
+		// their ids in Settings.json. So the row drives the first of those actions through Input Manager (api=InputManager);
+		// with none picked yet, the row has nothing to drive and says so in the log.
+		{
+			Target t = target("SKSE\\Plugins\\InputManager.dll", "", "ids=SKSE\\Plugins\\BFCO NG\\Settings.json:PowerAttackActionIDs", "", 0,
+							  "BFCO NG.esp");
+			t.api = "InputManager";
+			add("Power Attack (BFCO NG)", std::move(t));
+		}
 
-		// TARGET LOCK. True Directional Movement keeps ONE uTargetLockKey for every device, and on a pad the lock follows
+		// TARGET LOCK. (staalo18's Target Lock Extension, Nexus 160556, replaces TrueDirectionalMovement.dll and keeps the
+		// same MCM Helper file, section and keys, so this row drives it too - tools\adapter-fixtures says so and
+		// check_adapters.py holds the row to it.) True Directional Movement keeps ONE uTargetLockKey for every device, and on a pad the lock follows
 		// the Toggle POV button unless bTargetLockUsePOVSwitchGamepad is 0 (the owner, 2026-10-23: "when the player binds
 		// a gamepad button, set UsePOVSwitchGamepad=0 so the dedicated key wins"). So the pad binding wins the key, and
 		// clearing it gives the lock back to Toggle POV.
@@ -529,6 +579,193 @@ namespace functions
 		}
 	}
 
+	// INPUT MANAGER rows (api=InputManager, 1.2.0). The key lives in Input Manager's action list, not in a file this mod
+	// could edit, so it is read with GetActionInfo and written with UpdateActionMappingV2, which checks the new key against
+	// every other action, saves Input Manager's action files and puts the key in force at once. Read from Input Manager's
+	// source (2026-10-23): a PC key is the SKSE code, a gamepad key is the controller mask + 266, 0 is "no key" on both;
+	// action ids are positions in its list, so actions are found by name each time.
+	namespace
+	{
+		InputManagerAPI::IInputManagerV2* InputManager()
+		{
+			static InputManagerAPI::IInputManagerV2* api = nullptr;
+			if (api) { return api; }
+			const auto module = REX::W32::GetModuleHandleA("InputManager.dll");
+			if (!module) { return nullptr; }
+			using func_t = void* (*)(std::uint32_t);
+			const auto func = static_cast<func_t>(REX::W32::GetProcAddress(module, "GetInputManagerAPIEx"));
+			if (!func) { return nullptr; }
+			api = static_cast<InputManagerAPI::IInputManagerV2*>(func(InputManagerAPI::kAPIVersion2));
+			return api;
+		}
+
+		// Input Manager fills its action list in its own kDataLoaded handler; until then there is nothing to read or write.
+		InputManagerAPI::IInputManagerV2* InputManagerReady()
+		{
+			auto* im = InputManager();
+			return im && im->GetInputCount(0) > 0 ? im : nullptr;
+		}
+
+		// The row's actions, the row's own first: by name ("Dodge Step,Dodge Roll,Dash"), or the ids a mod saved in its
+		// own JSON ("ids=SKSE\Plugins\BFCO NG\Settings.json:PowerAttackActionIDs").
+		std::vector<int> ActionIds(InputManagerAPI::IInputManagerV2* a_im, const Target& a_target)
+		{
+			std::vector<int> ids;
+			const int count = static_cast<int>(a_im->GetInputCount(0));
+			constexpr std::string_view kIds = "ids=";
+			if (a_target.key.size() > kIds.size() && IEquals(std::string_view(a_target.key).substr(0, kIds.size()), kIds))
+			{
+				const std::string spec = a_target.key.substr(kIds.size());
+				const auto colon = spec.rfind(':');
+				if (colon == std::string::npos) { return ids; }
+				std::ifstream in(std::filesystem::path(g_dataPath) / spec.substr(0, colon), std::ios::binary);
+				if (!in) { return ids; }
+				const std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+				for (const int id : jsoncore::ReadIntArray(text, spec.substr(colon + 1)))
+				{
+					if (id >= 0 && id < count) { ids.push_back(id); }
+				}
+				return ids;
+			}
+			std::size_t from = 0;
+			while (from <= a_target.key.size())
+			{
+				const auto comma = a_target.key.find(',', from);
+				const std::string name = Trim(a_target.key.substr(from, comma == std::string::npos ? std::string::npos : comma - from));
+				from = comma == std::string::npos ? a_target.key.size() + 1 : comma + 1;
+				if (name.empty()) { continue; }
+				for (int i = 0; i < count; ++i)
+				{
+					const char* have = a_im->GetInputName(0, i);
+					if (have && IEquals(have, name))
+					{
+						ids.push_back(i);
+						break;
+					}
+				}
+			}
+			return ids;
+		}
+
+		std::uint32_t ImPadCode(std::uint16_t a_mask) { return a_mask == kUnbound ? 0 : InputManagerAPI::kGamepadOffset + a_mask; }
+
+		// Adopts the unbound sides of every Input Manager row from its first action. a_snapshot is the FULL list.
+		int AdoptInputManagerRows(const char* a_reason, const std::vector<Function>& a_snapshot)
+		{
+			auto* im = InputManagerReady();
+			if (!im) { return 0; }
+			int adopted = 0;
+			for (std::size_t i = 0; i < a_snapshot.size(); ++i)
+			{
+				const auto& f = a_snapshot[i];
+				if (f.target.api.empty() || !TargetPresent(f)) { continue; }
+				const auto ids = ActionIds(im, f.target);
+				if (ids.empty()) { continue; }
+				const auto info = im->GetActionInfo(ids.front());
+				if (!info.isValid) { continue; }
+				bool took = false;
+				// the PC key is one value for the keyboard and mouse family, like a single-key target
+				int device = -1;
+				const std::uint16_t pcKey = info.pcMainKey == 0 ? kUnbound : FromInputCode(static_cast<int>(info.pcMainKey), device);
+				const std::uint16_t padKey = info.gamepadMainKey > InputManagerAPI::kGamepadOffset ?
+				                                 static_cast<std::uint16_t>(info.gamepadMainKey - InputManagerAPI::kGamepadOffset) : kUnbound;
+				{
+					std::scoped_lock l(g_lock);
+					if (i >= g_functions.size()) { continue; }
+					auto& row = g_functions[i];
+					if (pcKey != kUnbound && (device == 0 || device == 1) && row.bind[0].key == kUnbound && row.bind[1].key == kUnbound)
+					{
+						row.bind[device] = { pcKey, 0 };
+						took = true;
+					}
+					if (padKey != kUnbound && row.bind[2].key == kUnbound)
+					{
+						row.bind[2] = { padKey, 0 };
+						took = true;
+					}
+				}
+				if (!took) { continue; }
+				++adopted;
+				logger::info("functions ({}): \"{}\" took the keys Input Manager's \"{}\" already had - PC {} gamepad {}", a_reason, f.name,
+							 info.name ? info.name : "?", info.pcMainKey, info.gamepadMainKey);
+			}
+			return adopted;
+		}
+
+		// Delivers the Input Manager rows of a_rows (already filtered as Deliver filters). Returns the actions updated.
+		int DeliverInputManagerRows(const char* a_reason, const std::vector<Function>& a_rows)
+		{
+			if (std::none_of(a_rows.begin(), a_rows.end(), [](const Function& a_f) { return !a_f.target.api.empty(); })) { return 0; }
+			auto* im = InputManagerReady();
+			if (!im)
+			{
+				logger::debug("functions ({}): Input Manager's actions are not loaded yet; its rows wait for the first game load", a_reason);
+				return 0;
+			}
+			int updated = 0;
+			for (const auto& f : a_rows)
+			{
+				if (f.target.api.empty()) { continue; }
+				const auto ids = ActionIds(im, f.target);
+				if (ids.empty())
+				{
+					logger::warn("functions ({}): \"{}\" has no Input Manager action to set ({}) - pick one in that mod's own menu first", a_reason,
+								 f.name, f.target.key);
+					continue;
+				}
+				// keyboard first, then mouse, for the PC key; the gamepad key on its own
+				const int pcDevice = f.bind[0].key != kUnbound ? 0 : (f.bind[1].key != kUnbound ? 1 : -1);
+				const std::uint32_t wantPc = pcDevice < 0 ? 0 : static_cast<std::uint32_t>(ToInputCode(f.bind[pcDevice].key, pcDevice));
+				const std::uint32_t wantPad = ImPadCode(f.bind[2].key);
+				const auto lead = im->GetActionInfo(ids.front());
+				if (!lead.isValid) { continue; }
+				const std::uint32_t oldPc = lead.pcMainKey;
+				const std::uint32_t oldPad = lead.gamepadMainKey;
+				if (oldPc == wantPc && oldPad == wantPad)
+				{
+					logger::debug("functions ({}): Input Manager's \"{}\" already has what the Controls page shows (\"{}\")", a_reason,
+								  lead.name ? lead.name : "?", f.name);
+					continue;
+				}
+				for (std::size_t n = 0; n < ids.size(); ++n)
+				{
+					auto info = im->GetActionInfo(ids[n]);
+					if (!info.isValid) { continue; }
+					const std::string actionName = info.name ? info.name : "?";
+					info.name = nullptr;  // null keeps the action's name
+					bool change = false;
+					// the row's own action always; the others only while they still share its key (a key of 0 shares nothing)
+					if (oldPc != wantPc && (n == 0 || (oldPc != 0 && info.pcMainKey == oldPc)))
+					{
+						info.pcMainKey = wantPc;
+						if (wantPc != 0 && info.pcMainAction == 0) { info.pcMainAction = 4; }  // none -> press, or the key would do nothing
+						change = true;
+					}
+					if (oldPad != wantPad && (n == 0 || (oldPad != 0 && info.gamepadMainKey == oldPad)))
+					{
+						info.gamepadMainKey = wantPad;
+						if (wantPad != 0 && info.gamepadMainAction == 0) { info.gamepadMainAction = 4; }
+						change = true;
+					}
+					if (!change) { continue; }
+					const auto result = im->UpdateActionMappingV2(ids[n], info);
+					if (result.success)
+					{
+						++updated;
+						logger::info("functions ({}): Input Manager's \"{}\" -> PC {} gamepad {} [\"{}\"]", a_reason, actionName, info.pcMainKey,
+									 info.gamepadMainKey, f.name);
+					}
+					else
+					{
+						logger::warn("functions ({}): Input Manager refused \"{}\" for \"{}\": {} (code {})", a_reason, actionName, f.name,
+									 result.message, static_cast<std::uint32_t>(result.code));
+					}
+				}
+			}
+			return updated;
+		}
+	}
+
 	int Adopt(const char* a_reason)
 	{
 		if (g_dataPath.empty()) { return 0; }
@@ -544,6 +781,7 @@ namespace functions
 			const auto& f = snapshot[i];
 			if (!TargetPresent(f)) { continue; }
 			if (f.target.file.empty() || f.target.key.empty()) { continue; }
+			if (!f.target.api.empty()) { continue; }  // AdoptInputManagerRows, below
 			// A SPLIT target is adopted PER DEVICE, because the INI stores only one device's binding per row: the
 			// save writes the first device that is bound, so a row holding both a keyboard and a gamepad key loses
 			// one of them on the next save. Re-adopting the missing side from the target on every load is what
@@ -644,41 +882,60 @@ namespace functions
 						 unbinder::DeviceName(device), (name && name[0]) ? name : "?", code,
 						 modifier ? std::format(", modifier {}", unbinder::ButtonName(modifier, device)) : "");
 		}
+		return adopted + AdoptInputManagerRows(a_reason, snapshot);
+	}
+
+	namespace
+	{
+		std::vector<Function> RowsToDeliver(const char* a_reason, bool a_writeUnbound)
+		{
+			std::vector<Function> snapshot = GetPresentFunctions();
+			if (snapshot.empty()) { return snapshot; }
+			if (g_dataPath.empty())
+			{
+				logger::warn("functions ({}): the game's Data folder is not known yet; nothing delivered", a_reason);
+				return {};
+			}
+			// A row bound to nothing is left alone unless the caller says otherwise: it would write the target's "none"
+			// value over a setting the target mod's own menu put there, which is how the first load of this feature wiped
+			// One Click Power Attack's key (2026-09-16). Adopt() is what fills such a row in instead.
+			// 1.2.1: even when the caller asks for unbound rows too (the Controls menu, the DevBench tool), only a row the
+			// PLAYER cleared is written as "no key" - every other unbound row leaves its mod's setting alone. A bind on one
+			// row delivered "no key" into every other unbound row's file (TK Dodge AIO's uDodgeKey 42 -> 1, batch 11).
+			std::erase_if(snapshot, [a_writeUnbound](const Function& a_f) {
+				const bool bound = std::any_of(a_f.bind.begin(), a_f.bind.end(), [](const Binding& a_b) { return a_b.key != kUnbound; });
+				return !bound && !(a_writeUnbound && a_f.clearedByPlayer);
+			});
+			return snapshot;
+		}
+	}
+
+	int ApiRowsAtFirstLoad(const char* a_reason)
+	{
+		static bool done = false;
+		if (done || !InputManagerReady()) { return 0; }
+		done = true;
+		const int adopted = AdoptInputManagerRows(a_reason, GetFunctions());
+		DeliverInputManagerRows(a_reason, RowsToDeliver(a_reason, false));
 		return adopted;
 	}
 
 	int Deliver(const char* a_reason, bool a_writeUnbound)
 	{
-		std::vector<Function> snapshot = GetPresentFunctions();
+		std::vector<Function> snapshot = RowsToDeliver(a_reason, a_writeUnbound);
 		if (snapshot.empty()) { return 0; }
-		if (g_dataPath.empty())
-		{
-			logger::warn("functions ({}): the game's Data folder is not known yet; nothing delivered", a_reason);
-			return 0;
-		}
 
 		// Several rows can share one target file, so the file is read once, every row that writes into it is applied,
 		// and it is written once - otherwise the second row would be applied to a copy read before the first.
-		// A row bound to nothing is left alone unless the caller says otherwise: it would write the target's "none"
-		// value over a setting the target mod's own menu put there, which is how the first load of this feature wiped
-		// One Click Power Attack's key (2026-09-16). Adopt() is what fills such a row in instead.
-		// 1.2.1: even when the caller asks for unbound rows too (the Controls menu, the DevBench tool), only a row the
-		// PLAYER cleared is written as "no key" - every other unbound row leaves its mod's setting alone. A bind on one row
-		// delivered "no key" into every other unbound row's file (TK Dodge AIO's uDodgeKey 42 -> 1, batch 11, 2026-10-23).
-		std::erase_if(snapshot, [a_writeUnbound](const Function& a_f) {
-			const bool bound = std::any_of(a_f.bind.begin(), a_f.bind.end(), [](const Binding& a_b) { return a_b.key != kUnbound; });
-			return !bound && !(a_writeUnbound && a_f.clearedByPlayer);
-		});
-		if (snapshot.empty()) { return 0; }
-
 		std::vector<std::string> files;
 		for (const auto& f : snapshot)
 		{
-			if (f.target.file.empty() || f.target.key.empty()) { continue; }
+			if (f.target.file.empty() || f.target.key.empty() || !f.target.api.empty()) { continue; }
 			if (std::none_of(files.begin(), files.end(), [&](const std::string& a_f) { return IEquals(a_f, f.target.file); })) { files.push_back(f.target.file); }
 		}
 
-		int written = 0;
+		// Input Manager rows have no file: their actions are set through its API (each one counted like a file written).
+		int written = DeliverInputManagerRows(a_reason, snapshot);
 		for (const auto& file : files)
 		{
 			const std::filesystem::path path = std::filesystem::path(g_dataPath) / file;

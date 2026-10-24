@@ -85,16 +85,23 @@ writes the key into that mod's settings file, so the player sets it once, on the
 row shows only while its mod is installed, is named after it, and at first shows the key that mod
 already uses:
   Call Horse    Simplest Horses (hold to call, tap: follow / wait), Press H to Horse
-  Dodge         TK Dodge RE / TK Dodge NG, TK Dodge RE Addon, TK Dodge AIO, Dodge - MCO (DMCO)
-  Power Attack  One Click Power Attack, BFCO
-  Target Lock   True Directional Movement, Simple Lock-On
+  Dodge         TK Dodge RE / TK Dodge NG, TK Dodge RE Addon, TK Dodge AIO, Dodge - MCO (DMCO),
+                Dodge for All
+  Power Attack  One Click Power Attack, BFCO, BFCO NG, Simple Power Attack (Power Attack, Left Power
+                Attack and Dual Power Attack rows)
+  Target Lock   True Directional Movement (also its Target Lock Extension), Simple Lock-On
   Also: Stance (Stances NG), Wheel Menu (Wheeler) and Back Pocket (Back Pocket for Controller)
 On a controller, a Target Lock (True Directional Movement) button also stops the lock following the
 Toggle POV button, and clearing the row gives it back to Toggle POV. Binding Dodge (DMCO) turns its
-dodge-on-Sprint off; clearing the row turns it back on. A mod uses the new key when it next reads its
-settings: One Click Power Attack when the journal closes, True Directional Movement and Dodge - MCO when
-their own MCM page closes, the others at the next game load. Mods that keep their key in the save (the
-original TK Dodge SE, The Ultimate Dodge Mod) cannot be set from here.
+dodge-on-Sprint off; clearing the row turns it back on. BFCO NG and Dodge for All keep their keys in
+Input Manager, so those rows set them through Input Manager (they show only while it is installed): BFCO
+NG's row sets the first action you picked as its power attack in BFCO NG's own menu, and Dodge for All's
+row moves the step, and the roll and dash with it while they share its key. A mod uses the new key when
+it next reads its settings: One Click Power Attack when the journal closes, True Directional Movement and
+Dodge - MCO when their own MCM page closes, Input Manager at once, Simple Power Attack at the NEXT GAME
+START (it reads its INI only then - and its own "Save to INI" button writes back the keys it started
+with), the others at the next game load. Mods that keep their key in the save (the original TK Dodge SE,
+The Ultimate Dodge Mod) cannot be set from here.
 
 YOUR CONTROLS STAY IN THE MOD'S OWN FILE
 Every change you make in the Controls menu is written into this mod's INI: a control left with no key

@@ -47,6 +47,27 @@ Rule 61: this mod's own history, kept beside the code it describes.
   bUseSprintButton=0, which otherwise makes it ignore its dodge key.
 - tools\check_adapters.py: every built-in adapter's file, section and key checked against a fixture and, where the
   mod is installed in Njordlinger, against the mod's own defaults file.
+- **More built-in rows, for mods the author survey found reachable without any change from their authors**
+  (2026-10-23):
+  - Simple Power Attack SKSE: "Power Attack", "Left Power Attack" and "Dual Power Attack (Simple Power Attack)", each
+    with its modifier (SimplePowerAttack.ini [General] iKeycode/iRightMod, iLeftKeycode/iLeftMod,
+    iDualKeycode/iDualMod; 0 = no key). The mod reads its INI only when the game starts, so a key set here applies at
+    the next game start - the INI and README say so.
+  - BFCO NG and Dodge for All, through **Input Manager's public API** (`api=InputManager`, a new Options value; the
+    rows show only while Input Manager is installed). "Power Attack (BFCO NG)" sets the first Input Manager action
+    picked as BFCO NG's power attack (its Settings.json PowerAttackActionIDs); "Dodge (Dodge for All)" sets the Dodge
+    Step action's key, and Dodge Roll's and Dash's with it while they share it, so one key keeps meaning tap / double
+    tap / Shift. The keyboard page sets the action's PC key and the controller page its gamepad key; Input Manager
+    checks the key against its other actions and saves its own files. An unchanged key is not sent. Input Manager
+    builds its action list at its own data load, so these rows are also adopted and delivered once at the first game
+    load. include\InputManagerApi.h holds the interface declarations (Input Manager, GPL-3.0).
+  - include\JsonValueCore.h: reads and writes one value in another mod's JSON with the same rule as the INI fix - an
+    equal value (numbers by value) leaves the file untouched, a changed one is replaced in place, a missing key is never
+    added. Used to read BFCO NG's Settings.json. tools\json_value_check.bat (13 checks). No Immersive Horses row yet:
+    which keys its JSON holds and when the mod reads it could not be established from public sources.
+  - True Directional Movement's Target Lock Extension by staalo18 (Nexus 160556) ships the same DLL and the same MCM
+    Helper file, section and keys, so the existing Target Lock row drives it; adapter-fixtures\...\forks.ini records
+    that and check_adapters.py fails if the row and the fork ever disagree.
 
 ### Changed
 - A row whose target is an MCM Helper settings file (MCM\Settings\<id>.ini) that does not hold the key yet adopts the

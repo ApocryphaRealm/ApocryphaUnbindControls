@@ -39,6 +39,9 @@ def adapters():
         d = re.search(r't\.defaultsFile = "([^"]*)";', m.group(7))
         if d:
             opts.append("defaults=" + d.group(1).replace("\\\\", "\\"))
+        api = re.search(r't\.api = "([^"]*)";', m.group(7))
+        if api:
+            opts.append("api=" + api.group(1))
         out.append((m.group(8),) + m.groups()[:4] + (int(m.group(5)), m.group(6), ";".join(opts)))
     # the C++ literals hold doubled backslashes
     out = [tuple(x.replace("\\\\", "\\") if isinstance(x, str) else x for x in row) for row in out]
@@ -83,6 +86,62 @@ def filtered_index_writes(text):
     return bad
 
 
+def check_input_manager_row(instance, name, file, key, none, requires):
+    """An api=InputManager row (1.2.0): its File must be Input Manager's DLL, its Key the actions the fixture names
+    (adapter-fixtures/<Name>/inputmanager.ini, [Actions] actions / requires), and its "no key" Input Manager's 0. Installed
+    in the instance means both the mod's RequiresFile and InputManager.dll are in a mods folder."""
+    bad = []
+    if file.lower() != r"skse\plugins\inputmanager.dll":
+        bad.append("File is %s, not SKSE\\Plugins\\InputManager.dll" % file)
+    fx = keys_in(os.path.join(FIX, name, "inputmanager.ini"))
+    if fx is None:
+        bad.append("no fixture %s" % os.path.join("tools", "adapter-fixtures", name, "inputmanager.ini"))
+    else:
+        if fx.get(("actions", "actions")) != key:
+            bad.append("the fixture names the actions %r, the row %r" % (fx.get(("actions", "actions")), key))
+        if fx.get(("actions", "requires"), "").lower() != requires.lower():
+            bad.append("the fixture says the mod is %r, the row requires %r" % (fx.get(("actions", "requires")), requires))
+    nk = keys_in(os.path.join(FIX, name, "no-key.ini"))
+    if nk is None or nk.get(("", "none")) != str(none) or none != 0:
+        bad.append("no-key must be Input Manager's 0 (row says %d)" % none)
+    live = "not installed here"
+    if os.path.isdir(os.path.join(instance, "mods")):
+        mod = mod_files(instance, requires)
+        im = mod_files(instance, r"SKSE\Plugins\InputManager.dll")
+        if mod and im:
+            live = "installed with Input Manager (%s)" % os.path.relpath(os.path.dirname(mod[0]), os.path.join(instance, "mods"))
+        elif im:
+            live = "Input Manager installed, the mod is not"
+    return bad, live
+
+
+def check_forks(name, file, section, key, requires, opts):
+    """adapter-fixtures/<Name>/forks.ini lists mods that REPLACE the row's mod (staalo18's TDM fork, Nexus 160556): each
+    must ship the same DLL and keep the same file, section, key and switch settings, or the row would not catch it."""
+    path = os.path.join(FIX, name, "forks.ini")
+    if not os.path.isfile(path):
+        return []
+    bad, forks, sec = [], {}, None
+    for line in open(path, encoding="utf-8-sig").read().splitlines():
+        t = line.strip()
+        if t.startswith("[") and t.endswith("]"):
+            sec = t[1:-1]
+            forks[sec] = {}
+        elif sec and "=" in t and not t.startswith(";"):
+            k, v = t.split("=", 1)
+            forks[sec].setdefault(k.strip().lower(), []).append(v.strip())
+    switches = [o.split("=", 1)[1].rsplit("=", 1)[0] for o in opts.split(";") if o.startswith(("padswitch=", "switch="))]
+    for fork, f in forks.items():
+        want = {"dll": [requires], "file": [file], "key": ["%s:%s" % (section, key)]}
+        for k, v in want.items():
+            if [x.lower() for x in f.get(k, [])] != [x.lower() for x in v]:
+                bad.append("fork %s: %s %s, the row %s" % (fork, k, f.get(k), v))
+        for s in f.get("switch", []):
+            if s.lower() not in [x.lower() for x in switches]:
+                bad.append("fork %s: switch %s is not one the row writes" % (fork, s))
+    return bad
+
+
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("--instance", default=r"D:\modlists\Njordlinger")
@@ -93,7 +152,14 @@ def main():
         print("FAIL: only %d adapters parsed out of BuiltInAdapters() - the parser and the source disagree" % len(ads))
         return 1
     for name, file, section, key, modkey, none, requires, opts in ads:
+        if "api=InputManager" in opts.split(";"):
+            bad, live = check_input_manager_row(a.instance, name, file, key, none, requires)
+            fails += bool(bad)
+            lines.append("%s %-42s [Input Manager] %s - %s%s" % ("FAIL" if bad else "ok  ", name, key, live,
+                                                                ("\n       " + "\n       ".join(bad)) if bad else ""))
+            continue
         bad = []
+        bad += check_forks(name, file, section, key, requires, opts)
         fx = os.path.join(FIX, name, file.replace("\\", os.sep))
         k = keys_in(fx)
         if k is None:
