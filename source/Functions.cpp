@@ -16,7 +16,9 @@
 #include <filesystem>
 #include <format>
 #include <fstream>
+#include <map>
 #include <mutex>
+#include <set>
 
 namespace functions
 {
@@ -211,6 +213,7 @@ namespace functions
 		}
 		if (!defaultsFile.empty()) { out += std::format("{}defaults={}", out.empty() ? "" : ";", defaultsFile); }
 		if (!api.empty()) { out += std::format("{}api={}", out.empty() ? "" : ";", api); }
+		if (!idCheck.empty()) { out += std::format("{}idcheck={}", out.empty() ? "" : ";", idCheck); }
 		return out;
 	}
 
@@ -247,6 +250,17 @@ namespace functions
 					return false;
 				}
 				api = "InputManager";
+				continue;
+			}
+			constexpr std::string_view kIdCheck = "idcheck=";
+			if (startsWith(kIdCheck))
+			{
+				idCheck = Trim(token.substr(kIdCheck.size()));
+				if (idCheck.find(':') == std::string::npos)
+				{
+					a_why = std::format("idcheck={} needs <JSON file>:<array key>", idCheck);
+					return false;
+				}
 				continue;
 			}
 			const bool padOnly = startsWith("padswitch=");
@@ -358,12 +372,13 @@ namespace functions
 		add("Dual Power Attack (Simple Power Attack)", target("SKSE\\Plugins\\SimplePowerAttack.ini", "General", "iDualKeycode", "iDualMod", 0,
 															   "SKSE\\Plugins\\SimplePowerAttack.dll"));
 		// BFCO NG keeps no key of its own: the player picks which Input Manager actions are its power attack, and it saves
-		// their ids in Settings.json. So the row drives the first of those actions through Input Manager (api=InputManager);
-		// with none picked yet, the row has nothing to drive and says so in the log.
+		// their ids in Settings.json. Ids are positions that move when a mod adds actions (test 4259 - Functions.h), so the
+		// row drives Input Manager's own "Power Attack" action BY NAME, and BFCO NG's saved id is only checked against it
+		// (idcheck): when that id names some other action now, the log says BFCO NG needs its power attack picked again.
 		{
-			Target t = target("SKSE\\Plugins\\InputManager.dll", "", "ids=SKSE\\Plugins\\BFCO NG\\Settings.json:PowerAttackActionIDs", "", 0,
-							  "BFCO NG.esp");
+			Target t = target("SKSE\\Plugins\\InputManager.dll", "", "Power Attack", "", 0, "BFCO NG.esp");
 			t.api = "InputManager";
+			t.idCheck = "SKSE\\Plugins\\BFCO NG\\Settings.json:PowerAttackActionIDs";
 			add("Power Attack (BFCO NG)", std::move(t));
 		}
 
@@ -389,6 +404,18 @@ namespace functions
 		int added = 0;
 		for (auto& b : BuiltInAdapters())
 		{
+			// A 1.2.0 test INI saved the BFCO NG row with "ids=..." as its Key: ids are positions (Functions.h), so the row
+			// takes the built-in's by-name Key and idcheck, keeping its keys and its place.
+			for (auto& f : a_list)
+			{
+				if (!b.target.api.empty() && IEquals(f.name, b.name) && !f.target.api.empty() && f.target.key.rfind("ids=", 0) == 0)
+				{
+					logger::info("[Functions]: \"{}\" - Key \"{}\" names Input Manager ids, which move; now \"{}\" by name (idcheck={})",
+								 f.name, f.target.key, b.target.key, b.target.idCheck);
+					f.target.key = b.target.key;
+					f.target.idCheck = b.target.idCheck;
+				}
+			}
 			const bool have = std::any_of(a_list.begin(), a_list.end(), [&](const Function& a_f) {
 				return IEquals(a_f.name, b.name) ||
 				       (IEquals(a_f.target.file, b.target.file) && IEquals(a_f.target.section, b.target.section) && IEquals(a_f.target.key, b.target.key));
@@ -607,8 +634,8 @@ namespace functions
 			return im && im->GetInputCount(0) > 0 ? im : nullptr;
 		}
 
-		// The row's actions, the row's own first: by name ("Dodge Step,Dodge Roll,Dash"), or the ids a mod saved in its
-		// own JSON ("ids=SKSE\Plugins\BFCO NG\Settings.json:PowerAttackActionIDs").
+		// The row's actions, the row's own first, found BY NAME ("Dodge Step,Dodge Roll,Dash") each time - the ids are
+		// positions and move (Functions.h). A 1.2.0 "ids=..." key from an older INI finds nothing, and says why once.
 		std::vector<int> ActionIds(InputManagerAPI::IInputManagerV2* a_im, const Target& a_target)
 		{
 			std::vector<int> ids;
@@ -616,15 +643,11 @@ namespace functions
 			constexpr std::string_view kIds = "ids=";
 			if (a_target.key.size() > kIds.size() && IEquals(std::string_view(a_target.key).substr(0, kIds.size()), kIds))
 			{
-				const std::string spec = a_target.key.substr(kIds.size());
-				const auto colon = spec.rfind(':');
-				if (colon == std::string::npos) { return ids; }
-				std::ifstream in(std::filesystem::path(g_dataPath) / spec.substr(0, colon), std::ios::binary);
-				if (!in) { return ids; }
-				const std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
-				for (const int id : jsoncore::ReadIntArray(text, spec.substr(colon + 1)))
+				static std::set<std::string> told;
+				if (told.insert(a_target.key).second)
 				{
-					if (id >= 0 && id < count) { ids.push_back(id); }
+					logger::warn("functions: Input Manager actions are found by name now - \"{}\" names ids, which move when a mod adds "
+								 "actions; write the action's name in Key (and the JSON as idcheck=)", a_target.key);
 				}
 				return ids;
 			}
@@ -648,6 +671,51 @@ namespace functions
 			return ids;
 		}
 
+		// idcheck (Functions.h): the first id the mod saved, against the row's named action. Logged when the answer changes -
+		// a mismatch as a warning (the mod listens to whatever now sits at that position), agreement at debug.
+		void CheckSavedIds(InputManagerAPI::IInputManagerV2* a_im, const Function& a_function, int a_rowAction)
+		{
+			const std::string& spec = a_function.target.idCheck;
+			if (spec.empty()) { return; }
+			const auto colon = spec.rfind(':');
+			std::vector<int> saved;
+			if (std::ifstream in(std::filesystem::path(g_dataPath) / spec.substr(0, colon), std::ios::binary); in)
+			{
+				const std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+				saved = jsoncore::ReadIntArray(text, spec.substr(colon + 1));
+			}
+			const char* rowName = a_im->GetInputName(0, a_rowAction);
+			const std::string want = rowName ? rowName : "?";
+			if (!saved.empty())
+			{
+				const int count = static_cast<int>(a_im->GetInputCount(0));
+				const char* at = saved.front() >= 0 && saved.front() < count ? a_im->GetInputName(0, saved.front()) : nullptr;
+				const std::string state = std::format("{}={}", saved.front(), at ? at : "(no action)");
+				static std::map<std::string, std::string> last;
+				if (last[a_function.name] == state) { return; }
+				last[a_function.name] = state;
+				if (saved.front() == a_rowAction)
+				{
+					logger::debug("functions: \"{}\" - {} lists Input Manager action {} (\"{}\"), the row's own", a_function.name, spec,
+								  saved.front(), want);
+				}
+				else
+				{
+					logger::warn("functions: \"{}\" - {} lists Input Manager action {}, which is \"{}\" now, not \"{}\": Input Manager's "
+								 "ids are positions and moved when a mod added actions, so that mod listens to the wrong action until "
+								 "its power attack is picked again in its own menu (this row sets \"{}\" by name)",
+						a_function.name, spec, saved.front(), at ? at : "(no action)", want, want);
+				}
+				return;
+			}
+			static std::set<std::string> toldNone;
+			if (toldNone.insert(a_function.name).second)
+			{
+				logger::info("functions: \"{}\" - {} lists no Input Manager action yet; this row sets \"{}\" by name", a_function.name, spec,
+							 want);
+			}
+		}
+
 		std::uint32_t ImPadCode(std::uint16_t a_mask) { return a_mask == kUnbound ? 0 : InputManagerAPI::kGamepadOffset + a_mask; }
 
 		// Adopts the unbound sides of every Input Manager row from its first action. a_snapshot is the FULL list.
@@ -662,6 +730,7 @@ namespace functions
 				if (f.target.api.empty() || !TargetPresent(f)) { continue; }
 				const auto ids = ActionIds(im, f.target);
 				if (ids.empty()) { continue; }
+				CheckSavedIds(im, f, ids.front());
 				const auto info = im->GetActionInfo(ids.front());
 				if (!info.isValid) { continue; }
 				bool took = false;
@@ -710,10 +779,10 @@ namespace functions
 				const auto ids = ActionIds(im, f.target);
 				if (ids.empty())
 				{
-					logger::warn("functions ({}): \"{}\" has no Input Manager action to set ({}) - pick one in that mod's own menu first", a_reason,
-								 f.name, f.target.key);
+					logger::warn("functions ({}): \"{}\" - Input Manager has no action named {} to set", a_reason, f.name, f.target.key);
 					continue;
 				}
+				CheckSavedIds(im, f, ids.front());
 				// keyboard first, then mouse, for the PC key; the gamepad key on its own
 				const int pcDevice = f.bind[0].key != kUnbound ? 0 : (f.bind[1].key != kUnbound ? 1 : -1);
 				const std::uint32_t wantPc = pcDevice < 0 ? 0 : static_cast<std::uint32_t>(ToInputCode(f.bind[pcDevice].key, pcDevice));

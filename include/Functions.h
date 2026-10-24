@@ -78,17 +78,24 @@ namespace functions
 		};
 		//   api=InputManager - the key is not in a file: it is an Input Manager action, set through Input Manager's own API
 		//               (1.2.0, BFCO NG and Dodge for All). File is then SKSE\Plugins\InputManager.dll (the row also needs
-		//               it there), Section is empty, and Key names the actions: "Dodge Step,Dodge Roll,Dash" by name, or
-		//               "ids=<Data-relative JSON>:<array key>" for a mod that keeps the action ids in its own settings
-		//               (BFCO NG: SKSE\Plugins\BFCO NG\Settings.json:PowerAttackActionIDs). The FIRST action is the row's;
-		//               the others follow it while they share its key (Dodge for All's step, roll and dash are one key
-		//               tapped once, twice or with a modifier). Like a split target, the keyboard page drives the action's
-		//               PC key and the gamepad page its gamepad key.
+		//               it there), Section is empty, and Key names the actions BY NAME: "Dodge Step,Dodge Roll,Dash". The
+		//               FIRST action is the row's; the others follow it while they share its key (Dodge for All's step,
+		//               roll and dash are one key tapped once, twice or with a modifier). Like a split target, the keyboard
+		//               page drives the action's PC key and the gamepad page its gamepad key.
+		//               NEVER BY ID (test 4259, 2026-10-24): an id is the action's position in Input Manager's list, and
+		//               the list renumbers when a mod adds actions - binding Dodge for All saved three new actions and
+		//               every id after them moved up, so BFCO NG's saved id 6 then meant "Right" and the row bound V to
+		//               strafe right. 1.2.0's "ids=<JSON>:<array>" key is therefore no longer read.
+		//   idcheck=<Data-relative JSON>:<array key> - a mod that saves the ids it listens to (BFCO NG:
+		//               SKSE\Plugins\BFCO NG\Settings.json:PowerAttackActionIDs) is CHECKED against the row's named action:
+		//               when its first id no longer names that action, the log says so (the mod would fire on whatever now
+		//               sits at that position). Nothing is written from it, and nothing is written to the mod's file.
 		bool gamepadFirst = false;
 		std::vector<Switch> switches;
 		std::string defaultsFile;
-		std::string api;  // "" or "InputManager"
-		bool HasOptions() const { return gamepadFirst || !switches.empty() || !defaultsFile.empty() || !api.empty(); }
+		std::string api;      // "" or "InputManager"
+		std::string idCheck;  // "" or "<JSON>:<array key>" (api=InputManager rows only)
+		bool HasOptions() const { return gamepadFirst || !switches.empty() || !defaultsFile.empty() || !api.empty() || !idCheck.empty(); }
 		std::string OptionsText() const;          // the twelfth field as it is written back
 		bool ParseOptions(const std::string& a_text, std::string& a_why);
 	};

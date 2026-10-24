@@ -42,6 +42,9 @@ def adapters():
         api = re.search(r't\.api = "([^"]*)";', m.group(7))
         if api:
             opts.append("api=" + api.group(1))
+        idc = re.search(r't\.idCheck = "([^"]*)";', m.group(7))
+        if idc:
+            opts.append("idcheck=" + idc.group(1).replace("\\\\", "\\"))
         out.append((m.group(8),) + m.groups()[:4] + (int(m.group(5)), m.group(6), ";".join(opts)))
     # the C++ literals hold doubled backslashes
     out = [tuple(x.replace("\\\\", "\\") if isinstance(x, str) else x for x in row) for row in out]
@@ -86,13 +89,18 @@ def filtered_index_writes(text):
     return bad
 
 
-def check_input_manager_row(instance, name, file, key, none, requires):
+def check_input_manager_row(instance, name, file, key, none, requires, opts=""):
     """An api=InputManager row (1.2.0): its File must be Input Manager's DLL, its Key the actions the fixture names
-    (adapter-fixtures/<Name>/inputmanager.ini, [Actions] actions / requires), and its "no key" Input Manager's 0. Installed
-    in the instance means both the mod's RequiresFile and InputManager.dll are in a mods folder."""
+    (adapter-fixtures/<Name>/inputmanager.ini, [Actions] actions / requires / idcheck), and its "no key" Input Manager's 0.
+    The actions are NAMES - an id is a position in Input Manager's list and moves when a mod adds actions (test 4259) -
+    and a mod's saved ids may only be an idcheck. Installed in the instance means both the mod's RequiresFile and
+    InputManager.dll are in a mods folder."""
     bad = []
     if file.lower() != r"skse\plugins\inputmanager.dll":
         bad.append("File is %s, not SKSE\\Plugins\\InputManager.dll" % file)
+    if key.lower().startswith("ids=") or any(x.strip().isdigit() for x in key.split(",")):
+        bad.append("Key %r names Input Manager ids - they are positions that move; name the actions" % key)
+    idcheck = next((o.split("=", 1)[1] for o in opts.split(";") if o.startswith("idcheck=")), "")
     fx = keys_in(os.path.join(FIX, name, "inputmanager.ini"))
     if fx is None:
         bad.append("no fixture %s" % os.path.join("tools", "adapter-fixtures", name, "inputmanager.ini"))
@@ -101,6 +109,8 @@ def check_input_manager_row(instance, name, file, key, none, requires):
             bad.append("the fixture names the actions %r, the row %r" % (fx.get(("actions", "actions")), key))
         if fx.get(("actions", "requires"), "").lower() != requires.lower():
             bad.append("the fixture says the mod is %r, the row requires %r" % (fx.get(("actions", "requires")), requires))
+        if fx.get(("actions", "idcheck"), "").lower() != idcheck.lower():
+            bad.append("the fixture's idcheck is %r, the row's %r" % (fx.get(("actions", "idcheck"), ""), idcheck))
     nk = keys_in(os.path.join(FIX, name, "no-key.ini"))
     if nk is None or nk.get(("", "none")) != str(none) or none != 0:
         bad.append("no-key must be Input Manager's 0 (row says %d)" % none)
@@ -153,7 +163,7 @@ def main():
         return 1
     for name, file, section, key, modkey, none, requires, opts in ads:
         if "api=InputManager" in opts.split(";"):
-            bad, live = check_input_manager_row(a.instance, name, file, key, none, requires)
+            bad, live = check_input_manager_row(a.instance, name, file, key, none, requires, opts)
             fails += bool(bad)
             lines.append("%s %-42s [Input Manager] %s - %s%s" % ("FAIL" if bad else "ok  ", name, key, live,
                                                                 ("\n       " + "\n       ".join(bad)) if bad else ""))

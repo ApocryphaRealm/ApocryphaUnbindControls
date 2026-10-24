@@ -54,8 +54,14 @@ Rule 61: this mod's own history, kept beside the code it describes.
     iDualKeycode/iDualMod; 0 = no key). The mod reads its INI only when the game starts, so a key set here applies at
     the next game start - the INI and README say so.
   - BFCO NG and Dodge for All, through **Input Manager's public API** (`api=InputManager`, a new Options value; the
-    rows show only while Input Manager is installed). "Power Attack (BFCO NG)" sets the first Input Manager action
-    picked as BFCO NG's power attack (its Settings.json PowerAttackActionIDs); "Dodge (Dodge for All)" sets the Dodge
+    rows show only while Input Manager is installed). "Power Attack (BFCO NG)" sets Input Manager's own "Power Attack"
+    action BY NAME, and checks BFCO NG's saved choice against it (`idcheck=`, Settings.json PowerAttackActionIDs): when
+    that id names another action now, the log warns that BFCO NG's power attack needs picking again in its own menu.
+    Test 4259 (2026-10-24) is why: the first build drove the action at BFCO NG's saved id, but Input Manager's ids are
+    POSITIONS - binding Dodge for All saved its three new actions and every id after them moved up, so id 6 went from
+    "Power Attack" to "Right" and the row bound V to strafe right. Actions are now only ever found by name; a 1.2.0 test
+    INI's "ids=..." Key for this row is converted at load, and tools\check_adapters.py refuses an id in an Input Manager
+    row's Key. "Dodge (Dodge for All)" sets the Dodge
     Step action's key, and Dodge Roll's and Dash's with it while they share it, so one key keeps meaning tap / double
     tap / Shift. The keyboard page sets the action's PC key and the controller page its gamepad key; Input Manager
     checks the key against its other actions and saves its own files. An unchanged key is not sent. Input Manager

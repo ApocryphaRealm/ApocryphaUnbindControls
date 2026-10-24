@@ -95,7 +95,8 @@ On a controller, a Target Lock (True Directional Movement) button also stops the
 Toggle POV button, and clearing the row gives it back to Toggle POV. Binding Dodge (DMCO) turns its
 dodge-on-Sprint off; clearing the row turns it back on. BFCO NG and Dodge for All keep their keys in
 Input Manager, so those rows set them through Input Manager (they show only while it is installed): BFCO
-NG's row sets the first action you picked as its power attack in BFCO NG's own menu, and Dodge for All's
+NG's row sets Input Manager's "Power Attack" action (pick that one as the power attack in BFCO NG's own
+menu; the log warns if BFCO NG is set to another action), and Dodge for All's
 row moves the step, and the roll and dash with it while they share its key. A mod uses the new key when
 it next reads its settings: One Click Power Attack when the journal closes, True Directional Movement and
 Dodge - MCO when their own MCM page closes, Input Manager at once, Simple Power Attack at the NEXT GAME
