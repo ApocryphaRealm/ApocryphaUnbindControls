@@ -2,6 +2,8 @@
 
 #include "Functions.h"
 
+#include "IniLineCore.h"
+
 #include "Unbinder.h"
 #include "utils/Logger.h"
 
@@ -64,43 +66,11 @@ namespace functions
 			return false;
 		}
 
-		// Writes key=value inside a_section of a_lines, adding the section or the key when either is missing, and
-		// leaving every other line of the file exactly as it was. The target file belongs to another mod: a rewrite
-		// that reordered or dropped its comments would be a change this mod has no business making.
+		// Writes key=value inside a_section of a_lines (IniLineCore.h: a key that already holds the value is left as the
+		// file has it, a changed value is replaced in place - batch 13, 2026-10-23).
 		bool WriteKey(std::vector<std::string>& a_lines, const std::string& a_section, const std::string& a_key, const std::string& a_value)
 		{
-			const std::string header = "[" + a_section + "]";
-			std::size_t sectionAt = a_lines.size();
-			for (std::size_t i = 0; i < a_lines.size(); ++i)
-			{
-				if (IEquals(Trim(a_lines[i]), header)) { sectionAt = i; break; }
-			}
-			if (sectionAt == a_lines.size())
-			{
-				if (!a_lines.empty() && !Trim(a_lines.back()).empty()) { a_lines.push_back(""); }
-				a_lines.push_back(header);
-				a_lines.push_back(a_key + "=" + a_value);
-				return true;
-			}
-			for (std::size_t i = sectionAt + 1; i < a_lines.size(); ++i)
-			{
-				const std::string trimmed = Trim(a_lines[i]);
-				if (IsSectionHeader(trimmed))
-				{
-					a_lines.insert(a_lines.begin() + static_cast<std::ptrdiff_t>(i), a_key + "=" + a_value);
-					return true;
-				}
-				if (trimmed.empty() || trimmed[0] == ';' || trimmed[0] == '#') { continue; }
-				const auto eq = trimmed.find('=');
-				if (eq == std::string::npos) { continue; }
-				if (IEquals(Trim(trimmed.substr(0, eq)), a_key))
-				{
-					a_lines[i] = a_key + "=" + a_value;
-					return true;
-				}
-			}
-			a_lines.push_back(a_key + "=" + a_value);
-			return true;
+			return inicore::WriteKey(a_lines, a_section, a_key, a_value);
 		}
 
 		// The binding the Controls page shows for a family. Keyboard and mouse share one column there, so the keyboard
@@ -714,12 +684,16 @@ namespace functions
 			const std::filesystem::path path = std::filesystem::path(g_dataPath) / file;
 			std::vector<std::string> lines;
 			bool bom = false;
+			bool lfOnly = false;   // the file's own line ends go back on (batch 13: a file is never restyled)
 			{
 				std::ifstream in(path, std::ios::binary);
 				std::string line;
+				bool sawCr = false;
+				bool sawLine = false;
 				while (in && std::getline(in, line))
 				{
-					if (!line.empty() && line.back() == '\r') { line.pop_back(); }
+					sawLine = true;
+					if (!line.empty() && line.back() == '\r') { line.pop_back(); sawCr = true; }
 					// MCM Helper writes its settings files with a UTF-8 BOM. Left on the first line it becomes part
 					// of that line's text, so "[General]" is not recognised as a section header and a SECOND
 					// [General] would be appended to a file that already had one. Stripped for the parse and put
@@ -731,6 +705,7 @@ namespace functions
 					}
 					lines.push_back(line);
 				}
+				lfOnly = sawLine && !sawCr;
 			}
 			const bool existed = !lines.empty();
 			const std::vector<std::string> before = lines;
@@ -814,7 +789,7 @@ namespace functions
 			// The BOM the file arrived with goes back on: the file belongs to another mod (MCM Helper writes its
 			// settings with one) and its encoding is not ours to change.
 			if (bom) { out << "\xEF\xBB\xBF"; }
-			for (const auto& line : lines) { out << line << "\r\n"; }
+			for (const auto& line : lines) { out << line << (lfOnly ? "\n" : "\r\n"); }
 			++written;
 			logger::info("functions ({}): {} {} [{}]", a_reason, existed ? "updated" : "created", path.string(), applied);
 		}

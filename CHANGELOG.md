@@ -19,6 +19,11 @@ Rule 61: this mod's own history, kept beside the code it describes.
 - **A bind on one row wrote "no key" into another mod's file** (TK Dodge AIO's uDodgeKey 42 became 1 - restored from
   the backup). Delivering from the Controls page wrote the "no key" value for every unbound row; now only a row the
   player cleared is written as "no key", and every other unbound row leaves its mod's setting alone.
+- **Another mod's INI was rewritten with the same values** (batch 13: TK Dodge AIO.ini and TrueDirectionalMovement.ini
+  changed hash at the first launch, "key = value" -> "key=value"). A key that already holds the value (compared as a
+  value: "42" = "42.0", case ignored for text) is left exactly as the file has it, so a file that already says it is not
+  written at all; a changed value is replaced in place, keeping the spaces round '=' and any trailing comment, and a
+  file with LF line ends keeps them. include\IniLineCore.h, tools\ini_line_check.bat (15 checks).
 - DevBench `uvc.state op=function`: names parse in short forms too ("LShift", "LAlt", as the key table's comment always
   claimed), and a plain decimal key is an SKSE input code (gamepad 273 = R3) instead of being read as an XInput mask.
 
