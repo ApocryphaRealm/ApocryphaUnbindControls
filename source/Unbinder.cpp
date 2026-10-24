@@ -1048,21 +1048,42 @@ namespace unbinder
 		return false;
 	}
 
+	// A button name as it is compared (1.2.1): lower case, spaces and underscores dropped, "left"/"right" shortened to l/r
+	// and "control" to "ctrl" - so "LShift", "lshift", "Left Shift" and "left_shift" are one name. The table's own
+	// comment promised "lshift" parsed; a plain case-insensitive compare never did (batch 11, 2026-10-23: "LShift" and
+	// "LAlt" refused by the DevBench function op).
+	static std::string ButtonKey(std::string_view a_text)
+	{
+		std::string s;
+		for (const char c : a_text)
+		{
+			if (c == ' ' || c == '_') { continue; }
+			s += static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+		}
+		for (const auto& [from, to] : { std::pair<std::string_view, std::string_view>{ "left", "l" }, { "right", "r" } })
+		{
+			if (s.rfind(from, 0) == 0) { s = std::string(to) + s.substr(from.size()); break; }
+		}
+		if (const auto at = s.find("control"); at != std::string::npos) { s.replace(at, 7, "ctrl"); }
+		return s;
+	}
+
 	std::uint16_t ParseButton(std::string_view a_text, int a_device)
 	{
+		const std::string wanted = ButtonKey(a_text);
 		if (a_device == 2)
 		{
 			for (const auto& [name, code] : kPadButtons)
 			{
-				if (IEquals(name, a_text)) { return code; }
+				if (IEquals(name, a_text) || ButtonKey(name) == wanted) { return code; }
 			}
 		}
 		if (a_device == 0)
 		{
-			// A keyboard key may be written by name ("Left Shift") as well as by code ("0x2a").
+			// A keyboard key may be written by name ("Left Shift", "LShift") as well as by code ("0x2a").
 			for (const auto& [name, code] : kKeyboardKeys)
 			{
-				if (IEquals(name, a_text)) { return code; }
+				if (IEquals(name, a_text) || ButtonKey(name) == wanted) { return code; }
 			}
 		}
 		try

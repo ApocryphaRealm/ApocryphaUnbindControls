@@ -221,8 +221,27 @@ namespace DevBenchTool
 					}
 					else
 					{
-						const std::uint16_t key = unbinder::ParseButton(keyText, device);
-						if (key == 0xFF) { why = "not a button name or code"; return; }
+						// 1.2.1: a plain decimal number is an SKSE input code - the numbering the target mods' files and
+						// this tool's own state use (0-255 keyboard, 256+ mouse, 266-281 gamepad). It was read as the
+						// unbinder's internal code, so a gamepad "273" (R3) was taken as an XInput mask and wrote 282
+						// (batch 11, 2026-10-23). Names ("Left Shift", "LShift", "RightStick") and 0x masks parse as before.
+						std::uint16_t key = 0xFF;
+						const bool decimal = !keyText.empty() && std::all_of(keyText.begin(), keyText.end(), [](unsigned char c) { return std::isdigit(c) != 0; });
+						if (decimal)
+						{
+							int codeDevice = -1;
+							key = functions::FromInputCode(std::stoi(keyText), codeDevice);
+							if (key != 0xFF && codeDevice != device)
+							{
+								why = std::format("SKSE code {} is a {} button, not {}", keyText, unbinder::DeviceName(codeDevice), deviceText);
+								return;
+							}
+						}
+						else
+						{
+							key = unbinder::ParseButton(keyText, device);
+						}
+						if (key == 0xFF) { why = "not a button name, an SKSE code (decimal) or a 0x code"; return; }
 						ok = functions::Bind(index, device, key, why);
 					}
 					if (ok) { settings::Save(); files = functions::Deliver("tool"); }

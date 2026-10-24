@@ -9,6 +9,19 @@ Rule 61: this mod's own history, kept beside the code it describes.
 
 ## 1.2.0 - 2026-10-23 - untested
 
+### Fixed (before release, from the first test - combined run 2026-10-23, batch 11)
+- **Adopted keys landed on the wrong rows.** Adopt walked the installed-only rows and wrote by that position into the
+  full list, so with an absent mod's built-in row in between, TK Dodge AIO's Left Shift went to "Call Horse (Press H to
+  Horse)" and TDM's R3 to "Dodge (TK Dodge RE)" - neither installed - and the two real rows stayed empty. It walks the
+  full list now and skips absent rows. Binding no longer refuses a key because an ABSENT mod's row "holds" it.
+  tools\check_adapters.py fails any function that writes the full list from the installed-only one (it catches the
+  1.2.0 Adopt).
+- **A bind on one row wrote "no key" into another mod's file** (TK Dodge AIO's uDodgeKey 42 became 1 - restored from
+  the backup). Delivering from the Controls page wrote the "no key" value for every unbound row; now only a row the
+  player cleared is written as "no key", and every other unbound row leaves its mod's setting alone.
+- DevBench `uvc.state op=function`: names parse in short forms too ("LShift", "LAlt", as the key table's comment always
+  claimed), and a plain decimal key is an SKSE input code (gamepad 273 = R3) instead of being read as an XInput mask.
+
 ### Added
 - **Built-in Controls-page rows for Call Horse, Dodge, Power Attack and Target Lock that set the key of whichever
   supported mod is installed** (the owner, 2026-10-23: "make sure it can read and write to those mods to change its

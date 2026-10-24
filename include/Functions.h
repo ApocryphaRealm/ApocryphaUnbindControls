@@ -95,6 +95,10 @@ namespace functions
 		std::string name;                 // the row's text on the Controls page, e.g. "Power Attack"
 		Target target;
 		std::array<Binding, 3> bind{};    // keyboard, mouse, gamepad
+		// 1.2.1: the player cleared this row (Unbind) this session. Only such a row has its target written to "no key";
+		// a row that is merely unbound - never adopted, or never touched - leaves its mod's setting alone, whoever
+		// triggered the delivery (batch 11, 2026-10-23: a bind on one row wrote TK Dodge AIO's uDodgeKey 42 -> 1).
+		bool clearedByPlayer = false;
 	};
 
 	// Only the rows whose target mod is actually installed. This is what the Controls page and delivery

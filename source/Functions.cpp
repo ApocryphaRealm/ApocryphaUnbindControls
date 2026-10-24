@@ -426,6 +426,8 @@ namespace functions
 		for (std::size_t i = 0; i < g_functions.size(); ++i)
 		{
 			if (i == a_index) { continue; }
+			// a row whose mod is not installed is not on the page and drives nothing: it cannot hold a key against this one
+			if (!TargetPresent(g_functions[i])) { continue; }
 			const auto& other = g_functions[i].bind[a_device];
 			if (other.key == a_key && other.modifier == g_functions[a_index].bind[a_device].modifier)
 			{
@@ -434,6 +436,7 @@ namespace functions
 			}
 		}
 		g_functions[a_index].bind[a_device].key = a_key;
+		g_functions[a_index].clearedByPlayer = false;
 		return true;
 	}
 
@@ -442,6 +445,7 @@ namespace functions
 		std::scoped_lock l(g_lock);
 		if (a_index >= g_functions.size() || a_device < 0 || a_device > 2) { return false; }
 		g_functions[a_index].bind[a_device] = {};
+		g_functions[a_index].clearedByPlayer = true;
 		return true;
 	}
 
@@ -558,12 +562,17 @@ namespace functions
 	int Adopt(const char* a_reason)
 	{
 		if (g_dataPath.empty()) { return 0; }
-		std::vector<Function> snapshot = GetPresentFunctions();
+		// The FULL list, so `i` is the row's index in g_functions - the index every write below uses. 1.2.0 walked the
+		// installed-only list and wrote by its index into the full one: with the built-in rows, an absent mod's row sat in
+		// between, and TK Dodge AIO's Left Shift and TDM's R3 landed on "Call Horse (Press H to Horse)" and "Dodge (TK Dodge
+		// RE)" (combined run 2026-10-23, batch 11). A row whose mod is absent is skipped here instead.
+		std::vector<Function> snapshot = GetFunctions();
 
 		int adopted = 0;
 		for (std::size_t i = 0; i < snapshot.size(); ++i)
 		{
 			const auto& f = snapshot[i];
+			if (!TargetPresent(f)) { continue; }
 			if (f.target.file.empty() || f.target.key.empty()) { continue; }
 			// A SPLIT target is adopted PER DEVICE, because the INI stores only one device's binding per row: the
 			// save writes the first device that is bound, so a row holding both a keyboard and a gamepad key loses
@@ -683,13 +692,14 @@ namespace functions
 		// A row bound to nothing is left alone unless the caller says otherwise: it would write the target's "none"
 		// value over a setting the target mod's own menu put there, which is how the first load of this feature wiped
 		// One Click Power Attack's key (2026-09-16). Adopt() is what fills such a row in instead.
-		if (!a_writeUnbound)
-		{
-			std::erase_if(snapshot, [](const Function& a_f) {
-				return std::none_of(a_f.bind.begin(), a_f.bind.end(), [](const Binding& a_b) { return a_b.key != kUnbound; });
-			});
-			if (snapshot.empty()) { return 0; }
-		}
+		// 1.2.1: even when the caller asks for unbound rows too (the Controls menu, the DevBench tool), only a row the
+		// PLAYER cleared is written as "no key" - every other unbound row leaves its mod's setting alone. A bind on one row
+		// delivered "no key" into every other unbound row's file (TK Dodge AIO's uDodgeKey 42 -> 1, batch 11, 2026-10-23).
+		std::erase_if(snapshot, [a_writeUnbound](const Function& a_f) {
+			const bool bound = std::any_of(a_f.bind.begin(), a_f.bind.end(), [](const Binding& a_b) { return a_b.key != kUnbound; });
+			return !bound && !(a_writeUnbound && a_f.clearedByPlayer);
+		});
+		if (snapshot.empty()) { return 0; }
 
 		std::vector<std::string> files;
 		for (const auto& f : snapshot)

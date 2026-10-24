@@ -70,6 +70,19 @@ def mod_files(instance, rel):
     return [p for p in glob.glob(os.path.join(instance, "mods", "*", rel)) if os.path.isfile(p)]
 
 
+def filtered_index_writes(text):
+    """[function name] for every function in Functions.cpp that takes the INSTALLED-only list (GetPresentFunctions) and
+    then writes g_functions[i] - an index into the filtered list used on the full one. 1.2.0's Adopt did exactly that:
+    with an absent mod's built-in row in between, TK Dodge AIO's Left Shift and TDM's R3 were written into "Call Horse
+    (Press H to Horse)" and "Dodge (TK Dodge RE)" (combined run 2026-10-23, batch 11)."""
+    bad = []
+    for m in re.finditer(r"\n\t(?:int|void|bool|std::\w+(?:<[^>]*>)?)\s+(\w+)\([^)]*\)\n\t\{(.*?)\n\t\}", text, re.S):
+        name, body = m.group(1), m.group(2)
+        if "GetPresentFunctions()" in body and re.search(r"g_functions\[\s*i\s*\]", body):
+            bad.append(name)
+    return bad
+
+
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("--instance", default=r"D:\modlists\Njordlinger")
@@ -120,7 +133,20 @@ def main():
                                                    ("\n       " + "\n       ".join(bad)) if bad else ""))
     print("\n".join(lines))
     print("%d adapter(s), %d failed" % (len(ads), fails))
-    return 1 if fails else 0
+
+    # the filtered-list case (batch 11): an index into the installed-only list must never be used on the full list
+    src = open(SRC, encoding="utf-8").read()
+    bad = filtered_index_writes(src)
+    print(("FAIL" if bad else "ok  ") + " filtered-list index: " +
+          ("%s take GetPresentFunctions() and write g_functions[i] - the index of the filtered list used on the full one"
+           % ", ".join(bad) if bad else "no function writes g_functions[i] from the installed-only list"))
+    # and the shipped order still has an absent-mod row BEFORE an installed one somewhere (the case that exposed it):
+    # in Njordlinger, Press H to Horse's ESP is not in Data while TK Dodge AIO and TDM are installed
+    names = [a[0] for a in ads]
+    order_ok = names.index("Call Horse (Press H to Horse)") < names.index("Dodge (TK Dodge AIO)") < \
+        names.index("Target Lock (True Directional Movement)")
+    print(("ok  " if order_ok else "note") + " the built-in order keeps an absent-mod row ahead of installed ones (the batch-11 shape)")
+    return 1 if fails or bad else 0
 
 
 if __name__ == "__main__":
