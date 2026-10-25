@@ -9,6 +9,7 @@
 #include "DevBenchTool.h"
 #include "Functions.h"
 #include "Settings.h"
+#include "TweenWait.h"
 #include "Unbinder.h"
 
 #include "utils/AddressLibraryGuard.h"
@@ -26,6 +27,7 @@ namespace
 		case SKSE::MessagingInterface::kDataLoaded:
 			unbinder::Install();
 			controlslist::InstallInputSink();
+			tweenwait::Install();  // Tween Menu Overhaul 1.2's Wait option with keyboard Wait unbound (TweenWait.h)
 			unbinder::OwnRemapsAtDataLoad();  // before the apply: a leftover ControlMap_Custom.txt moves into the INI first
 			unbinder::ApplyAll("data loaded");
 			// The extra Controls-page rows are delivered to the mods that own those functions, so a target file

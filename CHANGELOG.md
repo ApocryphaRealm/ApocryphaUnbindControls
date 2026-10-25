@@ -9,6 +9,15 @@ Rule 61: this mod's own history, kept beside the code it describes.
 
 ## 1.2.0 - 2026-10-23 - untested
 
+### Fixed (2026-10-25, reported on the Nexus page)
+- **Tween Menu Overhaul's Wait option did nothing while Wait had no keyboard key.** Tween Menu Overhaul 1.2 opens the
+  wait menu by looking up the keyboard Wait key and pressing it for you; with Wait unbound (which this mod ships) it
+  found no key, logged "Could not resolve Wait key" and opened nothing. This mod now hears the same request and, only
+  while keyboard Wait has no key, sends the game's own Wait when the tween menu closes - the game's own "you cannot
+  wait now" checks still apply. With a keyboard key Tween Menu Overhaul does it itself, so the menu opens once, never
+  twice (source\TweenWait.cpp). DevBench `uvc.control op=tweenwait` shows the requests seen and answered; `fire=1`
+  sends the request the tween menu's Wait option sends.
+
 ### Fixed (before release, from the first test - combined run 2026-10-23, batch 11)
 - **Adopted keys landed on the wrong rows.** Adopt walked the installed-only rows and wrote by that position into the
   full list, so with an absent mod's built-in row in between, TK Dodge AIO's Left Shift went to "Call Horse (Press H to
