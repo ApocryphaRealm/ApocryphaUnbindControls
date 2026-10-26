@@ -7,7 +7,7 @@ Rule 61: this mod's own history, kept beside the code it describes.
 > number; at `.9` the MINOR rolls. The next number is LAST WORKING + 1; failed/scratch/
 > untested numbers are reused. Numbers come from version-gate.ps1.
 
-## 1.2.0 - 2026-10-23 - untested
+## 1.2.0 - 2026-10-23 - working
 
 ### Fixed (2026-10-25, reported on the Nexus page)
 - **Tween Menu Overhaul's Wait option did nothing while Wait had no keyboard key.** Tween Menu Overhaul 1.2 opens the
