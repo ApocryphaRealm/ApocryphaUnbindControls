@@ -91,6 +91,9 @@ Rule 61: this mod's own history, kept beside the code it describes.
   mod's default from MCM\Config\<id>\settings.ini, so the page shows the key in force (Simplest Horses' H showed as no
   key while H called the horse). This applies to the existing Power Attack row too.
 
+### Fixed
+- DevBench uvc.control ops that read or write the journal's Scaleform objects (rows, rowclips, gfxget/gfxset, systemrows, opencontrols) now run on the UI thread through SKSE AddUITask, one task per request with the same bounded wait and cancel-on-timeout; they were queued with AddTask, whose queue runs beside the UI job that advances the journal movie (package gate row scaleform-helpers-only-on-the-ui-thread, 2026-10-26). Test tooling only - no change for players.
+
 ## 1.1.3 - 2026-10-20 - working
 
 ### Fixed

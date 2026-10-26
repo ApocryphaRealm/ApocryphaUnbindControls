@@ -68,34 +68,60 @@ namespace DevBenchTool
 			return out;
 		}
 
-		// Runs a_fn on the game's main thread and waits (the handler runs on DevBench's own thread; the
-		// ControlMap is only touched on the main thread). The callers' lambdas capture their locals by reference, so
-		// a_fn must never run once this returns: the task runs it under the same lock the caller takes on a timeout,
-		// and skips it when the caller has already given up (logic library: a task that outlives its caller's
-		// timeout writes into a dead stack frame - 1.1.1's first boot crashed that way, a dump sent during data load).
+		// What a queued task and the DevBench thread waiting on it share. The callers' lambdas capture their locals by
+		// reference, so a_fn must never run once the caller returns: the task runs it under the same lock the caller takes
+		// on a timeout, and skips it when the caller has already given up (logic library: a task that outlives its
+		// caller's timeout writes into a dead stack frame - 1.1.1's first boot crashed that way, a dump sent during data load).
+		struct Shared
+		{
+			std::mutex m;
+			std::condition_variable cv;
+			bool done = false;
+			bool cancelled = false;
+		};
+
+		void RunGuarded(Shared& a_st, const std::function<void()>& a_fn)
+		{
+			std::scoped_lock l(a_st.m);
+			if (a_st.cancelled) { return; }  // the caller gave up; its locals are gone
+			a_fn();
+			a_st.done = true;
+			a_st.cv.notify_all();
+		}
+
+		bool WaitFor(Shared& a_st, int a_timeoutMs)
+		{
+			std::unique_lock l(a_st.m);
+			if (a_st.cv.wait_for(l, std::chrono::milliseconds(a_timeoutMs), [&]() { return a_st.done; })) { return true; }
+			a_st.cancelled = true;
+			return false;
+		}
+
+		// Runs a_fn on the game's main thread and waits (the handler runs on DevBench's own thread; the ControlMap is only
+		// touched on the main thread). NO Scaleform here: SKSE's AddTask queue runs as its own job beside the UI job that
+		// advances menu movies, so a GFx call from it races the movie (Dragon's Eye Minimap 1.7.5) - use RunOnUIThread.
 		bool RunOnMainThread(std::function<void()> a_fn, int a_timeoutMs = 4000)
 		{
 			auto* tasks = SKSE::GetTaskInterface();
 			if (!tasks) { return false; }
-			struct Shared
-			{
-				std::mutex m;
-				std::condition_variable cv;
-				bool done = false;
-				bool cancelled = false;
-			};
 			auto st = std::make_shared<Shared>();
-			tasks->AddTask([st, a_fn]() {
-				std::scoped_lock l(st->m);
-				if (st->cancelled) { return; }  // the caller gave up; its locals are gone
-				a_fn();
-				st->done = true;
-				st->cv.notify_all();
-			});
-			std::unique_lock l(st->m);
-			if (st->cv.wait_for(l, std::chrono::milliseconds(a_timeoutMs), [&]() { return st->done; })) { return true; }
-			st->cancelled = true;
-			return false;
+			tasks->AddTask([st, a_fn]() { RunGuarded(*st, a_fn); });
+			return WaitFor(*st, a_timeoutMs);
+		}
+
+		// 1.2.0 (after the first in-game pass): runs a_fn on the UI thread - the thread that advances the journal movie - and waits. Every op that reads or
+		// writes the journal's Scaleform objects (rows, rowclips, gfxget/gfxset, systemrows, opencontrols) goes through
+		// here; until then they were queued with AddTask (gate row scaleform-helpers-only-on-the-ui-thread). One task per request,
+		// never re-queued (logic library: a UI task that re-queues itself runs every pass in the same frame). The wait is
+		// on DevBench's thread, not the UI thread, and is bounded: with the journal closed the helpers answer "the journal
+		// is not open"; if the UI queue does not run in time the request fails and the task, when it does run, does nothing.
+		bool RunOnUIThread(std::function<void()> a_fn, int a_timeoutMs = 4000)
+		{
+			auto* tasks = SKSE::GetTaskInterface();
+			if (!tasks) { return false; }
+			auto st = std::make_shared<Shared>();
+			tasks->AddUITask([st, a_fn]() { RunGuarded(*st, a_fn); });
+			return WaitFor(*st, a_timeoutMs);
 		}
 
 		int ContextArg(std::string_view a_args)
@@ -153,7 +179,7 @@ namespace DevBenchTool
 			if (op == "systemrows")
 			{
 				std::string out;
-				if (!RunOnMainThread([&]() { out = systemmenu::RowsJson(); })) { a_write(a_sink, R"({"ok":false,"op":"systemrows","error":"main thread did not run the task in time"})"); return; }
+				if (!RunOnUIThread([&]() { out = systemmenu::RowsJson(); })) { a_write(a_sink, R"({"ok":false,"op":"systemrows","error":"UI thread did not run the task in time"})"); return; }
 				a_write(a_sink, out.c_str());
 				return;
 			}
@@ -162,21 +188,21 @@ namespace DevBenchTool
 				auto result = std::make_shared<std::string>();
 				const std::string path = Get(args, "path"), member = Get(args, "member"), value = Get(args, "value");
 				const bool set = op == "gfxset";
-				if (!RunOnMainThread([result, path, member, value, set]() { *result = controlslist::GfxMember(path, member, value, set); })) { a_write(a_sink, R"({"ok":false,"error":"main thread did not run the task in time"})"); return; }
+				if (!RunOnUIThread([result, path, member, value, set]() { *result = controlslist::GfxMember(path, member, value, set); })) { a_write(a_sink, R"({"ok":false,"error":"UI thread did not run the task in time"})"); return; }
 				a_write(a_sink, result->c_str());
 				return;
 			}
 			if (op == "rowclips")
 			{
 				auto result = std::make_shared<std::string>();
-				if (!RunOnMainThread([result]() { *result = controlslist::RowClipsJson(); })) { a_write(a_sink, R"({"ok":false,"op":"rowclips","error":"main thread did not run the task in time"})"); return; }
+				if (!RunOnUIThread([result]() { *result = controlslist::RowClipsJson(); })) { a_write(a_sink, R"({"ok":false,"op":"rowclips","error":"UI thread did not run the task in time"})"); return; }
 				a_write(a_sink, result->c_str());
 				return;
 			}
 			if (op == "rows")
 			{
 				std::string out;
-				if (!RunOnMainThread([&]() { out = controlslist::RowsJson(); })) { a_write(a_sink, R"({"ok":false,"op":"rows","error":"main thread did not run the task in time"})"); return; }
+				if (!RunOnUIThread([&]() { out = controlslist::RowsJson(); })) { a_write(a_sink, R"({"ok":false,"op":"rows","error":"UI thread did not run the task in time"})"); return; }
 				a_write(a_sink, out.c_str());
 				return;
 			}
@@ -255,7 +281,7 @@ namespace DevBenchTool
 			{
 				bool ok = false;
 				std::string why;
-				const bool ran = RunOnMainThread([&]() { ok = controlslist::OpenControlsPanel(why); });
+				const bool ran = RunOnUIThread([&]() { ok = controlslist::OpenControlsPanel(why); });
 				a_write(a_sink, std::format(R"({{"ok":{},"op":"opencontrols","error":"{}"}})", (ran && ok) ? "true" : "false", EscapeJson(why)).c_str());
 				return;
 			}
