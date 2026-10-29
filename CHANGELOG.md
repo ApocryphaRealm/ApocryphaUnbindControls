@@ -9,6 +9,21 @@ Rule 61: this mod's own history, kept beside the code it describes.
 
 ## 1.2.0 - 2026-10-23 - working
 
+### Fixed (2026-10-28, reported on the Nexus page with a screenshot of SkyUI's own journal, game 1.7.104)
+- **The Controls page drew its key tiles in the wrong place on SkyUI's journal.** The tiles sat faintly behind the next
+  column's names, block titles and unbound rows (Wait, Journal) showed "???", and the ITEMS column ran past the right
+  edge of the frame. The sheet's positions were fixed numbers read off Norden UI's journal only (columns 225 apart, the
+  tile at x 168, rows 29 apart). SkyUI's rows attach their tile as "ButtonArt" (Norden UI's is "buttonArt") at the
+  native row's x 228 - past the 225-wide column - at 30% alpha; its "???" is the drawing it uses for an empty or unknown
+  key; and its System page sits 90 units further right, so four columns did not fit. The sheet now measures the
+  journal: each column is as wide as its longest name (the list's own text field, textWidth), the tile follows it at
+  the journal's own tile height, rows sit a tile apart, and only as many columns are shown as fit inside the frame (the
+  sheet slides to the rest, as it already did). On a journal with "ButtonArt" rows the sheet draws its own tiles from
+  that journal's symbols, shows no tile on an unbound row or a title, and writes a key it has no tile for as its name
+  ("LB + RT") instead of "???". SkyUI's font-size setting does not reach this page (the journal's row font is fixed in
+  its own movie), and nothing here depends on the screen resolution or an upscaler: every number is in the movie's own
+  coordinates. DevBench `uvc.control op=rowclips` reports the measured layout as `"sheet"`.
+
 ### Fixed (2026-10-25, reported on the Nexus page)
 - **Tween Menu Overhaul's Wait option did nothing while Wait had no keyboard key.** Tween Menu Overhaul 1.2 opens the
   wait menu by looking up the keyboard Wait key and pressing it for you; with Wait unbound (which this mod ships) it

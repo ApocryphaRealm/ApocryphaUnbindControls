@@ -1348,10 +1348,70 @@ namespace controlslist
 		// "Zoom In") that are also Gameplay controls, and the game's remap would move the Gameplay control of that name.
 		//
 		// A cell is a copy of the list's Entry0 drawn by the list's own SetEntry, so its key tile is this journal's.
-		constexpr double kColWidth = 225.0;  // four columns and their key tiles inside the screen
-		constexpr double kCellNameWidth = 160.0;
-		constexpr double kCellArtX = 168.0;
-		constexpr double kSlotPitch = 29.0;
+		//
+		// THE SHEET'S GEOMETRY IS MEASURED FROM THE JOURNAL, never assumed (1.2.1, reported on the Nexus page with a
+		// screenshot of SkyUI's own journal). Up to 1.2.0 the cells sat at fixed offsets - columns 225 apart, the name
+		// 160 wide, the key tile at x 168, rows 29 apart - which were read off Norden UI's journal only. Two things differ
+		// in SkyUI's journal (SkyUI 6.9 quest_journal.swf, decompiled with FFDec; Norden UI's has the same row geometry):
+		//  - its rows draw the key with InputMappingList.SetEntry attaching a symbol called "ButtonArt" (capital B) and
+		//    placing it over the row's own `buttonPlacing` box at x 228, scaled to its 30-high box, at 30% alpha unless the
+		//    row is the list's selection. Norden UI's rows carry an InputMappingArt called "buttonArt". The sheet moved and
+		//    lit only "buttonArt", so on SkyUI every tile stayed at x 228 - past the 225 column - faint, behind the NEXT
+		//    column's names;
+		//  - a key with no symbol in that movie, an empty key (an unbound row, a block title) and a combination ("LB + RT")
+		//    all attach its "UnknownKey" symbol, which is a drawn "???" with no text field to put a name in;
+		//  - the System page sits further right (SystemFader at x 167 against Norden UI's 77), so four 225-wide columns ran
+		//    past the journal's frame and ITEMS was cut off at the right edge.
+		// So: the name column is as wide as its longest name measured in the list's own text field (TextField.textWidth),
+		// the tile sits after it, the tile height comes from the journal's own tile, and only as many columns are shown as
+		// fit inside the frame - the sheet already slides sideways to keep the selection on screen. On a journal whose rows
+		// attach "ButtonArt", the sheet draws its own tiles from that movie's symbols, and a key that has none is written
+		// as its name. Nothing here depends on the screen resolution or the upscaler: every number is in the movie's own
+		// coordinates, measured from clips in the same movie.
+		constexpr double kColWidthFallback = 225.0;  // only when the frame cannot be measured: the 1.2.0 layout
+		constexpr double kNameGap = 8.0;             // between a name and its key tile
+		constexpr double kColGap = 14.0;             // between one column's tiles and the next column's names
+		constexpr double kFieldGutter = 4.0;         // a TextField draws 2 px inside each edge: textWidth + 4 shows it whole
+		constexpr double kFrameMargin = 8.0;
+		constexpr int kOwnArtDepth = 30000;          // uvcArt0.. on a cell: this mod's tiles on a "ButtonArt" journal
+		constexpr int kOwnArtParts = 4;
+		constexpr int kKeyTextDepth = 30010;         // uvcKeyText: a key the movie has no symbol for, as its name
+
+		struct SheetMetrics
+		{
+			bool ownArt = false;       // the journal's rows attach "ButtonArt" (SkyUI / the 1.5-era journal): the sheet draws its own tiles
+			double nameX = 2.0;        // the row's text field, from Entry0
+			double tileY = 0.0;        // the row's key box, from Entry0
+			double tileH = 28.0;
+			double pitch = 29.0;       // row to row
+			double nativePitch = 0.0;  // Entry0 to Entry1, as the journal lays its own list out
+			double textH = 0.0;        // the tallest measured name
+			double available = 4 * kColWidthFallback;  // from the list's left edge to the journal frame's right edge
+			double stageW = 0.0, pageLeft = 0.0, listLeft = 0.0;
+			std::vector<double> nameW;  // per sheet column: the name field's width
+			std::vector<double> colW;   // per sheet column: name, tile and the gap to the next column
+			int visible = kSheetCols;   // columns on screen from firstCol
+			std::string logged;         // what was last logged, so a change is logged once
+		};
+		SheetMetrics g_metrics;                       // main thread
+		std::map<std::string, double> g_textWidths;   // main thread: a cell's text -> its width in the list's own field
+
+		double TileArea() { return 2.0 * g_metrics.tileH + 4.0; }  // room for a two-tile combination
+
+		// How many columns fit from a_first on, at least one.
+		int VisibleFrom(int a_first)
+		{
+			const int count = static_cast<int>(g_metrics.colW.size());
+			double used = 0.0;
+			int n = 0;
+			for (int i = std::max(0, a_first); i < count && n < kSheetCols; ++i)
+			{
+				if (n > 0 && used + g_metrics.colW[static_cast<std::size_t>(i)] > g_metrics.available) { break; }
+				used += g_metrics.colW[static_cast<std::size_t>(i)];
+				++n;
+			}
+			return std::max(1, n);
+		}
 		constexpr std::uint32_t kDimColor = 0x6E6E6E;  // this journal lifts greys: 0x808080 still reads white
 		constexpr int kInputMappingState = 6;  // SystemPage.INPUT_MAPPING_STATE
 
@@ -1431,11 +1491,22 @@ namespace controlslist
 			g_sheet.col = std::clamp(g_sheet.col, 0, std::max(0, count - 1));
 			if (count > 0) { g_sheet.row = std::clamp(g_sheet.row, 0, std::max(0, static_cast<int>(g_sheet.columns[g_sheet.col].rows.size()) - 1)); }
 			// GAMEPLAY's two columns come on screen together.
-			int wantFirst = g_sheet.firstCol;
+			int wantFirst = std::clamp(g_sheet.firstCol, 0, std::max(0, count - 1));
 			const int start = (g_sheet.col > 0 && g_sheet.columns[g_sheet.col].title.empty() && g_sheet.columns[g_sheet.col - 1].titleSpans) ? g_sheet.col - 1 : g_sheet.col;
 			if (start < wantFirst) { wantFirst = start; }
-			if (g_sheet.col >= wantFirst + kSheetCols) { wantFirst = g_sheet.col - kSheetCols + 1; }
-			g_sheet.firstCol = std::clamp(wantFirst, 0, std::max(0, count - kSheetCols));
+			// as many columns as fit inside the journal's frame (measured: VisibleFrom), not a fixed four
+			if (static_cast<int>(g_metrics.colW.size()) != count)
+			{
+				if (g_sheet.col >= wantFirst + kSheetCols) { wantFirst = g_sheet.col - kSheetCols + 1; }
+				g_sheet.firstCol = std::clamp(wantFirst, 0, std::max(0, count - kSheetCols));
+				g_metrics.visible = kSheetCols;
+				return;
+			}
+			while (wantFirst < g_sheet.col && g_sheet.col >= wantFirst + VisibleFrom(wantFirst)) { ++wantFirst; }
+			// never slide further than needed: no empty room on the right while columns to the left could be shown
+			while (wantFirst > 0 && (wantFirst - 1) + VisibleFrom(wantFirst - 1) >= count) { --wantFirst; }
+			g_sheet.firstCol = wantFirst;
+			g_metrics.visible = VisibleFrom(wantFirst);
 		}
 
 		// Accept on the selected cell.
@@ -1746,6 +1817,266 @@ namespace controlslist
 			                         std::format("\"{}\": bound to {}; \"{}\" took its old key", a_event, keyText, swapped);
 		}
 
+		// The text a cell shows for a row (the two favourite rows named apart - see UpdateSheet).
+		std::string CellText(const RE::GFxValue& a_entry)
+		{
+			std::string text = StringMember(a_entry, "text");
+			if (!IsOwnRow(a_entry) && IEqualsView(text, "Favorites")) { text = "Favorites Menu"; }
+			return text;
+		}
+
+		double Number(const RE::GFxValue& a_obj, const char* a_name, double a_default)
+		{
+			double v = a_default;
+			return NumberMember(a_obj, a_name, v) ? v : a_default;
+		}
+
+		// A point of a_clip in the movie's own (stage) coordinates.
+		bool StageX(RE::GFxMovieView* a_movie, RE::GFxValue& a_clip, double a_localX, double& a_out)
+		{
+			RE::GFxValue pt;
+			a_movie->CreateObject(&pt);
+			pt.SetMember("x", RE::GFxValue(a_localX));
+			pt.SetMember("y", RE::GFxValue(0.0));
+			if (!a_clip.Invoke("localToGlobal", nullptr, &pt, 1)) { return false; }
+			return NumberMember(pt, "x", a_out);
+		}
+
+		// The width a text takes in the list's own row field, at the list's own font and size: the list's SetEntry draws it
+		// into a hidden copy of Entry0 ("uvcProbe"), and that field's textWidth is read with nothing shrinking it.
+		// Cached per text, so the list draws each name into the probe once.
+		double MeasureText(RE::GFxMovieView* a_movie, RE::GFxValue& a_list, RE::GFxValue& a_first, const std::string& a_text)
+		{
+			if (const auto it = g_textWidths.find(a_text); it != g_textWidths.end()) { return it->second; }
+			RE::GFxValue probe;
+			if (!a_list.GetMember("uvcProbe", &probe) || !probe.IsDisplayObject())
+			{
+				RE::GFxValue args[2] = { RE::GFxValue("uvcProbe"), RE::GFxValue(19999.0) };
+				a_first.Invoke("duplicateMovieClip", nullptr, args, 2);
+				if (!a_list.GetMember("uvcProbe", &probe) || !probe.IsDisplayObject()) { return -1.0; }
+				probe.SetMember("_x", RE::GFxValue(-4000.0));
+			}
+			SetVisible(probe, false);
+			RE::GFxValue shown;
+			a_movie->CreateObject(&shown);
+			shown.SetMember("text", RE::GFxValue(a_text.c_str()));
+			shown.SetMember("buttonName", RE::GFxValue(""));
+			RE::GFxValue args[2] = { probe, shown };
+			a_list.Invoke("SetEntry", nullptr, args, 2);
+			RE::GFxValue field;
+			if (!probe.GetMember("textField", &field) || !field.IsDisplayObject()) { return -1.0; }
+			field.SetMember("textAutoSize", RE::GFxValue("none"));
+			field.SetMember("_width", RE::GFxValue(2000.0));
+			RE::GFxValue label;
+			if (field.GetMember("text", &label) && label.IsString() && label.GetString() && label.GetString()[0] == '$')
+			{
+				field.SetMember("text", RE::GFxValue(label.GetString() + 1));
+			}
+			const double width = Number(field, "textWidth", -1.0);
+			if (width <= 0.0) { return -1.0; }
+			g_metrics.textH = std::max(g_metrics.textH, Number(field, "textHeight", 0.0));
+			g_textWidths.emplace(a_text, width);
+			return width;
+		}
+
+		// Measures the journal (rule 30: ask the movie, do not assume it) and lays the sheet's columns out from it. Logged
+		// once per change; DevBench op=rowclips reports it as "sheet".
+		void MeasureSheet(RE::GFxMovieView* a_movie, RE::GFxValue& a_list, RE::GFxValue& a_first, const RE::GFxValue& a_entries,
+			const std::map<std::string, std::uint32_t>& a_index)
+		{
+			auto& m = g_metrics;
+			// the row's own geometry, from the first native row
+			RE::GFxValue field, placing, art, second;
+			if (a_first.GetMember("textField", &field) && field.IsDisplayObject()) { m.nameX = Number(field, "_x", 2.0); }
+			const bool hasPlacing = a_first.GetMember("buttonPlacing", &placing) && placing.IsDisplayObject();
+			m.ownArt = !(a_first.GetMember("buttonArt", &art) && art.IsDisplayObject());
+			if (hasPlacing && Number(placing, "_height", 0.0) > 4.0)
+			{
+				m.tileH = Number(placing, "_height", 28.0);
+				m.tileY = Number(placing, "_y", 0.0);
+			}
+			else if (!m.ownArt && Number(art, "_height", 0.0) > 4.0)
+			{
+				m.tileH = Number(art, "_height", 28.0);
+				m.tileY = Number(art, "_y", 0.0);
+			}
+			m.nativePitch = 0.0;
+			if (a_list.GetMember("Entry1", &second) && second.IsDisplayObject()) { m.nativePitch = Number(second, "_y", 0.0) - Number(a_first, "_y", 0.0); }
+			if (m.nativePitch <= 0.0) { m.nativePitch = Number(a_first, "_height", 40.0); }
+
+			// the room to the right: the System page sits centred in the journal's frame, so the frame's right edge mirrors
+			// the page's left edge across the movie (SkyUI: page at 167 of 1280, frame edge at 1113; Norden UI: 77, 1203)
+			m.available = 4 * kColWidthFallback;
+			RE::GFxValue page;
+			const std::string pagePath = PagePathCopy();
+			auto* def = a_movie->GetMovieDef();
+			m.stageW = def ? def->GetWidth() : 0.0;
+			if (m.stageW > 0.0 && !pagePath.empty() && a_movie->GetVariable(&page, pagePath.c_str()) && page.IsDisplayObject() && StageX(a_movie, page, 0.0, m.pageLeft) &&
+				StageX(a_movie, a_list, 0.0, m.listLeft))
+			{
+				double listRight100 = 0.0;
+				const double scale = StageX(a_movie, a_list, 100.0, listRight100) && listRight100 > m.listLeft ? (listRight100 - m.listLeft) / 100.0 : 1.0;
+				const double frameRight = std::min(m.stageW - m.pageLeft, m.stageW) - kFrameMargin;
+				if (frameRight > m.listLeft) { m.available = (frameRight - m.listLeft) / scale; }
+			}
+
+			// each column as wide as its longest name; a name longer than one column could ever be is shrunk to fit
+			const double nameCap = std::max(60.0, m.available - kNameGap - TileArea() - kColGap - m.nameX - kFieldGutter);
+			m.nameW.assign(g_sheet.columns.size(), 0.0);
+			m.colW.assign(g_sheet.columns.size(), kColWidthFallback);
+			bool measured = true;  // textH keeps the tallest text ever measured: the cache measures each text once
+			for (std::size_t c = 0; c < g_sheet.columns.size(); ++c)
+			{
+				const auto& column = g_sheet.columns[c];
+				double longest = 0.0;
+				for (const auto& key : column.rows)
+				{
+					const auto it = a_index.find(key);
+					RE::GFxValue entry;
+					if (it == a_index.end() || !a_entries.GetElement(it->second, &entry) || !entry.IsObject()) { continue; }
+					const double w = MeasureText(a_movie, a_list, a_first, CellText(entry));
+					if (w < 0.0) { measured = false; continue; }
+					longest = std::max(longest, w);
+				}
+				m.nameW[c] = std::min(longest, nameCap) + kFieldGutter;
+				double width = m.nameX + m.nameW[c] + kNameGap + TileArea();
+				if (!column.title.empty() && !column.titleSpans)
+				{
+					const double t = MeasureText(a_movie, a_list, a_first, column.title);
+					if (t > 0.0) { width = std::max(width, std::min(t + kFieldGutter + m.nameX, m.available - kColGap)); }
+				}
+				m.colW[c] = width + kColGap;
+			}
+			if (!measured)
+			{
+				// the probe could not be drawn: the 1.2.0 layout rather than nothing
+				std::fill(m.nameW.begin(), m.nameW.end(), 160.0);
+				std::fill(m.colW.begin(), m.colW.end(), kColWidthFallback);
+			}
+			// rows: a tile or a line of text apart, whichever is taller, never further apart than the journal's own rows
+			m.pitch = std::clamp(std::max(m.tileH, m.textH) + 2.0, 24.0, std::max(24.0, m.nativePitch));
+
+			std::string widths;
+			for (const double w : m.colW) { widths += std::format("{}{:.0f}", widths.empty() ? "" : ",", w); }
+			const std::string summary = std::format("{} tiles; name x {:.0f}, tile {:.0f} high at y {:.0f}; rows {:.0f} apart (journal's own {:.0f}, text {:.0f}); {:.0f} wide to the frame (stage {:.0f}, page at {:.0f}, list at {:.0f}); columns [{}]{}",
+				m.ownArt ? "\"ButtonArt\" (the sheet draws its own)" : "\"buttonArt\"", m.nameX, m.tileH, m.tileY, m.pitch, m.nativePitch, m.textH, m.available, m.stageW, m.pageLeft,
+				m.listLeft, widths, measured ? "" : " - names NOT measured, 1.2.0 widths used");
+			if (summary != m.logged)
+			{
+				m.logged = summary;
+				logger::info("controls sheet: measured this journal: {}", summary);
+			}
+		}
+
+		// A key name as a player reads it: "PS3_LB + PS3_RT" -> "LB + RT".
+		std::string KeyLabel(const std::string& a_key)
+		{
+			std::string out;
+			std::size_t pos = 0;
+			while (pos <= a_key.size())
+			{
+				const std::size_t cut = a_key.find(" + ", pos);
+				std::string part = a_key.substr(pos, cut == std::string::npos ? std::string::npos : cut - pos);
+				for (const char* prefix : { "PS3_", "PS5_", "360_" })
+				{
+					if (part.starts_with(prefix)) { part = part.substr(std::strlen(prefix)); break; }
+				}
+				out += (out.empty() ? "" : " + ") + part;
+				if (cut == std::string::npos) { break; }
+				pos = cut + 3;
+			}
+			return out;
+		}
+
+		// On a journal whose rows attach "ButtonArt" (SkyUI's): the tiles drawn by this mod from the movie's own symbols, one
+		// per part of a combination, at the measured tile height. A key the movie has no symbol for is written as its name
+		// instead of the movie's "???" (its UnknownKey symbol is a drawing with no text field). The list's own ButtonArt is
+		// hidden: it sits at the native row's x and would land in the next column.
+		void DrawOwnArt(RE::GFxValue& a_list, RE::GFxValue& a_cell, const std::string& a_key, double a_tileX, std::uint32_t a_textRgb)
+		{
+			RE::GFxValue art;
+			if (a_cell.GetMember("ButtonArt", &art) && art.IsDisplayObject()) { SetVisible(art, false); }
+			for (int i = 0; i < kOwnArtParts; ++i)
+			{
+				RE::GFxValue old;
+				if (a_cell.GetMember(std::format("uvcArt{}", i).c_str(), &old) && old.IsDisplayObject()) { old.Invoke("removeMovieClip", nullptr, nullptr, 0); }
+			}
+			RE::GFxValue keyText;
+			const bool haveText = a_cell.GetMember("uvcKeyText", &keyText) && keyText.IsDisplayObject();
+			if (haveText) { SetVisible(keyText, false); }
+			if (a_key.empty()) { return; }
+
+			std::vector<std::string> parts;
+			for (std::size_t pos = 0; pos <= a_key.size();)
+			{
+				const std::size_t cut = a_key.find(" + ", pos);
+				parts.push_back(a_key.substr(pos, cut == std::string::npos ? std::string::npos : cut - pos));
+				if (cut == std::string::npos) { break; }
+				pos = cut + 3;
+			}
+			const bool ps5 = Number(a_list, "iPlatform", 0.0) == 5.0;  // InputMappingList.CONTROLLER_PROSPERO: its PS5_ art first
+			bool all = parts.size() <= static_cast<std::size_t>(kOwnArtParts);
+			double x = a_tileX;
+			for (std::size_t i = 0; all && i < parts.size(); ++i)
+			{
+				const std::string clipName = std::format("uvcArt{}", i);
+				RE::GFxValue tile;
+				std::vector<std::string> symbols;
+				if (ps5 && parts[i].starts_with("PS3_")) { symbols.push_back("PS5_" + parts[i].substr(4)); }
+				symbols.push_back(parts[i]);
+				for (const auto& symbol : symbols)
+				{
+					RE::GFxValue args[3] = { RE::GFxValue(symbol.c_str()), RE::GFxValue(clipName.c_str()), RE::GFxValue(static_cast<double>(kOwnArtDepth + static_cast<int>(i))) };
+					a_cell.Invoke("attachMovie", &tile, args, 3);
+					if (tile.IsDisplayObject()) { break; }
+				}
+				if (!tile.IsDisplayObject()) { all = false; break; }
+				const double w = Number(tile, "_width", 0.0), h = Number(tile, "_height", 0.0);
+				if (w <= 0.0 || h <= 0.0) { all = false; break; }
+				tile.SetMember("_height", RE::GFxValue(g_metrics.tileH));
+				tile.SetMember("_width", RE::GFxValue(w / h * g_metrics.tileH));
+				tile.SetMember("_y", RE::GFxValue(g_metrics.tileY));
+				tile.SetMember("_x", RE::GFxValue(x));
+				tile.SetMember("_alpha", RE::GFxValue(100.0));
+				x += w / h * g_metrics.tileH + 2.0;
+			}
+			if (all) { return; }
+			for (int i = 0; i < kOwnArtParts; ++i)
+			{
+				RE::GFxValue old;
+				if (a_cell.GetMember(std::format("uvcArt{}", i).c_str(), &old) && old.IsDisplayObject()) { old.Invoke("removeMovieClip", nullptr, nullptr, 0); }
+			}
+			// the key's name, in the row's own font
+			if (!haveText)
+			{
+				RE::GFxValue args[6] = { RE::GFxValue("uvcKeyText"), RE::GFxValue(static_cast<double>(kKeyTextDepth)), RE::GFxValue(a_tileX), RE::GFxValue(g_metrics.tileY),
+					RE::GFxValue(TileArea() + kColGap), RE::GFxValue(std::max(g_metrics.tileH, g_metrics.textH) + 4.0) };
+				a_cell.Invoke("createTextField", nullptr, args, 6);
+				if (!a_cell.GetMember("uvcKeyText", &keyText) || !keyText.IsDisplayObject())
+				{
+					if (g_loggedRows.insert("sheet|nokeytext").second) { logger::warn("controls sheet: a text field for a key with no tile could not be made; \"{}\" shows no key", a_key); }
+					return;
+				}
+				keyText.SetMember("embedFonts", RE::GFxValue(true));
+				keyText.SetMember("selectable", RE::GFxValue(false));
+				keyText.SetMember("autoSize", RE::GFxValue("left"));
+			}
+			RE::GFxValue nameField, format;
+			if (a_cell.GetMember("textField", &nameField) && nameField.IsDisplayObject() && nameField.Invoke("getTextFormat", &format, nullptr, 0) && format.IsObject())
+			{
+				format.SetMember("align", RE::GFxValue("left"));
+				format.SetMember("color", RE::GFxValue(static_cast<double>(a_textRgb)));
+				keyText.Invoke("setNewTextFormat", nullptr, &format, 1);
+			}
+			const std::string label = KeyLabel(a_key);
+			keyText.SetMember("text", RE::GFxValue(label.c_str()));
+			if (format.IsObject()) { keyText.Invoke("setTextFormat", nullptr, &format, 1); }
+			keyText.SetMember("_x", RE::GFxValue(a_tileX));
+			keyText.SetMember("_y", RE::GFxValue(Number(nameField, "_y", g_metrics.tileY)));
+			SetVisible(keyText, true);
+			if (g_loggedRows.insert("sheet|keytext|" + a_key).second) { logger::info("controls sheet: this journal has no tile for \"{}\"; it is written as \"{}\"", a_key, label); }
+		}
+
 		void UpdateSheet(RE::GFxMovieView* a_movie)
 		{
 			RE::GFxValue list;
@@ -1822,7 +2153,6 @@ namespace controlslist
 			const bool gamepad = ListShowsGamepad(entries);
 			g_sheet.columns = BuildSheet(entries);
 			if (g_sheet.columns.empty()) { HideSheet(list); return; }
-			KeepSelectionOnScreen();
 			std::map<std::string, std::uint32_t> index;
 			for (std::uint32_t i = 0; i < entries.GetArraySize(); ++i)
 			{
@@ -1834,12 +2164,26 @@ namespace controlslist
 			if (!list.GetMember("Entry0", &first) || !first.IsDisplayObject()) { return; }
 			double top = 0.0;
 			NumberMember(first, "_y", top);
+			MeasureSheet(a_movie, list, first, entries, index);
+			KeepSelectionOnScreen();
+			// each on-screen column starts where the one before it ends
+			std::array<double, kSheetCols> colX{};
+			for (int c = 1; c < kSheetCols; ++c)
+			{
+				const auto prev = static_cast<std::size_t>(g_sheet.firstCol + c - 1);
+				colX[static_cast<std::size_t>(c)] = colX[static_cast<std::size_t>(c - 1)] + (prev < g_metrics.colW.size() ? g_metrics.colW[prev] : kColWidthFallback);
+			}
 
 			g_sheet.drawn.resize(static_cast<std::size_t>(kSheetCols * kSheetSlots));
 			for (int c = 0; c < kSheetCols; ++c)
 			{
 				const int columnIndex = g_sheet.firstCol + c;
-				const SheetColumn* column = columnIndex < static_cast<int>(g_sheet.columns.size()) ? &g_sheet.columns[columnIndex] : nullptr;
+				const SheetColumn* column = (c < g_metrics.visible && columnIndex < static_cast<int>(g_sheet.columns.size())) ? &g_sheet.columns[columnIndex] : nullptr;
+				const auto ci = static_cast<std::size_t>(std::max(0, columnIndex));
+				const double colWidth = ci < g_metrics.colW.size() ? g_metrics.colW[ci] : kColWidthFallback;
+				const double rowNameWidth = ci < g_metrics.nameW.size() ? g_metrics.nameW[ci] : 160.0;
+				const double nextWidth = ci + 1 < g_metrics.colW.size() ? g_metrics.colW[ci + 1] : kColWidthFallback;
+				const double tileX = g_metrics.nameX + rowNameWidth + kNameGap;
 				for (int s = 0; s < kSheetSlots; ++s)
 				{
 					const std::size_t slot = static_cast<std::size_t>(c * kSheetSlots + s);
@@ -1854,10 +2198,12 @@ namespace controlslist
 							if (g_loggedRows.insert("sheet|nocell").second) { logger::warn("controls list: a sheet cell could not be made from Entry0; the controls sheet is not drawn"); }
 							return;
 						}
-						cell.SetMember("_x", RE::GFxValue(c * kColWidth));
-						cell.SetMember("_y", RE::GFxValue(top + s * kSlotPitch));
 						GiveCellTheMouse(a_movie, cell, c, s);
 					}
+					// placed every frame: the columns' widths follow the names they hold as the sheet slides
+					const double wantX = colX[static_cast<std::size_t>(c)], wantY = top + s * g_metrics.pitch;
+					if (Number(cell, "_x", -1.0) != wantX) { cell.SetMember("_x", RE::GFxValue(wantX)); }
+					if (Number(cell, "_y", -1.0) != wantY) { cell.SetMember("_y", RE::GFxValue(wantY)); }
 					const bool isTitle = s == 0;
 					RE::GFxValue entry;
 					bool haveEntry = false;
@@ -1899,9 +2245,13 @@ namespace controlslist
 							}
 						}
 					}
-					// a title has no key tile, so it takes the whole column ("IN FAVORITES MENU" is not shrunk)
-					const double nameWidth = isTitle ? (column->titleSpans ? 2 * kColWidth - 60.0 : kColWidth - 12.0) : kCellNameWidth;
-					const std::string signature = std::format("{}|{}|{}|{}|{}", text, key, capturing ? 1 : 0, nameWidth, selected ? 1 : 0);
+					// a title has no key tile, so it takes the whole column ("IN FAVORITES MENU" is not shrunk); GAMEPLAY's
+					// takes this column and the next
+					const double nameWidth = isTitle ? (column->titleSpans ? colWidth + nextWidth - kColGap - g_metrics.nameX : colWidth - kColGap - g_metrics.nameX) : rowNameWidth;
+					// a row's name is shrunk only when it is longer than a column can ever be (the measured width was capped)
+					const auto measuredIt = g_textWidths.find(text);
+					const bool shrink = !isTitle && measuredIt != g_textWidths.end() && measuredIt->second + kFieldGutter > nameWidth + 0.5;
+					const std::string signature = std::format("{}|{}|{}|{:.1f}|{}|{:.1f}|{:.1f}", text, key, capturing ? 1 : 0, nameWidth, selected ? 1 : 0, tileX, g_metrics.tileH);
 					if (!IsVisible(cell)) { SetVisible(cell, true); }
 					if (g_sheet.drawn[slot] == signature) { continue; }
 					TeachCombo(a_movie, cell, key);
@@ -1915,9 +2265,15 @@ namespace controlslist
 
 					bool artReady = true;
 					RE::GFxValue art;
-					if (cell.GetMember("buttonArt", &art) && art.IsDisplayObject())
+					if (g_metrics.ownArt)
 					{
-						art.SetMember("_x", RE::GFxValue(kCellArtX));
+						// SkyUI's journal: its SetEntry just attached "ButtonArt" at the native row's x (or "???"); the
+						// sheet's own tiles replace it
+						DrawOwnArt(list, cell, key, tileX, selected ? 0xFFFFFFu : kDimColor);
+					}
+					else if (cell.GetMember("buttonArt", &art) && art.IsDisplayObject())
+					{
+						art.SetMember("_x", RE::GFxValue(tileX));
 						art.SetMember("_alpha", RE::GFxValue(100.0));
 						SetVisible(art, !key.empty());
 						// InputMappingArt builds its tile list in onLoad, which a duplicated clip runs on the NEXT frame.
@@ -1928,7 +2284,7 @@ namespace controlslist
 					if (cell.GetMember("textField", &field) && field.IsDisplayObject())
 					{
 						field.SetMember("_alpha", RE::GFxValue(100.0));
-						field.SetMember("textAutoSize", RE::GFxValue("none"));
+						field.SetMember("textAutoSize", RE::GFxValue(shrink ? "shrink" : "none"));
 						field.SetMember("_width", RE::GFxValue(nameWidth));
 						RE::GFxValue label;
 						if (field.GetMember("text", &label) && label.IsString() && label.GetString() && label.GetString()[0] == '$')
@@ -2150,7 +2506,12 @@ namespace controlslist
 			if (v.IsNumber()) { return std::format("{:.1f}", v.GetNumber()); }
 			return std::string("\"?\"");
 		};
-		std::string out = std::format(R"({{"ok":true,"op":"rowclips","list":{{"x":{},"y":{},"width":{},"iMaxItemsShown":{}}},"clips":[)", num(list, "_x"), num(list, "_y"),
+		std::string colW;
+		for (const double w : g_metrics.colW) { colW += std::format("{}{:.1f}", colW.empty() ? "" : ",", w); }
+		const std::string sheet = std::format(R"({{"ownArt":{},"nameX":{:.1f},"tileH":{:.1f},"tileY":{:.1f},"pitch":{:.1f},"nativePitch":{:.1f},"textH":{:.1f},"available":{:.1f},"stageW":{:.1f},"pageLeft":{:.1f},"listLeft":{:.1f},"firstCol":{},"visible":{},"colW":[{}]}})",
+			g_metrics.ownArt ? "true" : "false", g_metrics.nameX, g_metrics.tileH, g_metrics.tileY, g_metrics.pitch, g_metrics.nativePitch, g_metrics.textH, g_metrics.available, g_metrics.stageW,
+			g_metrics.pageLeft, g_metrics.listLeft, g_sheet.firstCol, g_metrics.visible, colW);
+		std::string out = std::format(R"({{"ok":true,"op":"rowclips","sheet":{},"list":{{"x":{},"y":{},"width":{},"iMaxItemsShown":{}}},"clips":[)", sheet, num(list, "_x"), num(list, "_y"),
 									  num(list, "_width"), num(list, "iMaxItemsShown"));
 		bool first = true;
 		std::vector<std::string> names;
@@ -2178,12 +2539,15 @@ namespace controlslist
 				field = std::format(R"({{"x":{},"y":{},"width":{},"height":{},"autoSize":{},"textAutoSize":{},"textColor":{},"alpha":{},"html":{},"text":{},"format":{}}})", num(tf, "_x"), num(tf, "_y"),
 									num(tf, "_width"), num(tf, "_height"), str(tf, "autoSize"), str(tf, "textAutoSize"), str(tf, "textColor"), num(tf, "_alpha"), str(tf, "html"), str(tf, "text"), fmt);
 			}
-			std::string art = "null";
-			for (const char* name : { "ButtonArt", "buttonArt" })
+			std::string art;
+			for (const char* name : { "ButtonArt", "buttonArt", "uvcArt0", "uvcArt1", "uvcKeyText" })
 			{
 				RE::GFxValue a;
-				if (clip.GetMember(name, &a) && a.IsDisplayObject()) { art = std::format(R"({{"name":"{}","x":{},"y":{},"width":{}}})", name, num(a, "_x"), num(a, "_y"), num(a, "_width")); break; }
+				if (!clip.GetMember(name, &a) || !a.IsDisplayObject()) { continue; }
+				art += std::format(R"({}{{"name":"{}","x":{},"y":{},"width":{},"height":{},"visible":{},"text":{}}})", art.empty() ? "" : ",", name, num(a, "_x"), num(a, "_y"), num(a, "_width"),
+					num(a, "_height"), str(a, "_visible"), std::string_view(name) == "uvcKeyText" ? str(a, "text") : std::string("null"));
 			}
+			art = "[" + art + "]";
 			if (!first) { out += ","; }
 			first = false;
 			out += std::format(R"({{"clip":"{}","x":{},"y":{},"visible":{},"itemIndex":{},"members":[{}],"textField":{},"art":{}}})", names[i], num(clip, "_x"), num(clip, "_y"), str(clip, "_visible"),
