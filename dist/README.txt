@@ -104,6 +104,7 @@ already uses:
   Power Attack  One Click Power Attack, BFCO, BFCO NG, Simple Power Attack (Power Attack, Left Power
                 Attack and Dual Power Attack rows)
   Target Lock   True Directional Movement (also its Target Lock Extension), Simple Lock-On
+  Scavenger Sense  Sense Sweep (Y and A out of the box), Trail Key, Mark, Show Trails, Wipe Trails
   Also: Stance (Stances NG), Wheel Menu (Wheeler) and Back Pocket (Back Pocket for Controller)
 On a controller, a Target Lock (True Directional Movement) button also stops the lock following the
 Toggle POV button, and clearing the row gives it back to Toggle POV. Binding Dodge (DMCO) turns its
@@ -157,6 +158,7 @@ Shout, Sneak) now stay inside it, at least three columns show at once, and it wo
 journal without SkyUI.
 Added GamepadFaces in the INI's [Controls] section: Xbox or PlayStation button pictures on the Controls
 page, whatever the game's button names say (see CONTROLLER BUTTON PICTURES).
+Added rows for Scavenger Sense: Sense Sweep, Trail Key, Mark, Show Trails and Wipe Trails.
 Added rows on the Controls page for Call Horse, Dodge, Power Attack and Target Lock that set the key of
 whichever supported mod you use (see ROWS FOR OTHER MODS' KEYS).
 A row for a mod that uses MCM Helper now shows that mod's default key before you have changed it in its

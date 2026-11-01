@@ -396,6 +396,53 @@ namespace functions
 		}
 		// Simple Lock-On SE: [Settings] uHotKey; a code past the last SKSE button never matches, so -1 is "no key".
 		add("Target Lock (Simple Lock-On)", target("SKSE\\Plugins\\SimpleLockOn.ini", "Settings", "uHotKey", "", -1, "SKSE\\Plugins\\SimpleLockOn.dll"));
+
+		// SCAVENGER SENSE (KShakes, Nexus 188380, 0.10.1beta; the owner, 2026-11-01: "a row in UVC"). Its settings menu is
+		// SKSE Menu Framework, it has no MCM Helper file and no control map: it reads built-in defaults, then the installer's
+		// fragments in SKSE\Plugins\ScavengerSense_setup\ (10-kshakes.ini holds every key), then the player's own
+		// SKSE\Plugins\ScavengerSense.ini key by key - the file its menu's "Save to INI" writes, and the only one these rows
+		// write (never a setup fragment). One key per device, both in one section under two names, in the SKSE numbering
+		// (DX scan codes, 256+ mouse, 266-281 gamepad), -1 = no key - so each row is a split target like Back Pocket's.
+		//   Sense Sweep  [Hotkey] keyboard / gamepad (Y / A; the press is not swallowed, so A keeps its vanilla job).
+		//   Trail Key    [Tracks] key / gamepad - the trail key of its "single" key layout (keyMode); the shipped
+		//                "allinone" layout puts marking and wiping on the sweep key instead.
+		//   Mark / Show Trails / Wipe Trails  [Tracks] markKey / markGamepad, showKey / showGamepad, wipeKey / wipeGamepad -
+		//                the "multi" layout's keys, unbound out of the box.
+		{
+			Target t = target("SKSE\\Plugins\\ScavengerSense.ini", "Hotkey", "keyboard", "", -1, "SKSE\\Plugins\\ScavengerSense.dll");
+			t.gamepadSection = "Hotkey";
+			t.gamepadKey = "gamepad";
+			t.defaultsFile = "SKSE\\Plugins\\ScavengerSense_setup\\10-kshakes.ini";
+			add("Sense Sweep (Scavenger Sense)", std::move(t));
+		}
+		{
+			Target t = target("SKSE\\Plugins\\ScavengerSense.ini", "Tracks", "key", "", -1, "SKSE\\Plugins\\ScavengerSense.dll");
+			t.gamepadSection = "Tracks";
+			t.gamepadKey = "gamepad";
+			t.defaultsFile = "SKSE\\Plugins\\ScavengerSense_setup\\10-kshakes.ini";
+			add("Trail Key (Scavenger Sense)", std::move(t));
+		}
+		{
+			Target t = target("SKSE\\Plugins\\ScavengerSense.ini", "Tracks", "markKey", "", -1, "SKSE\\Plugins\\ScavengerSense.dll");
+			t.gamepadSection = "Tracks";
+			t.gamepadKey = "markGamepad";
+			t.defaultsFile = "SKSE\\Plugins\\ScavengerSense_setup\\10-kshakes.ini";
+			add("Mark (Scavenger Sense)", std::move(t));
+		}
+		{
+			Target t = target("SKSE\\Plugins\\ScavengerSense.ini", "Tracks", "showKey", "", -1, "SKSE\\Plugins\\ScavengerSense.dll");
+			t.gamepadSection = "Tracks";
+			t.gamepadKey = "showGamepad";
+			t.defaultsFile = "SKSE\\Plugins\\ScavengerSense_setup\\10-kshakes.ini";
+			add("Show Trails (Scavenger Sense)", std::move(t));
+		}
+		{
+			Target t = target("SKSE\\Plugins\\ScavengerSense.ini", "Tracks", "wipeKey", "", -1, "SKSE\\Plugins\\ScavengerSense.dll");
+			t.gamepadSection = "Tracks";
+			t.gamepadKey = "wipeGamepad";
+			t.defaultsFile = "SKSE\\Plugins\\ScavengerSense_setup\\10-kshakes.ini";
+			add("Wipe Trails (Scavenger Sense)", std::move(t));
+		}
 		return out;
 	}
 

@@ -42,6 +42,11 @@ def adapters():
         api = re.search(r't\.api = "([^"]*)";', m.group(7))
         if api:
             opts.append("api=" + api.group(1))
+        gs = re.search(r't\.gamepadSection = "([^"]*)";', m.group(7))
+        if gs:
+            gk = re.search(r't\.gamepadKey = "([^"]*)";', m.group(7))
+            # a split target (one key per device): checked like the keyboard key, in its own section and name
+            opts.append("padkey=%s:%s" % (gs.group(1), gk.group(1) if gk else m.group(3)))
         idc = re.search(r't\.idCheck = "([^"]*)";', m.group(7))
         if idc:
             opts.append("idcheck=" + idc.group(1).replace("\\\\", "\\"))
@@ -178,6 +183,11 @@ def main():
             for want in [key] + ([modkey] if modkey else []):
                 if (section.lower(), want.lower()) not in k:
                     bad.append("fixture lacks [%s] %s" % (section, want))
+            for o in filter(None, opts.split(";")):
+                if o.startswith("padkey="):
+                    ps, pk = o.split("=", 1)[1].split(":", 1)
+                    if (ps.lower(), pk.lower()) not in k:
+                        bad.append("fixture lacks the gamepad key [%s] %s" % (ps, pk))
             nk = keys_in(os.path.join(FIX, name, "no-key.ini"))
             if nk is None or nk.get(("", "none")) != str(none):
                 bad.append("fixture no-key.ini does not say none=%d" % none)
@@ -194,13 +204,20 @@ def main():
             if req:
                 m = re.match(r"(?i)^MCM\\Settings\\([^\\]+)\.ini$", file)
                 src = mod_files(a.instance, "MCM\\Config\\%s\\settings.ini" % m.group(1)) if m else mod_files(a.instance, file)
+                # the player's own file may not exist yet (Scavenger Sense writes ScavengerSense.ini only on "Save to INI"):
+                # then the mod's defaults=File is where the key lives
+                dflt = next((o.split("=", 1)[1] for o in opts.split(";") if o.startswith("defaults=")), "")
+                if not src and not m and dflt:
+                    src = mod_files(a.instance, dflt)
                 if not src:
                     bad.append("installed, but no %s in its folder" % ("MCM Config defaults" if m else file))
                 else:
                     lk = keys_in(src[0])
-                    for want in [key] + ([modkey] if modkey else []):
-                        if (section.lower(), want.lower()) not in lk:
-                            bad.append("the installed mod's %s lacks [%s] %s" % (os.path.relpath(src[0], a.instance), section, want))
+                    wants = [(section, key)] + ([(section, modkey)] if modkey else [])
+                    wants += [tuple(o.split("=", 1)[1].split(":", 1)) for o in opts.split(";") if o.startswith("padkey=")]
+                    for ws, want in wants:
+                        if (ws.lower(), want.lower()) not in lk:
+                            bad.append("the installed mod's %s lacks [%s] %s" % (os.path.relpath(src[0], a.instance), ws, want))
                     live = "installed: %s says %s=%s" % (os.path.relpath(src[0], os.path.join(a.instance, "mods")), key,
                                                           lk.get((section.lower(), key.lower()), "?"))
         status = "FAIL" if bad else "ok  "

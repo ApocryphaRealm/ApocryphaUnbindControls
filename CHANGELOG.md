@@ -36,6 +36,18 @@ Rule 61: this mod's own history, kept beside the code it describes.
   (<= 0) - with `lowestCell` and the layout's own `overflowBottomCalc`.
 
 ### Added (2026-11-01)
+- **Scavenger Sense rows** (the owner, 2026-11-01: "a row in UVC"; KShakes, Nexus 188380, 0.10.1beta): Sense Sweep
+  ([Hotkey] keyboard / gamepad - Y and A out of the box), Trail Key ([Tracks] key / gamepad, the trail key of its
+  "single" key layout), and Mark, Show Trails and Wipe Trails ([Tracks] markKey/markGamepad, showKey/showGamepad,
+  wipeKey/wipeGamepad, its "multi" layout's keys, unbound out of the box). Built-in adapter rows like the others, shown
+  only while SKSE\Plugins\ScavengerSense.dll is there. Scavenger Sense keeps one key per device in one section under
+  two names, so each row is a split target (a keyboard key and a controller button each go to their own setting, like
+  Back Pocket's); they adopt the key in force from SKSE\Plugins\ScavengerSense.ini, else from its installer default
+  ScavengerSense_setup\10-kshakes.ini (defaults=), and write only ScavengerSense.ini - the player's own override file
+  that its SKSE Menu Framework page saves - never a setup fragment. SKSE codes, -1 = no key. tools\check_adapters.py
+  now checks a split target's gamepad key too, and reads the defaults= file when the player's own file is not there
+  yet; five fixtures under tools\adapter-fixtures. Row names stay English like every other row (the list draws no
+  translated text).
 - **`[Controls] GamepadFaces = Auto | Xbox | PlayStation`** (the owner, 2026-11-01: the button faces must not depend on
   Norden UI). On a journal whose rows the sheet draws its own tiles on (the game's own, SkyUI's), the tiles are the
   journal's own exported symbols, used in place - the game's quest_journal.swf and SkyUI's carry 360_*, PS3_* and PS5_*
