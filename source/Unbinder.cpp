@@ -875,8 +875,9 @@ namespace unbinder
 	// That file - not this mod, and not a table written from memory - decides what a Controls-page row must put in
 	// buttonName for its key tile to be drawn. It is also full of surprises worth honouring rather than guessing at:
 	// the D-PAD entries carry NO prefix at all ("Up", "Down", "Left", "Right") while every other button does
-	// ("PS3_LB", "PS3_LT"), and the prefix in the stock file is PS3_ whatever pad is plugged in, because the art set
-	// is chosen further down. Guessing lowercase "lt" and assuming the d-pad had no glyph got both halves wrong
+	// ("360_LB", "360_LT"). The game's own file names every button 360_ whatever pad is plugged in (the journal only
+	// swaps PS3_ for PS5_ on its own); a replacer may name them otherwise - Norden UI's gamepad.txt uses PS3_ - and
+	// the Controls sheet's [Controls] GamepadFaces setting can redraw either as the other set without touching this. Guessing lowercase "lt" and assuming the d-pad had no glyph got both halves wrong
 	// (the owner, 2026-09-16: "it definitely does have a art tile for the D-pad").
 	//
 	// Read once, through the game's resource system, so a replacer's file wins exactly as its control map does.

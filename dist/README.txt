@@ -67,8 +67,8 @@ with it. This mod gives each of those menu buttons a key of its own, in its own 
 control map gives it out of the box - so changing a gameplay control never changes a menu button.
 
 THE CONTROLS PAGE
-Journal > System > Controls is laid out as a sheet that fits on one screen: GAMEPLAY across two columns,
-then EXTRA CONTROLS (the rows this mod adds), then one column per menu - MENUS, ITEMS and IN MAP. Move
+Journal > System > Controls is laid out as a sheet that fits on one screen: GAMEPLAY across two columns
+(more on a short frame), then EXTRA CONTROLS (the rows this mod adds), then one column per menu - MENUS, ITEMS and IN MAP. Move
 with the D-pad, the arrow keys or the mouse; the sheet slides sideways to keep the selection in view.
 Select a row and press Accept (or click it), then press the new key. A key another gameplay control uses
 is swapped with it, the way the game does it; a key the game reserves is refused. Hold the Modifier (Left
@@ -78,6 +78,20 @@ MENUS, the map's zoom under IN MAP. Favorite has two rows: Favorites Menu (GAMEP
 Favorite Item (ITEMS - favourites the highlighted item), which starts on F / Y (triangle) and can be moved
 like any other. The Favorites menu, lockpicking, follower and journal buttons keep their own keys but get
 no row: they only repeat the MENUS ones.
+The sheet measures the journal it is drawn in and fits inside its frame: when the rows do not fit the
+frame's height they move closer together, and if they still do not fit GAMEPLAY is spread over more
+columns. It works on the game's own journal (no SkyUI needed), on SkyUI's and on Norden UI's.
+
+CONTROLLER BUTTON PICTURES
+The pictures are the journal's own - the game's journal and SkyUI's carry Xbox, PlayStation 3 and
+PlayStation 5 buttons; this mod ships no art. GamepadFaces in the INI's [Controls] section picks them:
+  Auto         the pictures the game's button names ask for (Xbox with the game's own gamepad.txt; a UI
+               mod that replaces gamepad.txt, such as Norden UI's, can make them PlayStation)
+  Xbox         always the Xbox buttons
+  PlayStation  always the PlayStation buttons (the PS5 set when the game says a PS5 pad is in use)
+A button with no picture in the chosen set keeps its usual one; a button with no picture at all is
+written as its name. It changes only the pictures: your controls, gamepad.txt and the control map are
+never touched. Norden UI's journal draws its own button art and keeps it whatever this says.
 
 ROWS FOR OTHER MODS' KEYS
 EXTRA CONTROLS also holds rows for keys that other mods keep in their own settings. Binding one there
@@ -138,6 +152,11 @@ Documents\My Games\Skyrim Special Edition\SKSE\UnbindControls.log
 WHAT CHANGED
 
 Version 1.2.0
+Fixed the Controls page running below the frame on SkyUI's journal: the last GAMEPLAY rows (Sprint,
+Shout, Sneak) now stay inside it, at least three columns show at once, and it works on the game's own
+journal without SkyUI.
+Added GamepadFaces in the INI's [Controls] section: Xbox or PlayStation button pictures on the Controls
+page, whatever the game's button names say (see CONTROLLER BUTTON PICTURES).
 Added rows on the Controls page for Call Horse, Dodge, Power Attack and Target Lock that set the key of
 whichever supported mod you use (see ROWS FOR OTHER MODS' KEYS).
 A row for a mod that uses MCM Helper now shows that mod's default key before you have changed it in its

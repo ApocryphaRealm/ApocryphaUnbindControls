@@ -7,7 +7,46 @@ Rule 61: this mod's own history, kept beside the code it describes.
 > number; at `.9` the MINOR rolls. The next number is LAST WORKING + 1; failed/scratch/
 > untested numbers are reused. Numbers come from version-gate.ps1.
 
-## 1.2.0 - 2026-10-23 - working
+## 1.2.0 - 2026-10-23 - untested
+
+### Fixed (2026-11-01, from combined run B-20261031-230902-c9a0: the plain SkyUI journal failed)
+- **The Controls sheet ran below the journal's frame on SkyUI's journal, and only two columns showed.** The sheet never
+  measured the frame's height: every column had fifteen slots at a fixed row spacing, so on SkyUI (rows 32 apart) the
+  last GAMEPLAY rows - Sprint, Shout/Power, Sneak - sat below the frame's bottom edge; Norden UI's sheet fitted only
+  because its frame is taller. And every column reserved room for two key tiles while EXTRA CONTROLS' long names made
+  it about 384 wide, so inside SkyUI's 663 only two columns fitted. The sheet now measures the frame in the list's own
+  coordinates - `getBounds` called directly on the System page's `SystemPageRect` and on the journal's bottom button
+  bar (logic library 5301: never by a path through a function object), falling back to the native list's own extent
+  (`iMaxItemsShown` rows) on a "ButtonArt" journal with neither, and to the 1.2.0 height on Norden UI's when nothing is
+  found. Rows are fitted to that height: the natural spacing if every block fits, then closer rows (down to the text
+  height or 85% of a tile, plus 2; tiles shrink with them), then GAMEPLAY spread over more columns (its title centred
+  over all of them) and other long blocks run on into more columns. A column reserves two tiles only when it holds a
+  combination (the width each key's tiles or name actually took is remembered as it is drawn); a long name is capped
+  at 40% of the frame's width, and lower (to 25%) until any three neighbouring columns fit side by side, shrunk by the
+  list's own text-shrink. The width is now the smaller of the mirrored-frame rule and the page rect's right edge.
+- **The game's own journal (no SkyUI)** takes the same path as SkyUI's: its rows attach "ButtonArt", its System page
+  sits at the same x and its rows are as far apart, so it gets the same fix. No separate mode was needed. Two comments
+  that said otherwise were corrected (include/ControlsList.h: the game's journal and SkyUI's both use `ButtonArt`,
+  Norden UI's uses `buttonArt`; source/Unbinder.cpp: the game's own gamepad.txt names every button 360_ - PS3_ came
+  from Norden UI's replacement gamepad.txt).
+- DevBench `uvc.control op=rowclips` reports the fit in `"sheet"`: `availableW`, `availableWMirror`, `pageRectRight`,
+  `availableH`, `frameBottom` and `frameSource`, `pageRectBottom`, `bottomBarTop`, `nativeBottom`, `slots`,
+  `gameplayCols`, `minPitch`, `drawTileH`, `nameCapPct`, `tileW`, and `overflowBottom` - the lowest drawn pixel of any
+  visible cell (text and tiles, measured with getBounds) less the frame's bottom, so "inside the frame" is a number
+  (<= 0) - with `lowestCell` and the layout's own `overflowBottomCalc`.
+
+### Added (2026-11-01)
+- **`[Controls] GamepadFaces = Auto | Xbox | PlayStation`** (the owner, 2026-11-01: the button faces must not depend on
+  Norden UI). On a journal whose rows the sheet draws its own tiles on (the game's own, SkyUI's), the tiles are the
+  journal's own exported symbols, used in place - the game's quest_journal.swf and SkyUI's carry 360_*, PS3_* and PS5_*
+  sets; nothing is copied into the package. Auto keeps the names the game sends (360_ with the game's own gamepad.txt;
+  PS3_ under a replacer such as Norden UI's). Xbox / PlayStation rewrite the 360_/PS3_/PS5_ prefix before attachMovie
+  (PlayStation tries PS5_ first when the list's iPlatform is 5), falling back to the original name and then to the key
+  written as text. gamepad.txt and the control map are never touched; the setting is read only, never written back.
+  Norden UI's own journal draws its own InputMappingArt and keeps it whatever the setting says (documented in the INI
+  and README). rowclips reports `gamepadFaces` and the `symbols` attached this open; `uvc.control` (state) reports
+  `settings.gamepadFaces`, and `op=reload` re-reads it (reopen the journal to redraw). No in-game text was added, so the
+  eleven translation files are unchanged (translation-coverage: nothing to check).
 
 ### Fixed (2026-10-28, reported on the Nexus page with a screenshot of SkyUI's own journal, game 1.7.104)
 - **The Controls page drew its key tiles in the wrong place on SkyUI's journal.** The tiles sat faintly behind the next

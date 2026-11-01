@@ -316,8 +316,9 @@ namespace DevBenchTool
 			}
 
 			const std::string json = std::format(
-				"{{\"ok\":true,\"op\":\"state\",\"settings\":{{\"enabled\":{},\"keepRemapsInIni\":{},\"logLevel\":{},\"iniPath\":\"{}\"}},{},{},{},{},{}}}",
-				settings::general::enabled ? "true" : "false", settings::general::keepRemapsInIni ? "true" : "false", settings::debug::logLevel, EscapeJson(settings::GetIniPath()), unbinder::StateJson(), controlslist::StateJson(), systemmenu::StateJson(), functions::StateJson(), tweenwait::StateJson());
+				"{{\"ok\":true,\"op\":\"state\",\"settings\":{{\"enabled\":{},\"keepRemapsInIni\":{},\"logLevel\":{},\"gamepadFaces\":\"{}\",\"iniPath\":\"{}\"}},{},{},{},{},{}}}",
+				settings::general::enabled ? "true" : "false", settings::general::keepRemapsInIni ? "true" : "false", settings::debug::logLevel,
+				settings::controls::FacesName(settings::controls::gamepadFaces), EscapeJson(settings::GetIniPath()), unbinder::StateJson(), controlslist::StateJson(), systemmenu::StateJson(), functions::StateJson(), tweenwait::StateJson());
 			a_write(a_sink, json.c_str());
 		}
 	}

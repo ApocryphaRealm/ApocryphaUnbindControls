@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <cmath>
 #include <atomic>
 #include <format>
 #include <mutex>
@@ -86,11 +87,12 @@ namespace controlslist
 		bool g_firstReleased = false;
 		std::string g_remapEvent;                       // main thread
 		constexpr int kSheetCols = 4;    // columns on screen at once (the sheet slides to keep the selection on it)
-		constexpr int kSheetSlots = 15;  // a title and fourteen rows per column
+		constexpr int kSheetSlots = 15;  // at most a title and fourteen rows per column (fewer when the frame is short)
 		struct SheetColumn
 		{
 			std::string title;        // "" for a column that continues the block to its left
-			bool titleSpans = false;  // GAMEPLAY: the title is centred over this column and the next
+			int span = 1;             // GAMEPLAY: the title is centred over this many columns, from this one on
+			int lead = 0;             // a GAMEPLAY column after the first: how many columns back its title column is
 			std::vector<std::string> rows;  // row keys (RowKey) into the list's entries
 		};
 		struct SheetState
@@ -1386,17 +1388,36 @@ namespace controlslist
 			double pitch = 29.0;       // row to row
 			double nativePitch = 0.0;  // Entry0 to Entry1, as the journal lays its own list out
 			double textH = 0.0;        // the tallest measured name
-			double available = 4 * kColWidthFallback;  // from the list's left edge to the journal frame's right edge
+			double available = 4 * kColWidthFallback;  // from the list's left edge to the journal frame's right edge (list units)
+			double availableMirror = 0.0;  // the same by the mirrored-frame rule (the page's left edge mirrored across the stage)
+			double rectRight = -1.0;       // the System page's own rect (SystemPageRect), right edge in list units; -1 = none
+			double availableH = -1.0;      // from the first row's top to the frame's bottom, less a margin; -1 = not measured
+			double frameBottom = -1.0;     // the frame's bottom in list units; -1 = not measured (the 1.2.0 height is kept)
+			double rectBottom = -1.0;      // SystemPageRect's bottom, list units
+			double bottomBarTop = -1.0;    // the journal's bottom button bar, top edge, list units
+			double nativeBottom = 0.0;     // the native list's own extent: Entry0 + iMaxItemsShown rows
+			std::string frameSource = "not measured";
+			double top = 0.0;              // Entry0's y: the sheet's first slot
+			double drawTileH = 28.0;       // the tile as drawn: never taller than the row pitch leaves room for
+			double drawTileY = 0.0;
+			double minPitch = 0.0;         // the closest the rows may come: max(text, 85% of a tile) + 2
+			int slots = kSheetSlots;       // a title and slots-1 rows per column
+			int gameplayCols = 2;          // GAMEPLAY's columns
+			double nameCapFrac = 0.40;     // a name is capped at this share of the width
+			double overflowCalc = 0.0;     // the lowest drawn row's bottom less the frame's bottom (list units; <= 0 inside)
 			double stageW = 0.0, pageLeft = 0.0, listLeft = 0.0;
 			std::vector<double> nameW;  // per sheet column: the name field's width
+			std::vector<double> tileW;  // per sheet column: room for its widest key (two tiles only where a combination is)
 			std::vector<double> colW;   // per sheet column: name, tile and the gap to the next column
 			int visible = kSheetCols;   // columns on screen from firstCol
 			std::string logged;         // what was last logged, so a change is logged once
 		};
 		SheetMetrics g_metrics;                       // main thread
 		std::map<std::string, double> g_textWidths;   // main thread: a cell's text -> its width in the list's own field
+		std::map<std::string, double> g_keyWidths;    // main thread: "key|tile height" -> the width its tiles (or name) took when drawn
+		std::set<std::string> g_symbolsSeen;          // main thread: the journal symbols the sheet attached this open (rowclips)
 
-		double TileArea() { return 2.0 * g_metrics.tileH + 4.0; }  // room for a two-tile combination
+		std::string KeyWidthKey(const std::string& a_key) { return std::format("{}|{:.1f}", a_key, g_metrics.drawTileH); }
 
 		// How many columns fit from a_first on, at least one.
 		int VisibleFrom(int a_first)
@@ -1429,14 +1450,15 @@ namespace controlslist
 			return a_entry.GetMember("_uvcFunction", &v) && v.IsBool() && v.GetBool();
 		}
 
-		std::vector<SheetColumn> BuildSheet(const RE::GFxValue& a_entries)
+		struct SheetBlock
 		{
-			struct Block
-			{
-				std::string title;
-				std::vector<std::string> rows;
-			};
-			std::vector<Block> blocks;
+			std::string title;
+			std::vector<std::string> rows;
+		};
+
+		std::vector<SheetBlock> SheetBlocks(const RE::GFxValue& a_entries)
+		{
+			std::vector<SheetBlock> blocks;
 			for (std::uint32_t i = 0; i < a_entries.GetArraySize(); ++i)
 			{
 				RE::GFxValue entry;
@@ -1445,22 +1467,32 @@ namespace controlslist
 				if (blocks.empty()) { blocks.push_back({ "", {} }); }
 				blocks.back().rows.push_back(RowKey(entry));
 			}
+			return blocks;
+		}
+
+		// a_slots: a title and a_slots-1 rows per column (FitRows decides it from the frame's height). GAMEPLAY is split
+		// evenly over a_gameplayCols columns (two unless the frame is too short for that), its title centred over them all;
+		// any other block runs on into more columns only when it is longer than a column.
+		std::vector<SheetColumn> BuildSheet(const RE::GFxValue& a_entries, int a_slots, int a_gameplayCols)
+		{
 			std::vector<SheetColumn> out;
-			const std::size_t perColumn = kSheetSlots - 1;
-			for (const auto& b : blocks)
+			const std::size_t perColumn = static_cast<std::size_t>(std::max(1, a_slots - 1));
+			for (const auto& b : SheetBlocks(a_entries))
 			{
 				if (b.rows.empty()) { continue; }
 				const bool gameplay = b.title == kGameplayTitle;
-				// GAMEPLAY is always two columns, split evenly; any other block runs on into more columns only if it is long.
-				const std::size_t split = gameplay ? (b.rows.size() + 1) / 2 : perColumn;
+				const std::size_t cols = static_cast<std::size_t>(std::max(1, a_gameplayCols));
+				const std::size_t split = gameplay ? std::max<std::size_t>(1, (b.rows.size() + cols - 1) / cols) : perColumn;
+				const std::size_t firstIndex = out.size();
 				for (std::size_t at = 0; at < b.rows.size(); at += split)
 				{
 					SheetColumn c;
 					c.title = at == 0 ? b.title : std::string();
-					c.titleSpans = gameplay && at == 0;
+					c.lead = gameplay ? static_cast<int>(out.size() - firstIndex) : 0;
 					c.rows.assign(b.rows.begin() + static_cast<std::ptrdiff_t>(at), b.rows.begin() + static_cast<std::ptrdiff_t>(std::min(b.rows.size(), at + split)));
 					out.push_back(std::move(c));
 				}
+				if (gameplay && out.size() > firstIndex) { out[firstIndex].span = static_cast<int>(out.size() - firstIndex); }
 			}
 			return out;
 		}
@@ -1490,9 +1522,9 @@ namespace controlslist
 			const int count = static_cast<int>(g_sheet.columns.size());
 			g_sheet.col = std::clamp(g_sheet.col, 0, std::max(0, count - 1));
 			if (count > 0) { g_sheet.row = std::clamp(g_sheet.row, 0, std::max(0, static_cast<int>(g_sheet.columns[g_sheet.col].rows.size()) - 1)); }
-			// GAMEPLAY's two columns come on screen together.
+			// GAMEPLAY's columns come on screen together.
 			int wantFirst = std::clamp(g_sheet.firstCol, 0, std::max(0, count - 1));
-			const int start = (g_sheet.col > 0 && g_sheet.columns[g_sheet.col].title.empty() && g_sheet.columns[g_sheet.col - 1].titleSpans) ? g_sheet.col - 1 : g_sheet.col;
+			const int start = count > 0 ? std::max(0, g_sheet.col - g_sheet.columns[g_sheet.col].lead) : 0;
 			if (start < wantFirst) { wantFirst = start; }
 			// as many columns as fit inside the journal's frame (measured: VisibleFrom), not a fixed four
 			if (static_cast<int>(g_metrics.colW.size()) != count)
@@ -1879,10 +1911,133 @@ namespace controlslist
 			return width;
 		}
 
-		// Measures the journal (rule 30: ask the movie, do not assume it) and lays the sheet's columns out from it. Logged
-		// once per change; DevBench op=rowclips reports it as "sheet".
-		void MeasureSheet(RE::GFxMovieView* a_movie, RE::GFxValue& a_list, RE::GFxValue& a_first, const RE::GFxValue& a_entries,
-			const std::map<std::string, std::uint32_t>& a_index)
+		// The key a cell shows for a row (not while it captures). A game control is read from the live map: the game names a
+		// row's key only when it builds the list, and never learns of a bind this sheet made ("Shout" on LB + Modifier still
+		// read R2).
+		std::string CellKey(const RE::GFxValue& a_entry, bool a_gamepad)
+		{
+			const RowFacts facts = ReadRow(a_entry, a_gamepad);
+			std::string key = facts.blank ? std::string() : facts.buttonName;
+			if (!IsOwnRow(a_entry))
+			{
+				key.clear();
+				for (const int device : a_gamepad ? std::vector<int>{ 2 } : std::vector<int>{ 0, 1 })
+				{
+					std::uint16_t k = kUnmappedID, mod = 0;
+					if (!unbinder::LiveBinding(0, facts.text, device, k, mod) || k == kUnmappedID) { continue; }
+					key = RowButtonName(k, device);
+					if (mod != 0 && mod != kUnmappedID) { key = RowButtonName(mod, device) + " + " + key; }
+					break;
+				}
+			}
+			return key;
+		}
+
+		// a_clip's bounds in a_target's coordinates: getBounds called as a direct Invoke on the clip value (never by a path
+		// through a function object - logic library 5301). False when the clip draws nothing (Flash answers 6710886.4).
+		struct Box
+		{
+			double xMin = 0.0, yMin = 0.0, xMax = 0.0, yMax = 0.0;
+		};
+		bool BoundsIn(RE::GFxValue& a_clip, RE::GFxValue& a_target, Box& a_out)
+		{
+			if (!a_clip.IsDisplayObject() || !a_target.IsDisplayObject()) { return false; }
+			RE::GFxValue bounds;
+			if (!a_clip.Invoke("getBounds", &bounds, &a_target, 1) || !bounds.IsObject()) { return false; }
+			if (!NumberMember(bounds, "xMin", a_out.xMin) || !NumberMember(bounds, "yMin", a_out.yMin) || !NumberMember(bounds, "xMax", a_out.xMax) ||
+				!NumberMember(bounds, "yMax", a_out.yMax))
+			{
+				return false;
+			}
+			for (const double v : { a_out.xMin, a_out.yMin, a_out.xMax, a_out.yMax })
+			{
+				if (!std::isfinite(v) || std::abs(v) > 100000.0) { return false; }
+			}
+			return a_out.xMax > a_out.xMin && a_out.yMax > a_out.yMin;
+		}
+
+		// The cell's lowest drawn pixel in the list's coordinates: its name's text and its tiles (or key name), not the
+		// clip's whole box - a row's text field is taller than its text.
+		double InkBottom(RE::GFxValue& a_list, RE::GFxValue& a_cell)
+		{
+			const double cellY = Number(a_cell, "_y", 0.0), scaleY = Number(a_cell, "_yscale", 100.0) / 100.0;
+			double bottom = cellY;
+			RE::GFxValue field;
+			if (a_cell.GetMember("textField", &field) && field.IsDisplayObject())
+			{
+				bottom = std::max(bottom, cellY + (Number(field, "_y", 0.0) + Number(field, "textHeight", 0.0) + kFieldGutter) * scaleY);
+			}
+			RE::GFxValue keyText;
+			if (a_cell.GetMember("uvcKeyText", &keyText) && keyText.IsDisplayObject() && IsVisible(keyText))
+			{
+				bottom = std::max(bottom, cellY + (Number(keyText, "_y", 0.0) + Number(keyText, "textHeight", 0.0) + kFieldGutter) * scaleY);
+			}
+			for (int i = 0; i < kOwnArtParts; ++i)
+			{
+				RE::GFxValue tile;
+				Box b;
+				if (a_cell.GetMember(std::format("uvcArt{}", i).c_str(), &tile) && tile.IsDisplayObject() && BoundsIn(tile, a_list, b)) { bottom = std::max(bottom, b.yMax); }
+			}
+			RE::GFxValue art;
+			Box b;
+			if (a_cell.GetMember("buttonArt", &art) && art.IsDisplayObject() && IsVisible(art) && BoundsIn(art, a_list, b)) { bottom = std::max(bottom, b.yMax); }
+			return bottom;
+		}
+
+		// The row pitch and the slots a column holds, fitted to the frame's height (FINDINGS 2026-11-01 4c): the natural
+		// pitch if every block fits at it; otherwise the rows come closer, down to max(text, 85% of a tile) + 2; and if they
+		// still do not fit, GAMEPLAY is spread over more columns and other long blocks run on into more columns.
+		void FitRows(const RE::GFxValue& a_entries)
+		{
+			auto& m = g_metrics;
+			const double natural = std::clamp(std::max(m.tileH, m.textH) + 2.0, 24.0, std::max(24.0, m.nativePitch));
+			m.minPitch = std::min(natural, std::max(m.textH, m.tileH * 0.85) + 2.0);
+			std::size_t gameplay = 0, longestOther = 0;
+			for (const auto& b : SheetBlocks(a_entries))
+			{
+				if (b.title == kGameplayTitle) { gameplay = b.rows.size(); }
+				else { longestOther = std::max(longestOther, b.rows.size()); }
+			}
+			// slots wanted: GAMEPLAY in two columns and every other block in one, each with its title
+			const int need = std::clamp(static_cast<int>(std::max((gameplay + 1) / 2, longestOther)) + 1, 2, kSheetSlots);
+			auto cellH = [&](double a_pitch) { return std::max(a_pitch, m.tileY + std::min(m.tileH, a_pitch - 2.0)); };
+			auto fits = [&](int a_slots, double a_pitch) { return (a_slots - 1) * a_pitch + cellH(a_pitch) <= m.availableH + 0.01; };
+			auto most = [&](double a_pitch) {
+				int n = 1;
+				while (n < kSheetSlots && fits(n + 1, a_pitch)) { ++n; }
+				return n;
+			};
+			m.pitch = natural;
+			m.slots = kSheetSlots;
+			if (m.availableH > 0.0)
+			{
+				if (const int n = most(natural); n >= need) { m.slots = n; }
+				else if (fits(need, m.minPitch))
+				{
+					double lo = m.minPitch, hi = natural;
+					for (int i = 0; i < 24; ++i)
+					{
+						const double mid = (lo + hi) / 2.0;
+						(fits(need, mid) ? lo : hi) = mid;
+					}
+					m.pitch = lo;
+					m.slots = need;
+				}
+				else
+				{
+					m.pitch = m.minPitch;
+					m.slots = std::max(2, most(m.minPitch));
+				}
+			}
+			m.gameplayCols = 2;
+			while (m.gameplayCols < kSheetCols && (static_cast<int>(gameplay) + m.gameplayCols - 1) / m.gameplayCols > m.slots - 1) { ++m.gameplayCols; }
+			m.drawTileH = std::min(m.tileH, m.pitch - 2.0);
+			m.drawTileY = m.tileY + (m.tileH - m.drawTileH) / 2.0;
+		}
+
+		// Measures the journal (rule 30: ask the movie, do not assume it): the row geometry, the frame's width and height,
+		// and from them the row pitch and the slots per column. Runs before the columns are built.
+		void MeasureFrame(RE::GFxMovieView* a_movie, RE::GFxValue& a_list, RE::GFxValue& a_first, const RE::GFxValue& a_entries)
 		{
 			auto& m = g_metrics;
 			// the row's own geometry, from the first native row
@@ -1903,69 +2058,170 @@ namespace controlslist
 			m.nativePitch = 0.0;
 			if (a_list.GetMember("Entry1", &second) && second.IsDisplayObject()) { m.nativePitch = Number(second, "_y", 0.0) - Number(a_first, "_y", 0.0); }
 			if (m.nativePitch <= 0.0) { m.nativePitch = Number(a_first, "_height", 40.0); }
+			m.top = Number(a_first, "_y", 0.0);
+			MeasureText(a_movie, a_list, a_first, kGameplayTitle);  // the text height, before any row is measured
 
-			// the room to the right: the System page sits centred in the journal's frame, so the frame's right edge mirrors
-			// the page's left edge across the movie (SkyUI: page at 167 of 1280, frame edge at 1113; Norden UI: 77, 1203)
+			// the width by the mirrored-frame rule: the System page sits centred in the journal's frame, so the frame's right
+			// edge mirrors the page's left edge across the movie (SkyUI and the game's own: page at 167 of 1280; Norden UI: 77)
 			m.available = 4 * kColWidthFallback;
+			m.availableMirror = 0.0;
 			RE::GFxValue page;
 			const std::string pagePath = PagePathCopy();
+			const bool havePage = !pagePath.empty() && a_movie->GetVariable(&page, pagePath.c_str()) && page.IsDisplayObject();
 			auto* def = a_movie->GetMovieDef();
 			m.stageW = def ? def->GetWidth() : 0.0;
-			if (m.stageW > 0.0 && !pagePath.empty() && a_movie->GetVariable(&page, pagePath.c_str()) && page.IsDisplayObject() && StageX(a_movie, page, 0.0, m.pageLeft) &&
-				StageX(a_movie, a_list, 0.0, m.listLeft))
+			if (m.stageW > 0.0 && havePage && StageX(a_movie, page, 0.0, m.pageLeft) && StageX(a_movie, a_list, 0.0, m.listLeft))
 			{
 				double listRight100 = 0.0;
 				const double scale = StageX(a_movie, a_list, 100.0, listRight100) && listRight100 > m.listLeft ? (listRight100 - m.listLeft) / 100.0 : 1.0;
 				const double frameRight = std::min(m.stageW - m.pageLeft, m.stageW) - kFrameMargin;
-				if (frameRight > m.listLeft) { m.available = (frameRight - m.listLeft) / scale; }
+				if (frameRight > m.listLeft) { m.availableMirror = (frameRight - m.listLeft) / scale; }
 			}
 
-			// each column as wide as its longest name; a name longer than one column could ever be is shrunk to fit
-			const double nameCap = std::max(60.0, m.available - kNameGap - TileArea() - kColGap - m.nameX - kFieldGutter);
-			m.nameW.assign(g_sheet.columns.size(), 0.0);
-			m.colW.assign(g_sheet.columns.size(), kColWidthFallback);
+			// the frame itself, in the list's own coordinates: the System page's rect (SystemPageRect, the game's and SkyUI's
+			// journals) and the journal's bottom button bar. A rect that would not even hold the native list is not the frame.
+			double iMax = 0.0;
+			NumberMember(a_list, "iMaxItemsShown", iMax);
+			m.nativeBottom = m.top + std::max(1.0, iMax) * m.nativePitch;
+			m.rectRight = m.rectBottom = m.bottomBarTop = -1.0;
+			Box box;
+			RE::GFxValue rect;
+			if (havePage && page.GetMember("SystemPageRect", &rect) && BoundsIn(rect, a_list, box) && box.yMax >= m.nativeBottom - 1.0)
+			{
+				m.rectBottom = box.yMax;
+				m.rectRight = box.xMax;
+			}
+			static constexpr std::string_view kPageTail = ".SystemFader.Page_mc";
+			if (pagePath.ends_with(kPageTail))
+			{
+				const std::string menu = pagePath.substr(0, pagePath.size() - kPageTail.size());
+				for (const char* bar : { ".BottomBar_mc", ".BottomBar" })
+				{
+					RE::GFxValue clip;
+					if (a_movie->GetVariable(&clip, (menu + bar).c_str()) && BoundsIn(clip, a_list, box) && box.yMin > m.top + 2.0 * m.nativePitch)
+					{
+						m.bottomBarTop = box.yMin;
+						break;
+					}
+				}
+			}
+			if (m.rectRight > kFrameMargin + 200.0)
+			{
+				const double fromRect = m.rectRight - kFrameMargin;
+				m.available = m.availableMirror > 0.0 ? std::min(m.availableMirror, fromRect) : fromRect;
+			}
+			else if (m.availableMirror > 0.0) { m.available = m.availableMirror; }
+
+			m.frameBottom = -1.0;
+			if (m.rectBottom > 0.0 && m.bottomBarTop > 0.0)
+			{
+				m.frameBottom = std::min(m.rectBottom, m.bottomBarTop);
+				m.frameSource = m.rectBottom <= m.bottomBarTop ? "SystemPageRect" : "BottomBar";
+			}
+			else if (m.rectBottom > 0.0)
+			{
+				m.frameBottom = m.rectBottom;
+				m.frameSource = "SystemPageRect";
+			}
+			else if (m.bottomBarTop > 0.0)
+			{
+				m.frameBottom = m.bottomBarTop;
+				m.frameSource = "BottomBar";
+			}
+			else if (m.ownArt)
+			{
+				// a "ButtonArt" journal with neither: the native list's own extent, which the frame surely holds
+				m.frameBottom = m.nativeBottom;
+				m.frameSource = "native list (iMaxItemsShown x row)";
+			}
+			else { m.frameSource = "none - the 1.2.0 height (Norden UI's frame holds it)"; }
+			m.availableH = m.frameBottom > 0.0 ? m.frameBottom - kFrameMargin - m.top : -1.0;
+			FitRows(a_entries);
+		}
+
+		// Lays the sheet's columns out from the measured frame: each column as wide as its longest name - capped at a share
+		// of the width that lets at least three columns stand side by side - plus room for its widest key: two tiles only in
+		// a column that holds a combination. Logged once per change; DevBench op=rowclips reports it as "sheet".
+		void MeasureColumns(RE::GFxMovieView* a_movie, RE::GFxValue& a_list, RE::GFxValue& a_first, const RE::GFxValue& a_entries,
+			const std::map<std::string, std::uint32_t>& a_index, bool a_gamepad)
+		{
+			auto& m = g_metrics;
+			const std::size_t count = g_sheet.columns.size();
+			std::vector<double> longest(count, 0.0), titleW(count, 0.0);
+			m.tileW.assign(count, m.drawTileH + 4.0);
 			bool measured = true;  // textH keeps the tallest text ever measured: the cache measures each text once
-			for (std::size_t c = 0; c < g_sheet.columns.size(); ++c)
+			for (std::size_t c = 0; c < count; ++c)
 			{
 				const auto& column = g_sheet.columns[c];
-				double longest = 0.0;
 				for (const auto& key : column.rows)
 				{
 					const auto it = a_index.find(key);
 					RE::GFxValue entry;
 					if (it == a_index.end() || !a_entries.GetElement(it->second, &entry) || !entry.IsObject()) { continue; }
 					const double w = MeasureText(a_movie, a_list, a_first, CellText(entry));
-					if (w < 0.0) { measured = false; continue; }
-					longest = std::max(longest, w);
+					if (w < 0.0) { measured = false; }
+					else { longest[c] = std::max(longest[c], w); }
+					const std::string shown = CellKey(entry, a_gamepad);
+					if (shown.empty()) { continue; }
+					double room = 0.0;
+					if (const auto known = g_keyWidths.find(KeyWidthKey(shown)); known != g_keyWidths.end()) { room = known->second; }
+					else
+					{
+						const auto parts = 1 + std::count(shown.begin(), shown.end(), '+');
+						room = static_cast<double>(parts) * (m.drawTileH + 2.0) + 2.0;
+					}
+					m.tileW[c] = std::max(m.tileW[c], room);
 				}
-				m.nameW[c] = std::min(longest, nameCap) + kFieldGutter;
-				double width = m.nameX + m.nameW[c] + kNameGap + TileArea();
-				if (!column.title.empty() && !column.titleSpans)
-				{
-					const double t = MeasureText(a_movie, a_list, a_first, column.title);
-					if (t > 0.0) { width = std::max(width, std::min(t + kFieldGutter + m.nameX, m.available - kColGap)); }
-				}
-				m.colW[c] = width + kColGap;
+				if (!column.title.empty() && column.span <= 1) { titleW[c] = MeasureText(a_movie, a_list, a_first, column.title); }
 			}
-			if (!measured)
+			m.nameW.assign(count, 160.0);
+			m.colW.assign(count, kColWidthFallback);
+			if (measured)
 			{
-				// the probe could not be drawn: the 1.2.0 layout rather than nothing
-				std::fill(m.nameW.begin(), m.nameW.end(), 160.0);
-				std::fill(m.colW.begin(), m.colW.end(), kColWidthFallback);
+				// the cap starts at 40% of the width and comes down (to 25%) until every three neighbouring columns fit
+				for (m.nameCapFrac = 0.40;; m.nameCapFrac -= 0.03)
+				{
+					const double nameCap = std::max(60.0, m.nameCapFrac * m.available);
+					for (std::size_t c = 0; c < count; ++c)
+					{
+						m.nameW[c] = std::min(longest[c], nameCap) + kFieldGutter;
+						double width = m.nameX + m.nameW[c] + kNameGap + m.tileW[c];
+						if (titleW[c] > 0.0) { width = std::max(width, std::min(titleW[c] + kFieldGutter + m.nameX, m.available - kColGap)); }
+						m.colW[c] = width + kColGap;
+					}
+					bool three = true;
+					for (int i = 0; i < static_cast<int>(count) && three; ++i) { three = VisibleFrom(i) >= std::min(3, static_cast<int>(count) - i); }
+					if (three || m.nameCapFrac < 0.25 + 0.001) { break; }
+				}
 			}
-			// rows: a tile or a line of text apart, whichever is taller, never further apart than the journal's own rows
-			m.pitch = std::clamp(std::max(m.tileH, m.textH) + 2.0, 24.0, std::max(24.0, m.nativePitch));
 
 			std::string widths;
 			for (const double w : m.colW) { widths += std::format("{}{:.0f}", widths.empty() ? "" : ",", w); }
-			const std::string summary = std::format("{} tiles; name x {:.0f}, tile {:.0f} high at y {:.0f}; rows {:.0f} apart (journal's own {:.0f}, text {:.0f}); {:.0f} wide to the frame (stage {:.0f}, page at {:.0f}, list at {:.0f}); columns [{}]{}",
-				m.ownArt ? "\"ButtonArt\" (the sheet draws its own)" : "\"buttonArt\"", m.nameX, m.tileH, m.tileY, m.pitch, m.nativePitch, m.textH, m.available, m.stageW, m.pageLeft,
-				m.listLeft, widths, measured ? "" : " - names NOT measured, 1.2.0 widths used");
+			const std::string summary = std::format(
+				"{} tiles; name x {:.0f}, tile {:.0f} high at y {:.0f} (drawn {:.0f}); rows {:.0f} apart (journal's own {:.0f}, text {:.0f}, closest {:.0f}), "
+				"{} slots, GAMEPLAY in {} columns; {:.0f} wide to the frame (mirrored rule {:.0f}, page rect right {:.0f}; stage {:.0f}, page at {:.0f}, list at {:.0f}); "
+				"{:.0f} high to the frame's bottom {:.0f} ({}; page rect {:.0f}, bottom bar {:.0f}, native list {:.0f}); names capped at {:.0f}%; columns [{}]{}",
+				m.ownArt ? "\"ButtonArt\" (the sheet draws its own)" : "\"buttonArt\"", m.nameX, m.tileH, m.tileY, m.drawTileH, m.pitch, m.nativePitch, m.textH, m.minPitch, m.slots,
+				m.gameplayCols, m.available, m.availableMirror, m.rectRight, m.stageW, m.pageLeft, m.listLeft, m.availableH, m.frameBottom, m.frameSource, m.rectBottom,
+				m.bottomBarTop, m.nativeBottom, m.nameCapFrac * 100.0, widths, measured ? "" : " - names NOT measured, 1.2.0 widths used");
 			if (summary != m.logged)
 			{
 				m.logged = summary;
 				logger::info("controls sheet: measured this journal: {}", summary);
 			}
+		}
+
+		// The lowest row drawn on screen, by the layout's own numbers, against the frame's bottom (<= 0: inside).
+		void UpdateOverflow()
+		{
+			auto& m = g_metrics;
+			int used = 0;
+			for (int c = g_sheet.firstCol; c < g_sheet.firstCol + m.visible && c < static_cast<int>(g_sheet.columns.size()); ++c)
+			{
+				used = std::max(used, static_cast<int>(g_sheet.columns[c].rows.size()));
+			}
+			const double bottom = m.top + used * m.pitch + std::max(m.pitch, m.drawTileY + m.drawTileH);
+			m.overflowCalc = m.frameBottom > 0.0 ? bottom - m.frameBottom : 0.0;
 		}
 
 		// A key name as a player reads it: "PS3_LB + PS3_RT" -> "LB + RT".
@@ -1992,7 +2248,43 @@ namespace controlslist
 		// per part of a combination, at the measured tile height. A key the movie has no symbol for is written as its name
 		// instead of the movie's "???" (its UnknownKey symbol is a drawing with no text field). The list's own ButtonArt is
 		// hidden: it sits at the native row's x and would land in the next column.
-		void DrawOwnArt(RE::GFxValue& a_list, RE::GFxValue& a_cell, const std::string& a_key, double a_tileX, std::uint32_t a_textRgb)
+		// The journal symbols to try for one part of a key, in order: the set [Controls] GamepadFaces asks for (Xbox: 360_,
+		// PlayStation: PS3_, or PS5_ first when the list says a PS5 pad is in use), then the name the game sent - with its
+		// PS5_ twin first on a PS5 pad, as the journal's own SetEntry does - and the caller writes the name as text when
+		// none of them exists. A part with no pad prefix (the D-pad's Up/Down/Left/Right, keyboard and mouse keys) is
+		// only ever its own name. Only the art changes: the key, gamepad.txt and the control map are untouched.
+		std::vector<std::string> FaceSymbols(const std::string& a_part, bool a_ps5)
+		{
+			std::vector<std::string> out;
+			auto add = [&](std::string a_symbol) {
+				if (std::find(out.begin(), out.end(), a_symbol) == out.end()) { out.push_back(std::move(a_symbol)); }
+			};
+			std::string rest;
+			for (const char* prefix : { "360_", "PS3_", "PS5_" })
+			{
+				if (a_part.starts_with(prefix)) { rest = a_part.substr(4); break; }
+			}
+			if (!rest.empty())
+			{
+				switch (settings::controls::gamepadFaces)
+				{
+				case settings::controls::Faces::kXbox:
+					add("360_" + rest);
+					break;
+				case settings::controls::Faces::kPlayStation:
+					if (a_ps5) { add("PS5_" + rest); }
+					add("PS3_" + rest);
+					break;
+				default:
+					break;
+				}
+				if (a_ps5 && a_part.starts_with("PS3_")) { add("PS5_" + rest); }
+			}
+			add(a_part);
+			return out;
+		}
+
+		void DrawOwnArt(RE::GFxValue& a_list, RE::GFxValue& a_cell, const std::string& a_key, double a_tileX, double a_areaW, std::uint32_t a_textRgb)
 		{
 			RE::GFxValue art;
 			if (a_cell.GetMember("ButtonArt", &art) && art.IsDisplayObject()) { SetVisible(art, false); }
@@ -2021,26 +2313,37 @@ namespace controlslist
 			{
 				const std::string clipName = std::format("uvcArt{}", i);
 				RE::GFxValue tile;
-				std::vector<std::string> symbols;
-				if (ps5 && parts[i].starts_with("PS3_")) { symbols.push_back("PS5_" + parts[i].substr(4)); }
-				symbols.push_back(parts[i]);
-				for (const auto& symbol : symbols)
+				std::string attached;
+				for (const auto& symbol : FaceSymbols(parts[i], ps5))
 				{
 					RE::GFxValue args[3] = { RE::GFxValue(symbol.c_str()), RE::GFxValue(clipName.c_str()), RE::GFxValue(static_cast<double>(kOwnArtDepth + static_cast<int>(i))) };
 					a_cell.Invoke("attachMovie", &tile, args, 3);
-					if (tile.IsDisplayObject()) { break; }
+					if (tile.IsDisplayObject())
+					{
+						attached = symbol;
+						break;
+					}
 				}
 				if (!tile.IsDisplayObject()) { all = false; break; }
 				const double w = Number(tile, "_width", 0.0), h = Number(tile, "_height", 0.0);
 				if (w <= 0.0 || h <= 0.0) { all = false; break; }
-				tile.SetMember("_height", RE::GFxValue(g_metrics.tileH));
-				tile.SetMember("_width", RE::GFxValue(w / h * g_metrics.tileH));
-				tile.SetMember("_y", RE::GFxValue(g_metrics.tileY));
+				if (g_symbolsSeen.size() < 96) { g_symbolsSeen.insert(attached); }
+				if (attached != parts[i] && g_loggedRows.insert("sheet|face|" + parts[i]).second)
+				{
+					logger::debug("controls sheet: \"{}\" drawn with the journal's \"{}\" (GamepadFaces {})", parts[i], attached, settings::controls::FacesName(settings::controls::gamepadFaces));
+				}
+				tile.SetMember("_height", RE::GFxValue(g_metrics.drawTileH));
+				tile.SetMember("_width", RE::GFxValue(w / h * g_metrics.drawTileH));
+				tile.SetMember("_y", RE::GFxValue(g_metrics.drawTileY));
 				tile.SetMember("_x", RE::GFxValue(x));
 				tile.SetMember("_alpha", RE::GFxValue(100.0));
-				x += w / h * g_metrics.tileH + 2.0;
+				x += w / h * g_metrics.drawTileH + 2.0;
 			}
-			if (all) { return; }
+			if (all)
+			{
+				g_keyWidths[KeyWidthKey(a_key)] = x - a_tileX;
+				return;
+			}
 			for (int i = 0; i < kOwnArtParts; ++i)
 			{
 				RE::GFxValue old;
@@ -2049,8 +2352,8 @@ namespace controlslist
 			// the key's name, in the row's own font
 			if (!haveText)
 			{
-				RE::GFxValue args[6] = { RE::GFxValue("uvcKeyText"), RE::GFxValue(static_cast<double>(kKeyTextDepth)), RE::GFxValue(a_tileX), RE::GFxValue(g_metrics.tileY),
-					RE::GFxValue(TileArea() + kColGap), RE::GFxValue(std::max(g_metrics.tileH, g_metrics.textH) + 4.0) };
+				RE::GFxValue args[6] = { RE::GFxValue("uvcKeyText"), RE::GFxValue(static_cast<double>(kKeyTextDepth)), RE::GFxValue(a_tileX), RE::GFxValue(g_metrics.drawTileY),
+					RE::GFxValue(a_areaW + kColGap), RE::GFxValue(std::max(g_metrics.drawTileH, g_metrics.textH) + 4.0) };
 				a_cell.Invoke("createTextField", nullptr, args, 6);
 				if (!a_cell.GetMember("uvcKeyText", &keyText) || !keyText.IsDisplayObject())
 				{
@@ -2072,8 +2375,9 @@ namespace controlslist
 			keyText.SetMember("text", RE::GFxValue(label.c_str()));
 			if (format.IsObject()) { keyText.Invoke("setTextFormat", nullptr, &format, 1); }
 			keyText.SetMember("_x", RE::GFxValue(a_tileX));
-			keyText.SetMember("_y", RE::GFxValue(Number(nameField, "_y", g_metrics.tileY)));
+			keyText.SetMember("_y", RE::GFxValue(Number(nameField, "_y", g_metrics.drawTileY)));
 			SetVisible(keyText, true);
+			if (const double written = Number(keyText, "textWidth", 0.0); written > 0.0) { g_keyWidths[KeyWidthKey(a_key)] = written + kFieldGutter; }
 			if (g_loggedRows.insert("sheet|keytext|" + a_key).second) { logger::info("controls sheet: this journal has no tile for \"{}\"; it is written as \"{}\"", a_key, label); }
 		}
 
@@ -2151,7 +2455,11 @@ namespace controlslist
 			RE::GFxValue entries;
 			if (!list.GetMember("EntriesA", &entries) || !entries.IsArray() || entries.GetArraySize() == 0) { HideSheet(list); return; }
 			const bool gamepad = ListShowsGamepad(entries);
-			g_sheet.columns = BuildSheet(entries);
+			RE::GFxValue first;
+			if (!list.GetMember("Entry0", &first) || !first.IsDisplayObject()) { return; }
+			// the frame first: its height decides how many rows a column holds, and so how the blocks split into columns
+			MeasureFrame(a_movie, list, first, entries);
+			g_sheet.columns = BuildSheet(entries, g_metrics.slots, g_metrics.gameplayCols);
 			if (g_sheet.columns.empty()) { HideSheet(list); return; }
 			std::map<std::string, std::uint32_t> index;
 			for (std::uint32_t i = 0; i < entries.GetArraySize(); ++i)
@@ -2159,13 +2467,10 @@ namespace controlslist
 				RE::GFxValue entry;
 				if (entries.GetElement(i, &entry) && entry.IsObject()) { index.emplace(RowKey(entry), i); }
 			}
-
-			RE::GFxValue first;
-			if (!list.GetMember("Entry0", &first) || !first.IsDisplayObject()) { return; }
-			double top = 0.0;
-			NumberMember(first, "_y", top);
-			MeasureSheet(a_movie, list, first, entries, index);
+			const double top = g_metrics.top;
+			MeasureColumns(a_movie, list, first, entries, index, gamepad);
 			KeepSelectionOnScreen();
+			UpdateOverflow();
 			// each on-screen column starts where the one before it ends
 			std::array<double, kSheetCols> colX{};
 			for (int c = 1; c < kSheetCols; ++c)
@@ -2182,7 +2487,13 @@ namespace controlslist
 				const auto ci = static_cast<std::size_t>(std::max(0, columnIndex));
 				const double colWidth = ci < g_metrics.colW.size() ? g_metrics.colW[ci] : kColWidthFallback;
 				const double rowNameWidth = ci < g_metrics.nameW.size() ? g_metrics.nameW[ci] : 160.0;
-				const double nextWidth = ci + 1 < g_metrics.colW.size() ? g_metrics.colW[ci + 1] : kColWidthFallback;
+				const double areaWidth = ci < g_metrics.tileW.size() ? g_metrics.tileW[ci] : 2.0 * g_metrics.drawTileH + 4.0;
+				// a spanning title (GAMEPLAY) takes the width of every column it spans
+				double spanWidth = colWidth;
+				if (column && column->span > 1)
+				{
+					for (std::size_t k = ci + 1; k < ci + static_cast<std::size_t>(column->span); ++k) { spanWidth += k < g_metrics.colW.size() ? g_metrics.colW[k] : kColWidthFallback; }
+				}
 				const double tileX = g_metrics.nameX + rowNameWidth + kNameGap;
 				for (int s = 0; s < kSheetSlots; ++s)
 				{
@@ -2225,33 +2536,15 @@ namespace controlslist
 					// one for the action of favoriting an item"): the Gameplay control opens the Favorites menu; ITEMS holds
 					// "Favorite Item".
 					if (!isTitle && !IsOwnRow(entry) && IEqualsView(text, "Favorites")) { text = "Favorites Menu"; }
-					std::string key;
-					if (!isTitle && !capturing)
-					{
-						const RowFacts facts = ReadRow(entry, gamepad);
-						key = facts.blank ? std::string() : facts.buttonName;
-						// A game control is read from the live map: the game names a row's key only when it builds the list,
-						// and never learns of a bind this sheet made ("Shout" on LB + Modifier still read R2).
-						if (!IsOwnRow(entry))
-						{
-							key.clear();
-							for (const int device : gamepad ? std::vector<int>{ 2 } : std::vector<int>{ 0, 1 })
-							{
-								std::uint16_t k = kUnmappedID, mod = 0;
-								if (!unbinder::LiveBinding(0, facts.text, device, k, mod) || k == kUnmappedID) { continue; }
-								key = RowButtonName(k, device);
-								if (mod != 0 && mod != kUnmappedID) { key = RowButtonName(mod, device) + " + " + key; }
-								break;
-							}
-						}
-					}
+					const std::string key = (!isTitle && !capturing) ? CellKey(entry, gamepad) : std::string();
 					// a title has no key tile, so it takes the whole column ("IN FAVORITES MENU" is not shrunk); GAMEPLAY's
-					// takes this column and the next
-					const double nameWidth = isTitle ? (column->titleSpans ? colWidth + nextWidth - kColGap - g_metrics.nameX : colWidth - kColGap - g_metrics.nameX) : rowNameWidth;
+					// takes every column it spans
+					const double nameWidth = isTitle ? spanWidth - kColGap - g_metrics.nameX : rowNameWidth;
 					// a row's name is shrunk only when it is longer than a column can ever be (the measured width was capped)
 					const auto measuredIt = g_textWidths.find(text);
 					const bool shrink = !isTitle && measuredIt != g_textWidths.end() && measuredIt->second + kFieldGutter > nameWidth + 0.5;
-					const std::string signature = std::format("{}|{}|{}|{:.1f}|{}|{:.1f}|{:.1f}", text, key, capturing ? 1 : 0, nameWidth, selected ? 1 : 0, tileX, g_metrics.tileH);
+					const std::string signature = std::format("{}|{}|{}|{:.1f}|{}|{:.1f}|{:.1f}|{:.1f}|{:.1f}", text, key, capturing ? 1 : 0, nameWidth, selected ? 1 : 0, tileX, g_metrics.drawTileH,
+						areaWidth, g_metrics.drawTileY);
 					if (!IsVisible(cell)) { SetVisible(cell, true); }
 					if (g_sheet.drawn[slot] == signature) { continue; }
 					TeachCombo(a_movie, cell, key);
@@ -2269,7 +2562,7 @@ namespace controlslist
 					{
 						// SkyUI's journal: its SetEntry just attached "ButtonArt" at the native row's x (or "???"); the
 						// sheet's own tiles replace it
-						DrawOwnArt(list, cell, key, tileX, selected ? 0xFFFFFFu : kDimColor);
+						DrawOwnArt(list, cell, key, tileX, areaWidth, selected ? 0xFFFFFFu : kDimColor);
 					}
 					else if (cell.GetMember("buttonArt", &art) && art.IsDisplayObject())
 					{
@@ -2279,6 +2572,18 @@ namespace controlslist
 						// InputMappingArt builds its tile list in onLoad, which a duplicated clip runs on the NEXT frame.
 						RE::GFxValue tiles;
 						artReady = key.empty() || (art.GetMember("buttonArt", &tiles) && tiles.IsArray() && tiles.GetArraySize() > 0);
+						// the room this key's art takes, for the column's width (two tiles only where a combination is)
+						// (Norden UI's InputMappingArt: never less than the tiles' estimate, never more than the two tiles 1.2.0
+						// gave every key, so a clip box that counts hidden tiles cannot widen a column past the old layout)
+						if (artReady && !key.empty())
+						{
+							const auto parts = 1 + std::count(key.begin(), key.end(), '+');
+							const double estimate = static_cast<double>(parts) * (g_metrics.drawTileH + 2.0) + 2.0;
+							if (const double w = Number(art, "_width", 0.0); w > 0.0)
+							{
+								g_keyWidths[KeyWidthKey(key)] = std::clamp(w + 2.0, estimate, std::max(estimate, 2.0 * g_metrics.tileH + 4.0));
+							}
+						}
 					}
 					RE::GFxValue field;
 					if (cell.GetMember("textField", &field) && field.IsDisplayObject())
@@ -2294,7 +2599,7 @@ namespace controlslist
 						RE::GFxValue format;
 						if (field.Invoke("getTextFormat", &format, nullptr, 0) && format.IsObject())
 						{
-							format.SetMember("align", RE::GFxValue(isTitle && column->titleSpans ? "center" : "left"));
+							format.SetMember("align", RE::GFxValue(isTitle && column->span > 1 ? "center" : "left"));
 							field.Invoke("setTextFormat", nullptr, &format, 1);
 						}
 						// Titles gold; the selected row's name white and every other name grey - the list's own 70/100
@@ -2426,6 +2731,7 @@ namespace controlslist
 			if (fromPause) { logger::debug("controls list: journal opened by a controller Pause press {} ms ago; the System tab will be shown", since); }
 		}
 		g_loggedRows.clear();
+		g_symbolsSeen.clear();
 		g_searchFailedLogged = false;
 		g_sheet = {};
 		g_blankFrames.store(0);
@@ -2508,9 +2814,38 @@ namespace controlslist
 		};
 		std::string colW;
 		for (const double w : g_metrics.colW) { colW += std::format("{}{:.1f}", colW.empty() ? "" : ",", w); }
-		const std::string sheet = std::format(R"({{"ownArt":{},"nameX":{:.1f},"tileH":{:.1f},"tileY":{:.1f},"pitch":{:.1f},"nativePitch":{:.1f},"textH":{:.1f},"available":{:.1f},"stageW":{:.1f},"pageLeft":{:.1f},"listLeft":{:.1f},"firstCol":{},"visible":{},"colW":[{}]}})",
-			g_metrics.ownArt ? "true" : "false", g_metrics.nameX, g_metrics.tileH, g_metrics.tileY, g_metrics.pitch, g_metrics.nativePitch, g_metrics.textH, g_metrics.available, g_metrics.stageW,
-			g_metrics.pageLeft, g_metrics.listLeft, g_sheet.firstCol, g_metrics.visible, colW);
+		const auto& m = g_metrics;
+		// overflowBottom: the lowest drawn pixel of any visible cell (its name's text, its tiles or key name), measured from
+		// the clips with getBounds, less the frame's bottom - <= 0 means every row is inside the frame. null when no frame
+		// bottom was measured. "lowestCell" names the cell it came from.
+		std::string overflow = "null", lowestCell = "null";
+		{
+			double lowest = -1.0e9;
+			for (int c = 0; c < kSheetCols; ++c)
+			{
+				for (int s = 0; s < kSheetSlots; ++s)
+				{
+					const std::string name = std::format("uvcCell{}_{}", c, s);
+					RE::GFxValue cell;
+					if (!list.GetMember(name.c_str(), &cell) || !cell.IsDisplayObject() || !IsVisible(cell)) { continue; }
+					if (const double b = InkBottom(list, cell); b > lowest)
+					{
+						lowest = b;
+						lowestCell = "\"" + name + "\"";
+					}
+				}
+			}
+			if (m.frameBottom > 0.0 && lowest > -1.0e9) { overflow = std::format("{:.1f}", lowest - m.frameBottom); }
+		}
+		std::string tileW, symbols;
+		for (const double w : m.tileW) { tileW += std::format("{}{:.1f}", tileW.empty() ? "" : ",", w); }
+		for (const auto& sym : g_symbolsSeen) { symbols += (symbols.empty() ? "\"" : ",\"") + EscapeJson(sym) + "\""; }
+		const std::string sheet = std::format(
+			R"({{"ownArt":{},"nameX":{:.1f},"tileH":{:.1f},"tileY":{:.1f},"drawTileH":{:.1f},"pitch":{:.1f},"minPitch":{:.1f},"nativePitch":{:.1f},"textH":{:.1f},"available":{:.1f},"availableW":{:.1f},"availableWMirror":{:.1f},"pageRectRight":{:.1f},"availableH":{:.1f},"frameBottom":{:.1f},"frameSource":"{}","pageRectBottom":{:.1f},"bottomBarTop":{:.1f},"nativeBottom":{:.1f},"top":{:.1f},"overflowBottom":{},"overflowBottomCalc":{:.1f},"lowestCell":{},"slots":{},"gameplayCols":{},"nameCapPct":{:.0f},"stageW":{:.1f},"pageLeft":{:.1f},"listLeft":{:.1f},"firstCol":{},"visible":{},"columns":{},"colW":[{}],"tileW":[{}],"gamepadFaces":"{}","symbols":[{}]}})",
+			m.ownArt ? "true" : "false", m.nameX, m.tileH, m.tileY, m.drawTileH, m.pitch, m.minPitch, m.nativePitch, m.textH, m.available, m.available, m.availableMirror, m.rectRight,
+			m.availableH, m.frameBottom, EscapeJson(m.frameSource), m.rectBottom, m.bottomBarTop, m.nativeBottom, m.top, overflow, m.overflowCalc, lowestCell, m.slots, m.gameplayCols,
+			m.nameCapFrac * 100.0, m.stageW, m.pageLeft, m.listLeft, g_sheet.firstCol, m.visible, g_sheet.columns.size(), colW, tileW,
+			settings::controls::FacesName(settings::controls::gamepadFaces), symbols);
 		std::string out = std::format(R"({{"ok":true,"op":"rowclips","sheet":{},"list":{{"x":{},"y":{},"width":{},"iMaxItemsShown":{}}},"clips":[)", sheet, num(list, "_x"), num(list, "_y"),
 									  num(list, "_width"), num(list, "iMaxItemsShown"));
 		bool first = true;

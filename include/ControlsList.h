@@ -25,7 +25,8 @@
 // list unbinds was given a key -> its line is removed, so closing the journal does not take the new key away again.
 // Only reads and visibility changes: no ActionScript function is called, because invoking one by a path through a
 // function object (`X.__proto__.SetEntry.call`) crashed the game in 1.0.2's first build (logic library).
-// Both journal families' art members are covered (`ButtonArt` vanilla, `buttonArt` SkyUI).
+// Both journal families' art members are covered: `ButtonArt` (the game's own journal and SkyUI's, whose rows the sheet
+// draws its own tiles on, from the journal's own symbols) and `buttonArt` (Norden UI's InputMappingArt).
 //
 // Every function here runs on the game's main (UI) thread, except StateJson.
 

@@ -30,6 +30,7 @@ namespace settings
 			std::uint32_t logLevel;
 			bool enabled;
 			bool keepRemapsInIni;
+			controls::Faces gamepadFaces;
 		} defaults{};
 
 		std::string Lower(std::string a_s)
@@ -57,6 +58,15 @@ namespace settings
 		bool ParseUInt(const std::string& a_text, std::uint32_t& a_out)
 		{
 			try { a_out = static_cast<std::uint32_t>(std::stoull(Trim(a_text), nullptr, 0)); return true; } catch (...) { return false; }
+		}
+
+		bool ParseFaces(const std::string& a_text, controls::Faces& a_out)
+		{
+			const std::string v = Lower(Trim(a_text));
+			if (v == "auto" || v == "0") { a_out = controls::Faces::kAuto; return true; }
+			if (v == "xbox" || v == "1") { a_out = controls::Faces::kXbox; return true; }
+			if (v == "playstation" || v == "ps" || v == "2") { a_out = controls::Faces::kPlayStation; return true; }
+			return false;
 		}
 
 		bool IsSectionHeader(const std::string& a_t) { return a_t.size() >= 2 && a_t.front() == '[' && a_t.back() == ']'; }
@@ -306,6 +316,8 @@ namespace settings
 			get("uloglevel:debug", debug::logLevel, ParseUInt);
 			get("benabled:general", general::enabled, ParseBool);
 			get("bkeepremapsinini:general", general::keepRemapsInIni, ParseBool);
+			get("gamepadfaces:controls", controls::gamepadFaces, ParseFaces);
+			logger::info("Controls sheet gamepad faces: {}", controls::FacesName(controls::gamepadFaces));
 			const std::size_t count = entries.size();
 			unbinder::SetEntries(std::move(entries));
 			// An INI from before 1.0.5 has no [Bound] section: it keeps the shipped binds rather than losing them.
@@ -421,7 +433,7 @@ namespace settings
 	{
 		iniPath = (std::filesystem::current_path() / "Data" / "SKSE" / "Plugins" / a_iniFileName).string();
 
-		defaults = { debug::logLevel, general::enabled, general::keepRemapsInIni };
+		defaults = { debug::logLevel, general::enabled, general::keepRemapsInIni, controls::gamepadFaces };
 		// Compiled default list = the shipped INI's [Unbound] lines (rule 16). An INI that exists replaces it
 		// with whatever it lists, including nothing.
 		unbinder::SetEntries(unbinder::DefaultEntries());
@@ -561,6 +573,7 @@ namespace settings
 		debug::logLevel = defaults.logLevel;
 		general::enabled = defaults.enabled;
 		general::keepRemapsInIni = defaults.keepRemapsInIni;
+		controls::gamepadFaces = defaults.gamepadFaces;
 		ApplyLogLevel();
 	}
 
@@ -571,4 +584,14 @@ namespace settings
 	}
 
 	const std::string& GetIniPath() { return iniPath; }
+
+	const char* controls::FacesName(Faces a_faces)
+	{
+		switch (a_faces)
+		{
+		case Faces::kXbox: return "Xbox";
+		case Faces::kPlayStation: return "PlayStation";
+		default: return "Auto";
+		}
+	}
 }
