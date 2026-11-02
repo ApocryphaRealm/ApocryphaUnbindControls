@@ -1643,7 +1643,8 @@ namespace controlslist
 					--g_sheet.col;
 				}
 				else if (nav == "right") { ++g_sheet.col; }
-				else if (nav == "enter-gamepad_A")
+				// Accept has a different code by journal: the game's and SkyUI's movies define "enter" and "gamepad_A", Norden UI's "enter-gamepad_A".
+				else if (nav == "enter" || nav == "gamepad_A" || nav == "enter-gamepad_A")
 				{
 					if (value != "keyDown") { return true; }
 					auto* movie = static_cast<RE::GFxMovieView*>(a_movie);
@@ -1739,6 +1740,10 @@ namespace controlslist
 				if (!a_list.GetMember(std::format("Entry{}", i).c_str(), &clip) || !clip.IsDisplayObject()) { break; }
 				if (IsVisible(clip)) { SetVisible(clip, false); }
 			}
+			// The hidden list never takes an Accept itself: its selection rests on the GAMEPLAY title, and the game's StartRemapMode
+			// on a name with no control crashes at the key press (SkyrimSE 1.7.104 +0CF14ED).
+			RE::GFxValue locked;
+			if (!a_list.GetMember("bDisableSelection", &locked) || !locked.IsBool() || !locked.GetBool()) { a_list.SetMember("bDisableSelection", RE::GFxValue(true)); }
 			for (const char* name : { "ScrollUp", "ScrollDown", "scrollbar" })
 			{
 				RE::GFxValue part;

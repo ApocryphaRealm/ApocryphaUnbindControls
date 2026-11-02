@@ -160,6 +160,7 @@ Rule 61: this mod's own history, kept beside the code it describes.
   key while H called the horse). This applies to the existing Power Attack row too.
 
 ### Fixed
+- Remapping on the game's own journal crashed at the key press. Its movie names Accept differently from the journals the sheet was tried on, so Enter fell through to the hidden list and started the game's remap on the GAMEPLAY title. The sheet now takes every journal's Accept, and the hidden list can no longer start a remap.
 - A column that continues a block now shows the block's title when it reaches the sheet's left edge; the rows sat under no title once the column holding it had slid off.
 - DevBench uvc.control ops that read or write the journal's Scaleform objects (rows, rowclips, gfxget/gfxset, systemrows, opencontrols) now run on the UI thread through SKSE AddUITask, one task per request with the same bounded wait and cancel-on-timeout; they were queued with AddTask, whose queue runs beside the UI job that advances the journal movie (package gate row scaleform-helpers-only-on-the-ui-thread, 2026-10-26). Test tooling only - no change for players.
 
