@@ -85,8 +85,8 @@ columns. It works on the game's own journal (no SkyUI needed), on SkyUI's and on
 CONTROLLER BUTTON PICTURES
 The pictures are the journal's own - the game's journal and SkyUI's carry Xbox, PlayStation 3 and
 PlayStation 5 buttons; this mod ships no art. GamepadFaces in the INI's [Controls] section picks them:
-  Auto         the pictures the game's button names ask for (Xbox with the game's own gamepad.txt; a UI
-               mod that replaces gamepad.txt, such as Norden UI's, can make them PlayStation)
+  Auto         the Xbox buttons, even when a UI mod's gamepad.txt (such as Norden UI's) names them
+               PlayStation, unless the game says a PlayStation 5 pad is in use
   Xbox         always the Xbox buttons
   PlayStation  always the PlayStation buttons (the PS5 set when the game says a PS5 pad is in use)
 A button with no picture in the chosen set keeps its usual one; a button with no picture at all is

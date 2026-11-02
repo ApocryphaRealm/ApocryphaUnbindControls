@@ -91,6 +91,7 @@ namespace controlslist
 		struct SheetColumn
 		{
 			std::string title;        // "" for a column that continues the block to its left
+			std::string block;        // the block's title on every one of its columns: shown on a continuing column at the sheet's left edge
 			int span = 1;             // GAMEPLAY: the title is centred over this many columns, from this one on
 			int lead = 0;             // a GAMEPLAY column after the first: how many columns back its title column is
 			std::vector<std::string> rows;  // row keys (RowKey) into the list's entries
@@ -1488,6 +1489,7 @@ namespace controlslist
 				{
 					SheetColumn c;
 					c.title = at == 0 ? b.title : std::string();
+					c.block = b.title;
 					c.lead = gameplay ? static_cast<int>(out.size() - firstIndex) : 0;
 					c.rows.assign(b.rows.begin() + static_cast<std::ptrdiff_t>(at), b.rows.begin() + static_cast<std::ptrdiff_t>(std::min(b.rows.size(), at + split)));
 					out.push_back(std::move(c));
@@ -2172,7 +2174,9 @@ namespace controlslist
 					}
 					m.tileW[c] = std::max(m.tileW[c], room);
 				}
-				if (!column.title.empty() && column.span <= 1) { titleW[c] = MeasureText(a_movie, a_list, a_first, column.title); }
+				// a continuing column can come to the sheet's left edge and show its block's title, so it makes room for it too;
+				// GAMEPLAY's columns are wide enough for theirs
+				if (column.span <= 1 && column.lead == 0 && !column.block.empty()) { titleW[c] = MeasureText(a_movie, a_list, a_first, column.block); }
 			}
 			m.nameW.assign(count, 160.0);
 			m.colW.assign(count, kColWidthFallback);
@@ -2248,11 +2252,12 @@ namespace controlslist
 		// per part of a combination, at the measured tile height. A key the movie has no symbol for is written as its name
 		// instead of the movie's "???" (its UnknownKey symbol is a drawing with no text field). The list's own ButtonArt is
 		// hidden: it sits at the native row's x and would land in the next column.
-		// The journal symbols to try for one part of a key, in order: the set [Controls] GamepadFaces asks for (Xbox: 360_,
-		// PlayStation: PS3_, or PS5_ first when the list says a PS5 pad is in use), then the name the game sent - with its
-		// PS5_ twin first on a PS5 pad, as the journal's own SetEntry does - and the caller writes the name as text when
-		// none of them exists. A part with no pad prefix (the D-pad's Up/Down/Left/Right, keyboard and mouse keys) is
-		// only ever its own name. Only the art changes: the key, gamepad.txt and the control map are untouched.
+		// The journal symbols to try for one part of a key, in order: the set [Controls] GamepadFaces asks for (Xbox: 360_;
+		// PlayStation: PS3_, or PS5_ first when the list says a PS5 pad is in use; Auto: 360_ unless the list says a PS5 pad
+		// is in use, so a UI mod's gamepad.txt that names every button PS3_ does not change the pictures), then the name the
+		// game sent - with its PS5_ twin first on a PS5 pad, as the journal's own SetEntry does - and the caller writes the
+		// name as text when none of them exists. A part with no pad prefix (the D-pad's Up/Down/Left/Right, keyboard and
+		// mouse keys) is only ever its own name. Only the art changes: the key, gamepad.txt and the control map are untouched.
 		std::vector<std::string> FaceSymbols(const std::string& a_part, bool a_ps5)
 		{
 			std::vector<std::string> out;
@@ -2276,6 +2281,7 @@ namespace controlslist
 					add("PS3_" + rest);
 					break;
 				default:
+					if (!a_ps5) { add("360_" + rest); }
 					break;
 				}
 				if (a_ps5 && a_part.starts_with("PS3_")) { add("PS5_" + rest); }
@@ -2488,11 +2494,18 @@ namespace controlslist
 				const double colWidth = ci < g_metrics.colW.size() ? g_metrics.colW[ci] : kColWidthFallback;
 				const double rowNameWidth = ci < g_metrics.nameW.size() ? g_metrics.nameW[ci] : 160.0;
 				const double areaWidth = ci < g_metrics.tileW.size() ? g_metrics.tileW[ci] : 2.0 * g_metrics.drawTileH + 4.0;
-				// a spanning title (GAMEPLAY) takes the width of every column it spans
+				// A column that continues a block, at the sheet's left edge, shows the block's title: the column holding it
+				// has slid off the left, and the rows would otherwise sit under no title.
+				const std::string shownTitle = !column ? std::string() : (!column->title.empty() ? column->title : (c == 0 ? column->block : std::string()));
+				// a spanning title (GAMEPLAY) takes the width of every column it spans, a continuing block's the rest of the block's
 				double spanWidth = colWidth;
 				if (column && column->span > 1)
 				{
 					for (std::size_t k = ci + 1; k < ci + static_cast<std::size_t>(column->span); ++k) { spanWidth += k < g_metrics.colW.size() ? g_metrics.colW[k] : kColWidthFallback; }
+				}
+				else if (column && column->title.empty() && c == 0)
+				{
+					for (std::size_t k = ci + 1; k < g_sheet.columns.size() && g_sheet.columns[k].title.empty() && g_sheet.columns[k].block == column->block; ++k) { spanWidth += k < g_metrics.colW.size() ? g_metrics.colW[k] : kColWidthFallback; }
 				}
 				const double tileX = g_metrics.nameX + rowNameWidth + kNameGap;
 				for (int s = 0; s < kSheetSlots; ++s)
@@ -2523,7 +2536,7 @@ namespace controlslist
 						const auto it = index.find(column->rows[s - 1]);
 						haveEntry = it != index.end() && entries.GetElement(it->second, &entry) && entry.IsObject();
 					}
-					if (!column || (isTitle ? column->title.empty() : !haveEntry))
+					if (!column || (isTitle ? shownTitle.empty() : !haveEntry))
 					{
 						if (IsVisible(cell)) { SetVisible(cell, false); }
 						g_sheet.drawn[slot].clear();
@@ -2531,7 +2544,7 @@ namespace controlslist
 					}
 					const bool selected = !isTitle && columnIndex == g_sheet.col && s - 1 == g_sheet.row;
 					const bool capturing = selected && g_sheet.capture;
-					std::string text = isTitle ? column->title : StringMember(entry, "text");
+					std::string text = isTitle ? shownTitle : StringMember(entry, "text");
 					// The two favourite rows named apart (the owner, 2026-09-28: "favorites has two rows, one for the menu and
 					// one for the action of favoriting an item"): the Gameplay control opens the Favorites menu; ITEMS holds
 					// "Favorite Item".
@@ -2846,7 +2859,37 @@ namespace controlslist
 			m.availableH, m.frameBottom, EscapeJson(m.frameSource), m.rectBottom, m.bottomBarTop, m.nativeBottom, m.top, overflow, m.overflowCalc, lowestCell, m.slots, m.gameplayCols,
 			m.nameCapFrac * 100.0, m.stageW, m.pageLeft, m.listLeft, g_sheet.firstCol, m.visible, g_sheet.columns.size(), colW, tileW,
 			settings::controls::FacesName(settings::controls::gamepadFaces), symbols);
-		std::string out = std::format(R"({{"ok":true,"op":"rowclips","sheet":{},"list":{{"x":{},"y":{},"width":{},"iMaxItemsShown":{}}},"clips":[)", sheet, num(list, "_x"), num(list, "_y"),
+		// Which face pictures this journal really has, and which one each button name draws under the current GamepadFaces:
+		// proved by attaching them, so it needs no controller. "resolve" is what a row with that button name would draw.
+		const bool ps5 = Number(list, "iPlatform", 0.0) == 5.0;
+		auto attachable = [&](const std::string& a_symbol, double& a_w, double& a_h) {
+			RE::GFxValue tile;
+			RE::GFxValue args[3] = { RE::GFxValue(a_symbol.c_str()), RE::GFxValue("uvcFaceProbe"), RE::GFxValue(30000.0) };
+			list.Invoke("attachMovie", &tile, args, 3);
+			if (!tile.IsDisplayObject()) { return false; }
+			a_w = Number(tile, "_width", 0.0);
+			a_h = Number(tile, "_height", 0.0);
+			tile.Invoke("removeMovieClip", nullptr, nullptr, 0);
+			return a_w > 0.0 && a_h > 0.0;
+		};
+		std::string have, resolve;
+		for (const char* symbol : { "360_A", "360_LB", "360_RT", "PS3_A", "PS3_LB", "PS5_A", "Up" })
+		{
+			double w = 0.0, h = 0.0;
+			const bool ok = attachable(symbol, w, h);
+			have += std::format("{}\"{}\":{}", have.empty() ? "" : ",", symbol, ok ? std::format("[{:.1f},{:.1f}]", w, h) : "null");
+		}
+		for (const char* name : { "360_A", "PS3_A", "PS5_A" })
+		{
+			std::string drawn;
+			for (const auto& symbol : FaceSymbols(name, ps5))
+			{
+				double w = 0.0, h = 0.0;
+				if (attachable(symbol, w, h)) { drawn = symbol; break; }
+			}
+			resolve += std::format("{}\"{}\":\"{}\"", resolve.empty() ? "" : ",", name, drawn);
+		}
+		std::string out = std::format(R"({{"ok":true,"op":"rowclips","sheet":{},"faceProbe":{{"iPlatform":{},"have":{{{}}},"resolve":{{{}}}}},"list":{{"x":{},"y":{},"width":{},"iMaxItemsShown":{}}},"clips":[)", sheet, num(list, "iPlatform"), have, resolve, num(list, "_x"), num(list, "_y"),
 									  num(list, "_width"), num(list, "iMaxItemsShown"));
 		bool first = true;
 		std::vector<std::string> names;

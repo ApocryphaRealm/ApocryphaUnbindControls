@@ -23,8 +23,9 @@ namespace settings
 	namespace controls
 	{
 		// GamepadFaces:Controls - which controller art the Controls sheet draws, on a journal whose rows the sheet draws
-		// its own tiles on (the game's own journal, SkyUI's). Auto: the art the game's button names ask for (360_ from
-		// the game's own gamepad.txt); Xbox / PlayStation: that set, whatever the names say. Read only: never written
+		// its own tiles on (the game's own journal, SkyUI's). Auto: the Xbox art (360_), whatever a UI mod's gamepad.txt
+		// names the buttons, unless the game says a PS5 pad is in use (then the art the game's names ask for, PS5_ for
+		// PS3_ names); Xbox / PlayStation: that set, whatever the names say. Read only: never written
 		// back, so the player's line stays exactly as typed. gamepad.txt and the control map are never touched.
 		enum class Faces : std::uint32_t { kAuto = 0, kXbox = 1, kPlayStation = 2 };
 		inline Faces gamepadFaces = Faces::kAuto;

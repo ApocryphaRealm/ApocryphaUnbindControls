@@ -103,6 +103,7 @@ Rule 61: this mod's own history, kept beside the code it describes.
   claimed), and a plain decimal key is an SKSE input code (gamepad 273 = R3) instead of being read as an XInput mask.
 
 ### Added
+- DevBench uvc.control op=rowclips reports faceProbe: which face pictures this journal really has and which one each button name draws under the current GamepadFaces, by attaching them, so the check needs no controller.
 - **Built-in Controls-page rows for Call Horse, Dodge, Power Attack and Target Lock that set the key of whichever
   supported mod is installed** (the owner, 2026-10-23: "make sure it can read and write to those mods to change its
   control setting ... so that no matter what mod they're using"; Target Lock: "a target lock row ... that ties into or
@@ -153,11 +154,13 @@ Rule 61: this mod's own history, kept beside the code it describes.
     that and check_adapters.py fails if the row and the fork ever disagree.
 
 ### Changed
+- GamepadFaces Auto now draws the Xbox buttons from the journal's own art even when a UI mod's gamepad.txt names every button PS3_ (the author, 2026-11-02: Xbox faces from the game's assets), unless the list says a PS5 pad is in use. Norden UI's own journal has no such pictures and keeps its own art.
 - A row whose target is an MCM Helper settings file (MCM\Settings\<id>.ini) that does not hold the key yet adopts the
   mod's default from MCM\Config\<id>\settings.ini, so the page shows the key in force (Simplest Horses' H showed as no
   key while H called the horse). This applies to the existing Power Attack row too.
 
 ### Fixed
+- A column that continues a block now shows the block's title when it reaches the sheet's left edge; the rows sat under no title once the column holding it had slid off.
 - DevBench uvc.control ops that read or write the journal's Scaleform objects (rows, rowclips, gfxget/gfxset, systemrows, opencontrols) now run on the UI thread through SKSE AddUITask, one task per request with the same bounded wait and cancel-on-timeout; they were queued with AddTask, whose queue runs beside the UI job that advances the journal movie (package gate row scaleform-helpers-only-on-the-ui-thread, 2026-10-26). Test tooling only - no change for players.
 
 ## 1.1.3 - 2026-10-20 - working
