@@ -86,26 +86,26 @@ namespace controlslist
 		bool g_hasPress2 = false;
 		bool g_firstReleased = false;
 		std::string g_remapEvent;                       // main thread
-		constexpr int kSheetCols = 4;    // columns on screen at once (the sheet slides to keep the selection on it)
-		constexpr int kSheetSlots = 15;  // at most a title and fourteen rows per column (fewer when the frame is short)
-		struct SheetColumn
+		constexpr int kSheetCols = 3;    // at most this many columns side by side (as many as fit the frame's width)
+		constexpr int kSheetSlots = 15;  // at most this many lines on screen (fewer when the frame is short)
+		// One line of the sheet: a block's title, or up to SheetMetrics::cols of its rows side by side.
+		struct SheetLine
 		{
-			std::string title;        // "" for a column that continues the block to its left
-			std::string block;        // the block's title on every one of its columns: shown on a continuing column at the sheet's left edge
-			int span = 1;             // GAMEPLAY: the title is centred over this many columns, from this one on
-			int lead = 0;             // a GAMEPLAY column after the first: how many columns back its title column is
-			std::vector<std::string> rows;  // row keys (RowKey) into the list's entries
+			std::string title;               // not empty: this line is a block's title
+			std::string block;               // the block's title on every one of its lines: the sticky title while scrolled inside it
+			int blockIndex = 0;              // which block, from 1, for the "3/7" at the sheet's top right
+			std::vector<std::string> cells;  // row keys (RowKey) into the list's entries, left to right
 		};
 		struct SheetState
 		{
-			int col = 0;
-			int row = 0;
-			int firstCol = 0;
+			int col = 0;                // the selected row: its column
+			int row = 0;                // ... and its line in `lines`, never a title
+			int firstLine = 0;          // the first line on screen
 			bool capture = false;       // a row is waiting for its key
 			int captureContext = -1;    // the context a game control or menu action is bound in (-1: an extra row)
 			std::string captureEvent;   // its event id
 			long long releaseAtMs = 0;  // when the page's remap guard comes off after that capture
-			std::vector<SheetColumn> columns;
+			std::vector<SheetLine> lines;
 			std::vector<std::string> drawn;  // what each cell last showed, so SetEntry runs only on a change
 		};
 		SheetState g_sheet;  // main thread (the journal's frame and its input both run there)
@@ -1408,10 +1408,13 @@ namespace controlslist
 		// be centered over these two columns ... all the game controls are in one area and don't need to scroll").
 		//
 		// The game's list stays the source of every row - its entries are what the game remaps, and this mod already adds
-		// its own rows and block titles to them - but it is no longer drawn. The sheet draws the same entries in columns:
-		// GAMEPLAY across two columns under one centred title, then EXTRA CONTROLS, then one column per menu. The D-pad moves
-		// freely over it (left from the first column goes back to the System list, as the game's own list does) and the
-		// sheet slides sideways to keep the selection on screen.
+		// its own rows and block titles to them - but it is no longer drawn. The sheet draws the same entries one block under
+		// another, top to bottom: GAMEPLAY, SWIMMING, HORSEBACK, EXTRA CONTROLS, then one block per menu, each with its rows
+		// side by side in as many columns as the frame holds (the owner, 2026-11-03: "instead of scrolling left to right, I'd
+		// rather scroll top to bottom to access the different contexts of controls"). Up and down walk every row of every
+		// block and the sheet scrolls to keep the selection on screen, with the block's title held at the top while scrolled
+		// inside it and the block's number of all at the top right. Left and right move inside a line; left from the first
+		// column goes back to the System list, as the game's own list does.
 		//
 		// Accept on a game control starts the game's own remap for it (the page's onInputMappingPress, with the row selected
 		// in the hidden list, so the remap watch and the INI recording work exactly as before). Accept on a row of this
@@ -1435,11 +1438,12 @@ namespace controlslist
 		//    past the journal's frame and ITEMS was cut off at the right edge.
 		// So: the name column is as wide as its longest name measured in the list's own text field (TextField.textWidth),
 		// the tile sits after it, the tile height comes from the journal's own tile, and only as many columns are shown as
-		// fit inside the frame - the sheet already slides sideways to keep the selection on screen. On a journal whose rows
+		// fit inside the frame - and the sheet scrolls up and down to keep the selection on screen. On a journal whose rows
 		// attach "ButtonArt", the sheet draws its own tiles from that movie's symbols, and a key that has none is written
 		// as its name. Nothing here depends on the screen resolution or the upscaler: every number is in the movie's own
 		// coordinates, measured from clips in the same movie.
 		constexpr double kColWidthFallback = 225.0;  // only when the frame cannot be measured: the 1.2.0 layout
+		constexpr double kMinColWidth = 320.0;       // a column narrower than this squeezes names: fewer columns, more lines
 		constexpr double kNameGap = 8.0;             // between a name and its key tile
 		constexpr double kColGap = 14.0;             // between one column's tiles and the next column's names
 		constexpr double kFieldGutter = 4.0;         // a TextField draws 2 px inside each edge: textWidth + 4 shows it whole
@@ -1470,15 +1474,13 @@ namespace controlslist
 			double drawTileH = 28.0;       // the tile as drawn: never taller than the row pitch leaves room for
 			double drawTileY = 0.0;
 			double minPitch = 0.0;         // the closest the rows may come: max(text, 85% of a tile) + 2
-			int slots = kSheetSlots;       // a title and slots-1 rows per column
-			int gameplayCols = 2;          // GAMEPLAY's columns
-			double nameCapFrac = 0.40;     // a name is capped at this share of the width
+			int slots = kSheetSlots;       // lines on screen
+			int cols = 2;                  // columns of rows side by side
 			double overflowCalc = 0.0;     // the lowest drawn row's bottom less the frame's bottom (list units; <= 0 inside)
 			double stageW = 0.0, pageLeft = 0.0, listLeft = 0.0;
-			std::vector<double> nameW;  // per sheet column: the name field's width
-			std::vector<double> tileW;  // per sheet column: room for its widest key (two tiles only where a combination is)
-			std::vector<double> colW;   // per sheet column: name, tile and the gap to the next column
-			int visible = kSheetCols;   // columns on screen from firstCol
+			std::vector<double> nameW;  // per column: the name field's width
+			std::vector<double> tileW;  // per column: room for the widest key on the sheet (two tiles only where a combination is)
+			std::vector<double> colW;   // per column: name, tile and the gap to the next column
 			std::string logged;         // what was last logged, so a change is logged once
 		};
 		SheetMetrics g_metrics;                       // main thread
@@ -1488,20 +1490,27 @@ namespace controlslist
 
 		std::string KeyWidthKey(const std::string& a_key) { return std::format("{}|{:.1f}", a_key, g_metrics.drawTileH); }
 
-		// How many columns fit from a_first on, at least one.
-		int VisibleFrom(int a_first)
+		// How many lines of the sheet show from a_first on. A first line inside a block gives slot 0 to that block's title.
+		int LinesVisibleFrom(int a_first)
 		{
-			const int count = static_cast<int>(g_metrics.colW.size());
-			double used = 0.0;
-			int n = 0;
-			for (int i = std::max(0, a_first); i < count && n < kSheetCols; ++i)
-			{
-				if (n > 0 && used + g_metrics.colW[static_cast<std::size_t>(i)] > g_metrics.available) { break; }
-				used += g_metrics.colW[static_cast<std::size_t>(i)];
-				++n;
-			}
-			return std::max(1, n);
+			const int count = static_cast<int>(g_sheet.lines.size());
+			const int slots = std::max(2, g_metrics.slots);
+			if (a_first < 0 || a_first >= count) { return slots; }
+			return g_sheet.lines[static_cast<std::size_t>(a_first)].title.empty() ? slots - 1 : slots;
 		}
+
+		// The line a sheet slot shows, or -1 for the sticky title's slot and past the sheet's end.
+		int LineAtSlot(int a_slot)
+		{
+			const int first = g_sheet.firstLine;
+			const int count = static_cast<int>(g_sheet.lines.size());
+			if (first < 0 || first >= count || a_slot < 0 || a_slot >= std::max(2, g_metrics.slots)) { return -1; }
+			const int shift = g_sheet.lines[static_cast<std::size_t>(first)].title.empty() ? 1 : 0;
+			if (a_slot < shift) { return -1; }
+			const int line = first + a_slot - shift;
+			return line < count ? line : -1;
+		}
+
 		constexpr std::uint32_t kDimColor = 0x6E6E6E;  // this journal lifts greys: 0x808080 still reads white
 		constexpr int kInputMappingState = 6;  // SystemPage.INPUT_MAPPING_STATE
 
@@ -1539,30 +1548,32 @@ namespace controlslist
 			return blocks;
 		}
 
-		// a_slots: a title and a_slots-1 rows per column (FitRows decides it from the frame's height). GAMEPLAY is split
-		// evenly over a_gameplayCols columns (two unless the frame is too short for that), its title centred over them all;
-		// any other block runs on into more columns only when it is longer than a column.
-		std::vector<SheetColumn> BuildSheet(const RE::GFxValue& a_entries, int a_slots, int a_gameplayCols)
+		// Every block, top to bottom: its title line, then its rows left to right in a_cols columns.
+		std::vector<SheetLine> BuildSheet(const RE::GFxValue& a_entries, int a_cols)
 		{
-			std::vector<SheetColumn> out;
-			const std::size_t perColumn = static_cast<std::size_t>(std::max(1, a_slots - 1));
+			std::vector<SheetLine> out;
+			const std::size_t perLine = static_cast<std::size_t>(std::max(1, a_cols));
+			int blockIndex = 0;
 			for (const auto& b : SheetBlocks(a_entries))
 			{
 				if (b.rows.empty()) { continue; }
-				const bool gameplay = b.title == kGameplayTitle;
-				const std::size_t cols = static_cast<std::size_t>(std::max(1, a_gameplayCols));
-				const std::size_t split = gameplay ? std::max<std::size_t>(1, (b.rows.size() + cols - 1) / cols) : perColumn;
-				const std::size_t firstIndex = out.size();
-				for (std::size_t at = 0; at < b.rows.size(); at += split)
+				++blockIndex;
+				if (!b.title.empty())
 				{
-					SheetColumn c;
-					c.title = at == 0 ? b.title : std::string();
-					c.block = b.title;
-					c.lead = gameplay ? static_cast<int>(out.size() - firstIndex) : 0;
-					c.rows.assign(b.rows.begin() + static_cast<std::ptrdiff_t>(at), b.rows.begin() + static_cast<std::ptrdiff_t>(std::min(b.rows.size(), at + split)));
-					out.push_back(std::move(c));
+					SheetLine title;
+					title.title = b.title;
+					title.block = b.title;
+					title.blockIndex = blockIndex;
+					out.push_back(std::move(title));
 				}
-				if (gameplay && out.size() > firstIndex) { out[firstIndex].span = static_cast<int>(out.size() - firstIndex); }
+				for (std::size_t at = 0; at < b.rows.size(); at += perLine)
+				{
+					SheetLine line;
+					line.block = b.title;
+					line.blockIndex = blockIndex;
+					line.cells.assign(b.rows.begin() + static_cast<std::ptrdiff_t>(at), b.rows.begin() + static_cast<std::ptrdiff_t>(std::min(b.rows.size(), at + perLine)));
+					out.push_back(std::move(line));
+				}
 			}
 			return out;
 		}
@@ -1589,35 +1600,42 @@ namespace controlslist
 
 		void KeepSelectionOnScreen()
 		{
-			const int count = static_cast<int>(g_sheet.columns.size());
-			g_sheet.col = std::clamp(g_sheet.col, 0, std::max(0, count - 1));
-			if (count > 0) { g_sheet.row = std::clamp(g_sheet.row, 0, std::max(0, static_cast<int>(g_sheet.columns[g_sheet.col].rows.size()) - 1)); }
-			// GAMEPLAY's columns come on screen together.
-			int wantFirst = std::clamp(g_sheet.firstCol, 0, std::max(0, count - 1));
-			const int start = count > 0 ? std::max(0, g_sheet.col - g_sheet.columns[g_sheet.col].lead) : 0;
-			if (start < wantFirst) { wantFirst = start; }
-			// as many columns as fit inside the journal's frame (measured: VisibleFrom), not a fixed four
-			if (static_cast<int>(g_metrics.colW.size()) != count)
-			{
-				if (g_sheet.col >= wantFirst + kSheetCols) { wantFirst = g_sheet.col - kSheetCols + 1; }
-				g_sheet.firstCol = std::clamp(wantFirst, 0, std::max(0, count - kSheetCols));
-				g_metrics.visible = kSheetCols;
-				return;
-			}
-			while (wantFirst < g_sheet.col && g_sheet.col >= wantFirst + VisibleFrom(wantFirst)) { ++wantFirst; }
-			// never slide further than needed: no empty room on the right while columns to the left could be shown
-			while (wantFirst > 0 && (wantFirst - 1) + VisibleFrom(wantFirst - 1) >= count) { --wantFirst; }
-			g_sheet.firstCol = wantFirst;
-			g_metrics.visible = VisibleFrom(wantFirst);
+			const auto& lines = g_sheet.lines;
+			const int count = static_cast<int>(lines.size());
+			if (count == 0) { return; }
+			const auto isRow = [&](int a_line) { return !lines[static_cast<std::size_t>(a_line)].cells.empty(); };
+			// the selection is always a row: from a title, the row under it
+			g_sheet.row = std::clamp(g_sheet.row, 0, count - 1);
+			while (g_sheet.row < count - 1 && !isRow(g_sheet.row)) { ++g_sheet.row; }
+			while (g_sheet.row > 0 && !isRow(g_sheet.row)) { --g_sheet.row; }
+			g_sheet.col = std::clamp(g_sheet.col, 0, std::max(0, static_cast<int>(lines[static_cast<std::size_t>(g_sheet.row)].cells.size()) - 1));
+			int first = std::clamp(g_sheet.firstLine, 0, count - 1);
+			if (g_sheet.row < first) { first = g_sheet.row; }
+			while (first < g_sheet.row && g_sheet.row >= first + LinesVisibleFrom(first)) { ++first; }
+			// a block's first row comes on screen under its own title line
+			if (first == g_sheet.row && first > 0 && !isRow(first - 1)) { --first; }
+			// never scroll further than needed: no empty room at the bottom while lines above could be shown
+			while (first > 0 && (first - 1) + LinesVisibleFrom(first - 1) >= count) { --first; }
+			g_sheet.firstLine = first;
+		}
+
+		// One row up or down, over the title lines between blocks; stops at the sheet's ends.
+		void MoveRow(int a_delta)
+		{
+			const auto& lines = g_sheet.lines;
+			const int count = static_cast<int>(lines.size());
+			int line = g_sheet.row + a_delta;
+			while (line >= 0 && line < count && lines[static_cast<std::size_t>(line)].cells.empty()) { line += a_delta; }
+			if (line >= 0 && line < count) { g_sheet.row = line; }
 		}
 
 		// Accept on the selected cell.
 		void ActivateCell(RE::GFxMovieView* a_movie, RE::GFxValue& a_page)
 		{
-			if (g_sheet.columns.empty()) { return; }
-			const auto& column = g_sheet.columns[g_sheet.col];
-			if (g_sheet.row >= static_cast<int>(column.rows.size())) { return; }
-			const std::string key = column.rows[g_sheet.row];
+			if (g_sheet.row < 0 || g_sheet.row >= static_cast<int>(g_sheet.lines.size())) { return; }
+			const auto& line = g_sheet.lines[static_cast<std::size_t>(g_sheet.row)];
+			if (g_sheet.col < 0 || g_sheet.col >= static_cast<int>(line.cells.size())) { return; }
+			const std::string key = line.cells[static_cast<std::size_t>(g_sheet.col)];
 			RE::GFxValue list;
 			if (!FindList(a_movie, list)) { return; }
 			RE::GFxValue entries;
@@ -1698,7 +1716,7 @@ namespace controlslist
 				if (!NumberMember(a_page, "iCurrentState", state) || static_cast<int>(state) != kInputMappingState) { return false; }
 				RE::GFxValue remap;
 				if (a_page.GetMember("bRemapMode", &remap) && remap.IsBool() && remap.GetBool()) { return g_sheet.capture; }
-				if (g_sheet.columns.empty()) { return false; }
+				if (g_sheet.lines.empty()) { return false; }
 				const std::string value = StringMember(a_details, "value");
 				const std::string nav = StringMember(a_details, "navEquivalent");
 				{
@@ -1707,8 +1725,8 @@ namespace controlslist
 					logger::trace("controls sheet: input value \"{}\" nav \"{}\" code {} (column {}, row {})", value, nav, code, g_sheet.col, g_sheet.row);
 				}
 				if (value != "keyDown" && value != "keyHold") { return false; }
-				if (nav == "up") { --g_sheet.row; }
-				else if (nav == "down") { ++g_sheet.row; }
+				if (nav == "up") { MoveRow(-1); }
+				else if (nav == "down") { MoveRow(1); }
 				else if (nav == "left")
 				{
 					if (g_sheet.col == 0) { return false; }  // the page turns it into Tab: back to the System list
@@ -1741,12 +1759,12 @@ namespace controlslist
 
 			void Call(Params& a_params) override
 			{
-				if (!a_params.thisPtr || !a_params.movie || g_sheet.capture || g_sheet.columns.empty()) { return; }
+				if (!a_params.thisPtr || !a_params.movie || g_sheet.capture || g_sheet.lines.empty()) { return; }
 				double col = -1.0, slot = -1.0;
-				if (!NumberMember(*a_params.thisPtr, "_uvcCol", col) || !NumberMember(*a_params.thisPtr, "_uvcSlot", slot) || slot < 1.0) { return; }
-				const int column = g_sheet.firstCol + static_cast<int>(col);
-				const int row = static_cast<int>(slot) - 1;
-				if (column < 0 || column >= static_cast<int>(g_sheet.columns.size()) || row >= static_cast<int>(g_sheet.columns[column].rows.size())) { return; }
+				if (!NumberMember(*a_params.thisPtr, "_uvcCol", col) || !NumberMember(*a_params.thisPtr, "_uvcSlot", slot)) { return; }
+				const int column = static_cast<int>(col);
+				const int row = LineAtSlot(static_cast<int>(slot));
+				if (row < 0 || column < 0 || column >= static_cast<int>(g_sheet.lines[static_cast<std::size_t>(row)].cells.size())) { return; }
 				auto* movie = static_cast<RE::GFxMovieView*>(a_params.movie);
 				RE::GFxValue page;
 				if (!PageInControls(movie, page)) { return; }
@@ -1761,6 +1779,32 @@ namespace controlslist
 		private:
 			bool press;
 		};
+
+		// The mouse wheel walks the rows, as up and down do. The hidden list's own handler is what the wheel reached before, and
+		// that list is never drawn. On a journal whose list does not take the wheel by this name, this simply never runs.
+		class SheetWheel : public RE::GFxFunctionHandler
+		{
+		public:
+			void Call(Params& a_params) override
+			{
+				if (!a_params.movie || g_sheet.capture || g_sheet.lines.empty() || a_params.argCount < 1 || !a_params.args || !a_params.args[0].IsNumber()) { return; }
+				RE::GFxValue page;
+				if (!PageInControls(static_cast<RE::GFxMovieView*>(a_params.movie), page)) { return; }
+				MoveRow(a_params.args[0].GetNumber() > 0.0 ? -1 : 1);
+				KeepSelectionOnScreen();
+			}
+		};
+
+		void GiveListTheWheel(RE::GFxMovieView* a_movie, RE::GFxValue& a_list)
+		{
+			RE::GFxValue installed;
+			if (a_list.GetMember("_uvcWheel", &installed) && installed.IsBool()) { return; }
+			static SheetWheel* wheel = new SheetWheel();
+			RE::GFxValue fn;
+			a_movie->CreateFunction(&fn, wheel);
+			a_list.SetMember("onMouseWheel", fn);
+			a_list.SetMember("_uvcWheel", RE::GFxValue(true));
+		}
 
 		void GiveCellTheMouse(RE::GFxMovieView* a_movie, RE::GFxValue& a_cell, int a_col, int a_slot)
 		{
@@ -2066,57 +2110,29 @@ namespace controlslist
 		// The row pitch and the slots a column holds, fitted to the frame's height (FINDINGS 2026-11-01 4c): the natural
 		// pitch if every block fits at it; otherwise the rows come closer, down to max(text, 85% of a tile) + 2; and if they
 		// still do not fit, GAMEPLAY is spread over more columns and other long blocks run on into more columns.
-		void FitRows(const RE::GFxValue& a_entries)
+		void FitRows()
 		{
 			auto& m = g_metrics;
 			const double natural = std::clamp(std::max(m.tileH, m.textH) + 2.0, 24.0, std::max(24.0, m.nativePitch));
 			m.minPitch = std::min(natural, std::max(m.textH, m.tileH * 0.85) + 2.0);
-			std::size_t gameplay = 0, longestOther = 0;
-			for (const auto& b : SheetBlocks(a_entries))
-			{
-				if (b.title == kGameplayTitle) { gameplay = b.rows.size(); }
-				else { longestOther = std::max(longestOther, b.rows.size()); }
-			}
-			// slots wanted: GAMEPLAY in two columns and every other block in one, each with its title
-			const int need = std::clamp(static_cast<int>(std::max((gameplay + 1) / 2, longestOther)) + 1, 2, kSheetSlots);
+			// The sheet scrolls, so the rows keep their natural spacing and the frame only decides how many lines show.
 			auto cellH = [&](double a_pitch) { return std::max(a_pitch, m.tileY + std::min(m.tileH, a_pitch - 2.0)); };
-			auto fits = [&](int a_slots, double a_pitch) { return (a_slots - 1) * a_pitch + cellH(a_pitch) <= m.availableH + 0.01; };
-			auto most = [&](double a_pitch) {
-				int n = 1;
-				while (n < kSheetSlots && fits(n + 1, a_pitch)) { ++n; }
-				return n;
-			};
 			m.pitch = natural;
 			m.slots = kSheetSlots;
 			if (m.availableH > 0.0)
 			{
-				if (const int n = most(natural); n >= need) { m.slots = n; }
-				else if (fits(need, m.minPitch))
-				{
-					double lo = m.minPitch, hi = natural;
-					for (int i = 0; i < 24; ++i)
-					{
-						const double mid = (lo + hi) / 2.0;
-						(fits(need, mid) ? lo : hi) = mid;
-					}
-					m.pitch = lo;
-					m.slots = need;
-				}
-				else
-				{
-					m.pitch = m.minPitch;
-					m.slots = std::max(2, most(m.minPitch));
-				}
+				int n = 1;
+				while (n < kSheetSlots && n * natural + cellH(natural) <= m.availableH + 0.01) { ++n; }
+				m.slots = std::max(2, n);
 			}
-			m.gameplayCols = 2;
-			while (m.gameplayCols < kSheetCols && (static_cast<int>(gameplay) + m.gameplayCols - 1) / m.gameplayCols > m.slots - 1) { ++m.gameplayCols; }
+			m.cols = std::clamp(static_cast<int>(m.available / kMinColWidth), 1, kSheetCols);
 			m.drawTileH = std::min(m.tileH, m.pitch - 2.0);
 			m.drawTileY = m.tileY + (m.tileH - m.drawTileH) / 2.0;
 		}
 
 		// Measures the journal (rule 30: ask the movie, do not assume it): the row geometry, the frame's width and height,
-		// and from them the row pitch and the slots per column. Runs before the columns are built.
-		void MeasureFrame(RE::GFxMovieView* a_movie, RE::GFxValue& a_list, RE::GFxValue& a_first, const RE::GFxValue& a_entries)
+		// and from them the row pitch, the lines on screen and the columns. Runs before the sheet is built.
+		void MeasureFrame(RE::GFxMovieView* a_movie, RE::GFxValue& a_list, RE::GFxValue& a_first)
 		{
 			auto& m = g_metrics;
 			// the row's own geometry, from the first native row
@@ -2215,76 +2231,50 @@ namespace controlslist
 			}
 			else { m.frameSource = "none - the 1.2.0 height (Norden UI's frame holds it)"; }
 			m.availableH = m.frameBottom > 0.0 ? m.frameBottom - kFrameMargin - m.top : -1.0;
-			FitRows(a_entries);
+			FitRows();
 		}
 
-		// Lays the sheet's columns out from the measured frame: each column as wide as its longest name - capped at a share
-		// of the width that lets at least three columns stand side by side - plus room for its widest key: two tiles only in
-		// a column that holds a combination. Logged once per change; DevBench op=rowclips reports it as "sheet".
+		// Lays the sheet's columns out from the measured frame: equal columns across the width, so nothing shifts as the sheet
+		// scrolls, each with room for the widest key on the sheet (two tiles only if a combination is bound) and the rest for
+		// the name, which shrinks only if it is longer than that. Logged once per change; DevBench op=rowclips reports it as "sheet".
 		void MeasureColumns(RE::GFxMovieView* a_movie, RE::GFxValue& a_list, RE::GFxValue& a_first, const RE::GFxValue& a_entries,
 			const std::map<std::string, std::uint32_t>& a_index, bool a_gamepad)
 		{
 			auto& m = g_metrics;
-			const std::size_t count = g_sheet.columns.size();
-			std::vector<double> longest(count, 0.0), titleW(count, 0.0);
-			m.tileW.assign(count, m.drawTileH + 4.0);
+			const std::size_t count = static_cast<std::size_t>(std::max(1, m.cols));
+			double room = m.drawTileH + 4.0;
 			bool measured = true;  // textH keeps the tallest text ever measured: the cache measures each text once
-			for (std::size_t c = 0; c < count; ++c)
+			for (const auto& line : g_sheet.lines)
 			{
-				const auto& column = g_sheet.columns[c];
-				for (const auto& key : column.rows)
+				for (const auto& key : line.cells)
 				{
 					const auto it = a_index.find(key);
 					RE::GFxValue entry;
 					if (it == a_index.end() || !a_entries.GetElement(it->second, &entry) || !entry.IsObject()) { continue; }
-					const double w = MeasureText(a_movie, a_list, a_first, CellText(entry));
-					if (w < 0.0) { measured = false; }
-					else { longest[c] = std::max(longest[c], w); }
+					if (MeasureText(a_movie, a_list, a_first, CellText(entry)) < 0.0) { measured = false; }
 					const std::string shown = CellKey(entry, a_gamepad);
 					if (shown.empty()) { continue; }
-					double room = 0.0;
-					if (const auto known = g_keyWidths.find(KeyWidthKey(shown)); known != g_keyWidths.end()) { room = known->second; }
+					if (const auto known = g_keyWidths.find(KeyWidthKey(shown)); known != g_keyWidths.end()) { room = std::max(room, known->second); }
 					else
 					{
 						const auto parts = 1 + std::count(shown.begin(), shown.end(), '+');
-						room = static_cast<double>(parts) * (m.drawTileH + 2.0) + 2.0;
+						room = std::max(room, static_cast<double>(parts) * (m.drawTileH + 2.0) + 2.0);
 					}
-					m.tileW[c] = std::max(m.tileW[c], room);
-				}
-				// a continuing column can come to the sheet's left edge and show its block's title, so it makes room for it too;
-				// GAMEPLAY's columns are wide enough for theirs
-				if (column.span <= 1 && column.lead == 0 && !column.block.empty()) { titleW[c] = MeasureText(a_movie, a_list, a_first, column.block); }
-			}
-			m.nameW.assign(count, 160.0);
-			m.colW.assign(count, kColWidthFallback);
-			if (measured)
-			{
-				// the cap starts at 40% of the width and comes down (to 25%) until every three neighbouring columns fit
-				for (m.nameCapFrac = 0.40;; m.nameCapFrac -= 0.03)
-				{
-					const double nameCap = std::max(60.0, m.nameCapFrac * m.available);
-					for (std::size_t c = 0; c < count; ++c)
-					{
-						m.nameW[c] = std::min(longest[c], nameCap) + kFieldGutter;
-						double width = m.nameX + m.nameW[c] + kNameGap + m.tileW[c];
-						if (titleW[c] > 0.0) { width = std::max(width, std::min(titleW[c] + kFieldGutter + m.nameX, m.available - kColGap)); }
-						m.colW[c] = width + kColGap;
-					}
-					bool three = true;
-					for (int i = 0; i < static_cast<int>(count) && three; ++i) { three = VisibleFrom(i) >= std::min(3, static_cast<int>(count) - i); }
-					if (three || m.nameCapFrac < 0.25 + 0.001) { break; }
 				}
 			}
+			const double width = std::max(120.0, m.available / static_cast<double>(count));
+			room = std::min(room, width * 0.45);
+			m.tileW.assign(count, room);
+			m.nameW.assign(count, std::max(60.0, width - kColGap - m.nameX - kNameGap - room));
+			m.colW.assign(count, width);
 
-			std::string widths;
-			for (const double w : m.colW) { widths += std::format("{}{:.0f}", widths.empty() ? "" : ",", w); }
 			const std::string summary = std::format(
-				"{} tiles; name x {:.0f}, tile {:.0f} high at y {:.0f} (drawn {:.0f}); rows {:.0f} apart (journal's own {:.0f}, text {:.0f}, closest {:.0f}), "
-				"{} slots, GAMEPLAY in {} columns; {:.0f} wide to the frame (mirrored rule {:.0f}, page rect right {:.0f}; stage {:.0f}, page at {:.0f}, list at {:.0f}); "
-				"{:.0f} high to the frame's bottom {:.0f} ({}; page rect {:.0f}, bottom bar {:.0f}, native list {:.0f}); names capped at {:.0f}%; columns [{}]{}",
-				m.ownArt ? "\"ButtonArt\" (the sheet draws its own)" : "\"buttonArt\"", m.nameX, m.tileH, m.tileY, m.drawTileH, m.pitch, m.nativePitch, m.textH, m.minPitch, m.slots,
-				m.gameplayCols, m.available, m.availableMirror, m.rectRight, m.stageW, m.pageLeft, m.listLeft, m.availableH, m.frameBottom, m.frameSource, m.rectBottom,
-				m.bottomBarTop, m.nativeBottom, m.nameCapFrac * 100.0, widths, measured ? "" : " - names NOT measured, 1.2.0 widths used");
+				"{} tiles; name x {:.0f}, tile {:.0f} high at y {:.0f} (drawn {:.0f}); rows {:.0f} apart (journal's own {:.0f}, text {:.0f}), "
+				"{} lines on screen of {}, {} column(s) {:.0f} wide (name {:.0f}, keys {:.0f}); {:.0f} wide to the frame (mirrored rule {:.0f}, page rect right {:.0f}; stage {:.0f}, page at {:.0f}, list at {:.0f}); "
+				"{:.0f} high to the frame's bottom {:.0f} ({}; page rect {:.0f}, bottom bar {:.0f}, native list {:.0f}){}",
+				m.ownArt ? "\"ButtonArt\" (the sheet draws its own)" : "\"buttonArt\"", m.nameX, m.tileH, m.tileY, m.drawTileH, m.pitch, m.nativePitch, m.textH, m.slots, g_sheet.lines.size(),
+				count, width, m.nameW[0], room, m.available, m.availableMirror, m.rectRight, m.stageW, m.pageLeft, m.listLeft, m.availableH, m.frameBottom, m.frameSource, m.rectBottom,
+				m.bottomBarTop, m.nativeBottom, measured ? "" : " - names NOT measured");
 			if (summary != m.logged)
 			{
 				m.logged = summary;
@@ -2296,12 +2286,7 @@ namespace controlslist
 		void UpdateOverflow()
 		{
 			auto& m = g_metrics;
-			int used = 0;
-			for (int c = g_sheet.firstCol; c < g_sheet.firstCol + m.visible && c < static_cast<int>(g_sheet.columns.size()); ++c)
-			{
-				used = std::max(used, static_cast<int>(g_sheet.columns[c].rows.size()));
-			}
-			const double bottom = m.top + used * m.pitch + std::max(m.pitch, m.drawTileY + m.drawTileH);
+			const double bottom = m.top + (m.slots - 1) * m.pitch + std::max(m.pitch, m.drawTileY + m.drawTileH);
 			m.overflowCalc = m.frameBottom > 0.0 ? bottom - m.frameBottom : 0.0;
 		}
 
@@ -2476,6 +2461,7 @@ namespace controlslist
 			}
 			InstallSheetInput(a_movie, page);
 			HideListChrome(list);
+			GiveListTheWheel(a_movie, list);
 
 			// A capture of this mod's: the key the sink recorded is the answer, handled the way the rows' remap always was.
 			if (g_sheet.capture)
@@ -2540,10 +2526,10 @@ namespace controlslist
 			const bool gamepad = ListShowsGamepad(entries);
 			RE::GFxValue first;
 			if (!list.GetMember("Entry0", &first) || !first.IsDisplayObject()) { return; }
-			// the frame first: its height decides how many rows a column holds, and so how the blocks split into columns
-			MeasureFrame(a_movie, list, first, entries);
-			g_sheet.columns = BuildSheet(entries, g_metrics.slots, g_metrics.gameplayCols);
-			if (g_sheet.columns.empty()) { HideSheet(list); return; }
+			// the frame first: its width decides how many columns a line holds
+			MeasureFrame(a_movie, list, first);
+			g_sheet.lines = BuildSheet(entries, g_metrics.cols);
+			if (g_sheet.lines.empty()) { HideSheet(list); return; }
 			std::map<std::string, std::uint32_t> index;
 			for (std::uint32_t i = 0; i < entries.GetArraySize(); ++i)
 			{
@@ -2554,37 +2540,21 @@ namespace controlslist
 			MeasureColumns(a_movie, list, first, entries, index, gamepad);
 			KeepSelectionOnScreen();
 			UpdateOverflow();
-			// each on-screen column starts where the one before it ends
-			std::array<double, kSheetCols> colX{};
-			for (int c = 1; c < kSheetCols; ++c)
-			{
-				const auto prev = static_cast<std::size_t>(g_sheet.firstCol + c - 1);
-				colX[static_cast<std::size_t>(c)] = colX[static_cast<std::size_t>(c - 1)] + (prev < g_metrics.colW.size() ? g_metrics.colW[prev] : kColWidthFallback);
-			}
+			const int cols = std::max(1, g_metrics.cols);
+			const double colWidth = !g_metrics.colW.empty() ? g_metrics.colW[0] : kColWidthFallback;
+			const double rowNameWidth = !g_metrics.nameW.empty() ? g_metrics.nameW[0] : 160.0;
+			const double areaWidth = !g_metrics.tileW.empty() ? g_metrics.tileW[0] : 2.0 * g_metrics.drawTileH + 4.0;
+			const double tileX = g_metrics.nameX + rowNameWidth + kNameGap;
+			const SheetLine& firstLine = g_sheet.lines[static_cast<std::size_t>(g_sheet.firstLine)];
+			// the top line: this line's own title, or the title of the block the sheet is scrolled inside, and at the top right
+			// which block of how many, so it reads as a list that goes on below
+			const std::string topTitle = firstLine.block;
+			const SheetLine& selectedLine = g_sheet.lines[static_cast<std::size_t>(std::clamp(g_sheet.row, 0, static_cast<int>(g_sheet.lines.size()) - 1))];
+			const std::string position = std::format("{}/{}", selectedLine.blockIndex, g_sheet.lines.back().blockIndex);
 
 			g_sheet.drawn.resize(static_cast<std::size_t>(kSheetCols * kSheetSlots));
 			for (int c = 0; c < kSheetCols; ++c)
 			{
-				const int columnIndex = g_sheet.firstCol + c;
-				const SheetColumn* column = (c < g_metrics.visible && columnIndex < static_cast<int>(g_sheet.columns.size())) ? &g_sheet.columns[columnIndex] : nullptr;
-				const auto ci = static_cast<std::size_t>(std::max(0, columnIndex));
-				const double colWidth = ci < g_metrics.colW.size() ? g_metrics.colW[ci] : kColWidthFallback;
-				const double rowNameWidth = ci < g_metrics.nameW.size() ? g_metrics.nameW[ci] : 160.0;
-				const double areaWidth = ci < g_metrics.tileW.size() ? g_metrics.tileW[ci] : 2.0 * g_metrics.drawTileH + 4.0;
-				// A column that continues a block, at the sheet's left edge, shows the block's title: the column holding it
-				// has slid off the left, and the rows would otherwise sit under no title.
-				const std::string shownTitle = !column ? std::string() : (!column->title.empty() ? column->title : (c == 0 ? column->block : std::string()));
-				// a spanning title (GAMEPLAY) takes the width of every column it spans, a continuing block's the rest of the block's
-				double spanWidth = colWidth;
-				if (column && column->span > 1)
-				{
-					for (std::size_t k = ci + 1; k < ci + static_cast<std::size_t>(column->span); ++k) { spanWidth += k < g_metrics.colW.size() ? g_metrics.colW[k] : kColWidthFallback; }
-				}
-				else if (column && column->title.empty() && c == 0)
-				{
-					for (std::size_t k = ci + 1; k < g_sheet.columns.size() && g_sheet.columns[k].title.empty() && g_sheet.columns[k].block == column->block; ++k) { spanWidth += k < g_metrics.colW.size() ? g_metrics.colW[k] : kColWidthFallback; }
-				}
-				const double tileX = g_metrics.nameX + rowNameWidth + kNameGap;
 				for (int s = 0; s < kSheetSlots; ++s)
 				{
 					const std::size_t slot = static_cast<std::size_t>(c * kSheetSlots + s);
@@ -2601,36 +2571,42 @@ namespace controlslist
 						}
 						GiveCellTheMouse(a_movie, cell, c, s);
 					}
-					// placed every frame: the columns' widths follow the names they hold as the sheet slides
-					const double wantX = colX[static_cast<std::size_t>(c)], wantY = top + s * g_metrics.pitch;
+					const double wantX = c * colWidth, wantY = top + s * g_metrics.pitch;
 					if (Number(cell, "_x", -1.0) != wantX) { cell.SetMember("_x", RE::GFxValue(wantX)); }
 					if (Number(cell, "_y", -1.0) != wantY) { cell.SetMember("_y", RE::GFxValue(wantY)); }
-					const bool isTitle = s == 0;
+					// what this cell shows: a title or the block position (gold, no key), or a row
+					const int lineIndex = LineAtSlot(s);
+					const SheetLine* line = lineIndex >= 0 ? &g_sheet.lines[static_cast<std::size_t>(lineIndex)] : nullptr;
+					const bool titleSlot = s < g_metrics.slots && c == 0 && (line ? !line->title.empty() : s == 0);
+					const bool positionSlot = s == 0 && c == cols - 1 && cols > 1;
+					std::string titleText;
+					if (titleSlot) { titleText = line ? line->title : topTitle; }
+					else if (positionSlot) { titleText = position; }
+					const bool isTitle = !titleText.empty();
 					RE::GFxValue entry;
 					bool haveEntry = false;
-					if (column && !isTitle && s - 1 < static_cast<int>(column->rows.size()))
+					if (!isTitle && line && c < static_cast<int>(line->cells.size()))
 					{
-						const auto it = index.find(column->rows[s - 1]);
+						const auto it = index.find(line->cells[static_cast<std::size_t>(c)]);
 						haveEntry = it != index.end() && entries.GetElement(it->second, &entry) && entry.IsObject();
 					}
-					if (!column || (isTitle ? shownTitle.empty() : !haveEntry))
+					if (!isTitle && !haveEntry)
 					{
 						if (IsVisible(cell)) { SetVisible(cell, false); }
 						g_sheet.drawn[slot].clear();
 						continue;
 					}
-					const bool selected = !isTitle && columnIndex == g_sheet.col && s - 1 == g_sheet.row;
+					const bool selected = !isTitle && lineIndex == g_sheet.row && c == g_sheet.col;
 					const bool capturing = selected && g_sheet.capture;
-					std::string text = isTitle ? shownTitle : StringMember(entry, "text");
+					std::string text = isTitle ? titleText : StringMember(entry, "text");
 					// The two favourite rows named apart (the owner, 2026-09-28: "favorites has two rows, one for the menu and
 					// one for the action of favoriting an item"): the Gameplay control opens the Favorites menu; ITEMS holds
 					// "Favorite Item".
 					if (!isTitle && !IsOwnRow(entry) && IEqualsView(text, "Favorites")) { text = "Favorites Menu"; }
 					const std::string key = (!isTitle && !capturing) ? CellKey(entry, gamepad) : std::string();
-					// a title has no key tile, so it takes the whole column ("IN FAVORITES MENU" is not shrunk); GAMEPLAY's
-					// takes every column it spans
-					const double nameWidth = isTitle ? spanWidth - kColGap - g_metrics.nameX : rowNameWidth;
-					// a row's name is shrunk only when it is longer than a column can ever be (the measured width was capped)
+					// a title has no key tile, so it takes the whole column ("IN FAVORITES MENU" is not shrunk)
+					const double nameWidth = isTitle ? colWidth - kColGap - g_metrics.nameX : rowNameWidth;
+					// a row's name is shrunk only when it is longer than a column can ever be
 					const auto measuredIt = g_textWidths.find(text);
 					const bool shrink = !isTitle && measuredIt != g_textWidths.end() && measuredIt->second + kFieldGutter > nameWidth + 0.5;
 					const std::string signature = std::format("{}|{}|{}|{:.1f}|{}|{:.1f}|{:.1f}|{:.1f}|{:.1f}", text, key, capturing ? 1 : 0, nameWidth, selected ? 1 : 0, tileX, g_metrics.drawTileH,
@@ -2689,7 +2665,7 @@ namespace controlslist
 						RE::GFxValue format;
 						if (field.Invoke("getTextFormat", &format, nullptr, 0) && format.IsObject())
 						{
-							format.SetMember("align", RE::GFxValue(isTitle && column->span > 1 ? "center" : "left"));
+							format.SetMember("align", RE::GFxValue("left"));
 							field.Invoke("setTextFormat", nullptr, &format, 1);
 						}
 						// Titles gold; the selected row's name white and every other name grey - the list's own 70/100
@@ -2931,10 +2907,10 @@ namespace controlslist
 		for (const double w : m.tileW) { tileW += std::format("{}{:.1f}", tileW.empty() ? "" : ",", w); }
 		for (const auto& sym : g_symbolsSeen) { symbols += (symbols.empty() ? "\"" : ",\"") + EscapeJson(sym) + "\""; }
 		const std::string sheet = std::format(
-			R"({{"ownArt":{},"nameX":{:.1f},"tileH":{:.1f},"tileY":{:.1f},"drawTileH":{:.1f},"pitch":{:.1f},"minPitch":{:.1f},"nativePitch":{:.1f},"textH":{:.1f},"available":{:.1f},"availableW":{:.1f},"availableWMirror":{:.1f},"pageRectRight":{:.1f},"availableH":{:.1f},"frameBottom":{:.1f},"frameSource":"{}","pageRectBottom":{:.1f},"bottomBarTop":{:.1f},"nativeBottom":{:.1f},"top":{:.1f},"overflowBottom":{},"overflowBottomCalc":{:.1f},"lowestCell":{},"slots":{},"gameplayCols":{},"nameCapPct":{:.0f},"stageW":{:.1f},"pageLeft":{:.1f},"listLeft":{:.1f},"firstCol":{},"visible":{},"columns":{},"colW":[{}],"tileW":[{}],"gamepadFaces":"{}","symbols":[{}]}})",
+			R"({{"ownArt":{},"nameX":{:.1f},"tileH":{:.1f},"tileY":{:.1f},"drawTileH":{:.1f},"pitch":{:.1f},"minPitch":{:.1f},"nativePitch":{:.1f},"textH":{:.1f},"available":{:.1f},"availableW":{:.1f},"availableWMirror":{:.1f},"pageRectRight":{:.1f},"availableH":{:.1f},"frameBottom":{:.1f},"frameSource":"{}","pageRectBottom":{:.1f},"bottomBarTop":{:.1f},"nativeBottom":{:.1f},"top":{:.1f},"overflowBottom":{},"overflowBottomCalc":{:.1f},"lowestCell":{},"slots":{},"cols":{},"stageW":{:.1f},"pageLeft":{:.1f},"listLeft":{:.1f},"firstLine":{},"row":{},"col":{},"lines":{},"colW":[{}],"tileW":[{}],"gamepadFaces":"{}","symbols":[{}]}})",
 			m.ownArt ? "true" : "false", m.nameX, m.tileH, m.tileY, m.drawTileH, m.pitch, m.minPitch, m.nativePitch, m.textH, m.available, m.available, m.availableMirror, m.rectRight,
-			m.availableH, m.frameBottom, EscapeJson(m.frameSource), m.rectBottom, m.bottomBarTop, m.nativeBottom, m.top, overflow, m.overflowCalc, lowestCell, m.slots, m.gameplayCols,
-			m.nameCapFrac * 100.0, m.stageW, m.pageLeft, m.listLeft, g_sheet.firstCol, m.visible, g_sheet.columns.size(), colW, tileW,
+			m.availableH, m.frameBottom, EscapeJson(m.frameSource), m.rectBottom, m.bottomBarTop, m.nativeBottom, m.top, overflow, m.overflowCalc, lowestCell, m.slots, m.cols,
+			m.stageW, m.pageLeft, m.listLeft, g_sheet.firstLine, g_sheet.row, g_sheet.col, g_sheet.lines.size(), colW, tileW,
 			settings::controls::FacesName(settings::controls::gamepadFaces), symbols);
 		// Which face pictures this journal really has, and which one each button name draws under the current GamepadFaces:
 		// proved by attaching them, so it needs no controller. "resolve" is what a row with that button name would draw.

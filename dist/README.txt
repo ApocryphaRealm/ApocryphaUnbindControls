@@ -67,9 +67,10 @@ with it. This mod gives each of those menu buttons a key of its own, in its own 
 control map gives it out of the box - so changing a gameplay control never changes a menu button.
 
 THE CONTROLS PAGE
-Journal > System > Controls is laid out as a sheet that fits on one screen: GAMEPLAY across two columns
-(more on a short frame), then EXTRA CONTROLS (the rows this mod adds), then one column per menu - MENUS, ITEMS and IN MAP. Move
-with the D-pad, the arrow keys or the mouse; the sheet slides sideways to keep the selection in view.
+Journal > System > Controls is laid out as a sheet, one block under another: GAMEPLAY, SWIMMING, HORSEBACK, then EXTRA
+CONTROLS (the rows this mod adds), then one block per menu - MENUS, ITEMS and IN MAP. Up and down (the D-pad, the arrow keys
+or the mouse wheel) walk every row of every block and the sheet scrolls to follow; left and right move along a line. The
+block's title stays at the top, with which block of how many at the top right.
 Select a row and press Accept (or click it), then press the new key. A key another gameplay control uses
 is swapped with it, the way the game does it; a key the game reserves is refused. Hold the Modifier (Left
 Trigger on a controller) and press a button to bind a combination, shown as two key pictures.
@@ -78,9 +79,8 @@ MENUS, the map's zoom under IN MAP. Favorite has two rows: Favorites Menu (GAMEP
 Favorite Item (ITEMS - favourites the highlighted item), which starts on F / Y (triangle) and can be moved
 like any other. The Favorites menu, lockpicking, follower and journal buttons keep their own keys but get
 no row: they only repeat the MENUS ones.
-The sheet measures the journal it is drawn in and fits inside its frame: when the rows do not fit the
-frame's height they move closer together, and if they still do not fit GAMEPLAY is spread over more
-columns. It works on the game's own journal (no SkyUI needed), on SkyUI's and on Norden UI's.
+The sheet measures the journal it is drawn in and fits inside its frame: as many lines as the frame's height holds, as many
+columns as its width holds. It works on the game's own journal (no SkyUI needed), on SkyUI's and on Norden UI's.
 
 CONTROLLER BUTTON PICTURES
 The pictures are the journal's own - the game's journal and SkyUI's carry Xbox, PlayStation 3 and
@@ -155,6 +155,7 @@ WHAT CHANGED
 Version 1.3.0
 Added a SWIMMING block on the Controls page: buttons that apply only while you are in water ([Swimming] in the INI). Everything goes back the moment you are out of the water.
 Added a HORSEBACK block on the Controls page: buttons that apply only while you are mounted ([Horseback] in the INI). Everything goes back the moment you dismount.
+Changed the Controls page to scroll top to bottom: every block is reached with up and down, no sideways sliding.
 Added an IN MAP block that is always listed: the world map's own buttons, bound for the map alone.
 Added a Map Selector row in IN MAP for World Map Selector for Controller.
 
