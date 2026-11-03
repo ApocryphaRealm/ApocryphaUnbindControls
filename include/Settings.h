@@ -18,6 +18,8 @@ namespace settings
 	{
 		inline bool enabled = true;  // bEnabled:General - apply the [Unbound] list in game
 		inline bool keepRemapsInIni = true;  // bKeepRemapsInIni:General - Controls-menu remaps live in this INI, not ControlMap_Custom.txt
+		inline bool swimVertical = true;  // bSwimVertical:General - Swim Up and Swim Down; Sneak does not sneak in water
+		inline float swimVerticalSpeed = 150.0f;  // fSwimVerticalSpeed:General - game units a second, 10 to 1000
 	}
 
 	namespace controls

@@ -193,6 +193,13 @@ namespace unbinder
 	// means no key in water, as on every other row.
 	bool SetSwimKey(std::string_view a_event, int a_device, std::uint16_t a_key, std::string& a_why);
 	void InstallSwimWatch();                         // HUDMenu::AdvanceMovie wrapped; call once at plugin load
+	// SWIM UP AND SWIM DOWN (1.3.0; the owner, 2026-11-03). The game has no vertical swim input: its swim state reads no
+	// button, the Sneak press only fires the sneak action, and sneaking does nothing for height. With bSwimVertical on,
+	// the water layout takes Sneak's key away (so a press cannot start a sneak) and two rows of this mod, read raw from the
+	// input sink, add to the player's own movement each frame: Swim Down on Sneak's key out of the box, Swim Up on its own.
+	// Jump keeps its mapping and its handler, so it alone leaves the water. Sneaking is cleared on the way into and out of
+	// the water. Installed late, so that it adds to what other mods' hooks in that slot did.
+	void InstallSwimVertical();                      // after data loaded (first load or new game); once
 	void NoteButton(int a_device, std::uint32_t a_code, bool a_up);  // from the input sink: what is held now
 	std::string SwimStateJson();                     // DevBench op=swim
 

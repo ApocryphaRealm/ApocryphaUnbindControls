@@ -30,6 +30,8 @@ namespace settings
 			std::uint32_t logLevel;
 			bool enabled;
 			bool keepRemapsInIni;
+			bool swimVertical;
+			float swimVerticalSpeed;
 			controls::Faces gamepadFaces;
 		} defaults{};
 
@@ -58,6 +60,18 @@ namespace settings
 		bool ParseUInt(const std::string& a_text, std::uint32_t& a_out)
 		{
 			try { a_out = static_cast<std::uint32_t>(std::stoull(Trim(a_text), nullptr, 0)); return true; } catch (...) { return false; }
+		}
+
+		bool ParseSwimSpeed(const std::string& a_text, float& a_out)
+		{
+			try
+			{
+				const float v = std::stof(Trim(a_text));
+				if (!(v >= 10.0f && v <= 1000.0f)) { return false; }
+				a_out = v;
+				return true;
+			}
+			catch (...) { return false; }
 		}
 
 		bool ParseFaces(const std::string& a_text, controls::Faces& a_out)
@@ -345,6 +359,8 @@ namespace settings
 			get("uloglevel:debug", debug::logLevel, ParseUInt);
 			get("benabled:general", general::enabled, ParseBool);
 			get("bkeepremapsinini:general", general::keepRemapsInIni, ParseBool);
+			get("bswimvertical:general", general::swimVertical, ParseBool);
+			get("fswimverticalspeed:general", general::swimVerticalSpeed, ParseSwimSpeed);
 			get("gamepadfaces:controls", controls::gamepadFaces, ParseFaces);
 			logger::info("Controls sheet gamepad faces: {}", controls::FacesName(controls::gamepadFaces));
 			const std::size_t count = entries.size();
@@ -464,7 +480,7 @@ namespace settings
 	{
 		iniPath = (std::filesystem::current_path() / "Data" / "SKSE" / "Plugins" / a_iniFileName).string();
 
-		defaults = { debug::logLevel, general::enabled, general::keepRemapsInIni, controls::gamepadFaces };
+		defaults = { debug::logLevel, general::enabled, general::keepRemapsInIni, general::swimVertical, general::swimVerticalSpeed, controls::gamepadFaces };
 		// Compiled default list = the shipped INI's [Unbound] lines (rule 16). An INI that exists replaces it
 		// with whatever it lists, including nothing.
 		unbinder::SetEntries(unbinder::DefaultEntries());
@@ -508,6 +524,8 @@ namespace settings
 		ok &= WriteKey(lines, "Debug", "uLogLevel", std::to_string(debug::logLevel));
 		ok &= WriteKey(lines, "General", "bEnabled", general::enabled ? "1" : "0");
 		ok &= WriteKey(lines, "General", "bKeepRemapsInIni", general::keepRemapsInIni ? "1" : "0");
+		ok &= WriteKey(lines, "General", "bSwimVertical", general::swimVertical ? "1" : "0");
+		ok &= WriteKey(lines, "General", "fSwimVerticalSpeed", std::format("{}", general::swimVerticalSpeed));
 		const auto entries = unbinder::GetEntries();
 		std::vector<std::string> unboundLines;
 		for (const auto& e : entries) { unboundLines.push_back(std::format("{}|{}|{}", e.context, e.event, unbinder::DeviceName(e.device))); }
@@ -611,6 +629,8 @@ namespace settings
 		debug::logLevel = defaults.logLevel;
 		general::enabled = defaults.enabled;
 		general::keepRemapsInIni = defaults.keepRemapsInIni;
+		general::swimVertical = defaults.swimVertical;
+		general::swimVerticalSpeed = defaults.swimVerticalSpeed;
 		controls::gamepadFaces = defaults.gamepadFaces;
 		ApplyLogLevel();
 	}

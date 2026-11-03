@@ -1322,6 +1322,15 @@ namespace unbinder
 		std::atomic<int> g_swimFlips{ 0 };
 		std::atomic<int> g_swimWaited{ 0 };                // frames a swap waited for a held key
 
+		// Swim Up and Swim Down (Unbinder.h). The keys in force come from the last water layout; written under g_lock.
+		std::array<std::atomic<std::uint16_t>, 3> g_swimUpKey{};
+		std::array<std::atomic<std::uint16_t>, 3> g_swimDownKey{};
+		std::atomic<int> g_sneakClears{ 0 };
+		std::atomic<int> g_verticalFrames{ 0 };            // frames that really moved the player
+		std::atomic<int> g_verticalStoppedAtSurface{ 0 };  // frames Swim Up was held with the shoulders out of the water
+		std::atomic<int> g_verticalStoppedAtFloor{ 0 };    // frames Swim Down was held standing on something
+		std::atomic<float> g_verticalLastStep{ 0.0f };
+
 		struct SavedMapping
 		{
 			std::string event;
@@ -1348,6 +1357,19 @@ namespace unbinder
 		constexpr std::int64_t kSwimSettleMs = 150;  // the state must hold this long: wading at the waterline flickers
 		constexpr std::int64_t kHeldForgetMs = 300;  // a held button repeats every frame; silence means its release was lost
 
+		constexpr const char* kSneakEvent = "Sneak";
+		constexpr const char* kSwimUpEvent = "Swim Up";
+		constexpr const char* kSwimDownEvent = "Swim Down";
+		// Swim Up's defaults. Its own buttons, never Jump's (the owner, 2026-11-03: "I want swim up and jump out of water to
+		// be separate things"). RB: a finger free while both thumbs steer, and its land use (Right Attack/Block in the
+		// shipped layout) does nothing while swimming. T: Wait's key on the stock map, which the shipped INI leaves free, and
+		// in reach of the WASD hand; no other mod of ours ships either (DEFAULT-KEYS.md).
+		constexpr std::uint16_t kSwimUpDefaultGamepad = 0x0200;
+		constexpr std::uint16_t kSwimUpDefaultKeyboard = 0x14;
+
+		bool IsVerticalRow(std::string_view a_event) { return IEquals(a_event, kSwimUpEvent) || IEquals(a_event, kSwimDownEvent); }
+		bool VerticalOn() { return settings::general::enabled && settings::general::swimVertical; }
+
 		// The SWIMMING block: the Gameplay controls that mean something in water. The keyboard page also gets the movement
 		// keys, which the controller has on its stick.
 		struct SwimRow
@@ -1356,7 +1378,7 @@ namespace unbinder
 			bool gamepad;
 		};
 		constexpr SwimRow kSwimRows[] = {
-			{ "Jump", true }, { "Sneak", true }, { "Sprint", true }, { "Activate", true }, { "Ready Weapon", true },
+			{ "Jump", true }, { kSwimUpEvent, true }, { kSwimDownEvent, true }, { "Sneak", true }, { "Sprint", true }, { "Activate", true }, { "Ready Weapon", true },
 			{ "Right Attack/Block", true }, { "Left Attack/Block", true }, { "Shout", true },
 			{ "Forward", false }, { "Back", false }, { "Strafe Left", false }, { "Strafe Right", false }, { "Run", false },
 		};
@@ -1383,7 +1405,8 @@ namespace unbinder
 			{
 				const std::string row = std::string("Swimming: ") + r.event;
 				if (std::any_of(g_delinked.begin(), g_delinked.end(), [&](const DelinkedAction& d) { return d.row == row; })) { continue; }
-				bool keyboard = false, gamepad = false;
+				// Swim Up and Swim Down are this mod's: no mapping in the game's map, a row on both pages.
+				bool keyboard = IsVerticalRow(r.event), gamepad = IsVerticalRow(r.event);
 				for (int d = 0; d < 3; ++d)
 				{
 					auto* mappings = MappingsFor(a_map, kGameplayContext, d);
@@ -1405,6 +1428,11 @@ namespace unbinder
 				d.sheetContext = kGameplayContext;
 				g_delinked.push_back(std::move(d));
 			}
+			// With Swim Up and Swim Down on, Sneak has no job in water, so it has no row; with them off, as before.
+			for (auto& d : g_delinked)
+			{
+				if (d.swim) { d.hidden = VerticalOn() ? IEquals(d.event, kSneakEvent) : IsVerticalRow(d.event); }
+			}
 
 			// IN MAP (the owner, 2026-11-03: "if there's not already a map context ... we need to add"). The engine's Map
 			// context has always been there and [Bound] lines already reach it; what was missing is rows for it.
@@ -1420,6 +1448,76 @@ namespace unbinder
 				if (r.gamepad && hasKey(2)) { RecordDelinked(mapContext, r.event, 2); }
 				if (r.keyboard && hasKey(0)) { RecordDelinked(mapContext, r.event, 0); }
 			}
+		}
+
+		// The first key a Gameplay control has on land, whichever layout is on the map now. Caller holds g_lock.
+		std::uint16_t LandKeyLocked(RE::ControlMap* a_map, std::string_view a_event, int a_device)
+		{
+			if (g_swimApplied.load())
+			{
+				for (const auto& s : g_land[a_device])
+				{
+					if (IEquals(s.event, a_event) && s.key != kUnmapped) { return s.key; }
+				}
+			}
+			else if (auto* mappings = MappingsFor(a_map, kGameplayContext, a_device))
+			{
+				for (auto* m : Find(*mappings, a_event))
+				{
+					if (m->inputKey != kUnmapped) { return m->inputKey; }
+				}
+			}
+			return kUnmapped;
+		}
+
+		// What the water layout really does: the [Swimming] lines, and with Swim Up and Swim Down on, Sneak with no key in
+		// water and the defaults of any row the player has not set. Swim Down's default is whatever Sneak holds on land, so
+		// the same press sinks. Swim Up's is its own. Caller holds g_lock.
+		std::vector<Bind> EffectiveSwimLinesLocked(RE::ControlMap* a_map)
+		{
+			std::vector<Bind> out;
+			const bool vertical = VerticalOn();
+			for (const auto& b : g_swim)
+			{
+				if (vertical ? IEquals(b.event, kSneakEvent) : IsVerticalRow(b.event)) { continue; }
+				out.push_back(b);
+			}
+			if (!vertical) { return out; }
+			const auto add = [&](const char* a_event, int a_device, std::uint16_t a_key) {
+				Bind b;
+				b.context = "Swimming";
+				b.event = a_event;
+				b.device = a_device;
+				b.key = a_key;
+				out.push_back(std::move(b));
+			};
+			const auto hasLine = [&](const char* a_event, int a_device) {
+				return std::any_of(g_swim.begin(), g_swim.end(), [&](const Bind& a_b) { return a_b.device == a_device && IEquals(a_b.event, a_event); });
+			};
+			for (int d = 0; d < 3; ++d)
+			{
+				const std::uint16_t sneak = LandKeyLocked(a_map, kSneakEvent, d);
+				if (sneak == kUnmapped) { continue; }
+				if (!hasLine(kSwimDownEvent, d)) { add(kSwimDownEvent, d, sneak); }
+				add(kSneakEvent, d, kUnmapped);
+			}
+			if (!hasLine(kSwimUpEvent, 0)) { add(kSwimUpEvent, 0, kSwimUpDefaultKeyboard); }
+			if (!hasLine(kSwimUpEvent, 2)) { add(kSwimUpEvent, 2, kSwimUpDefaultGamepad); }
+			return out;
+		}
+
+		// The game's own "stop sneaking" (Actor's sneak setter, 1.5.97 id 36926, off branch): the iIsInSneak graph variable and
+		// the state bit. SneakStop asks the behaviour graph to leave any sneak state it holds. Main thread only.
+		void ClearSneakIfSet(const char* a_reason)
+		{
+			auto* player = RE::PlayerCharacter::GetSingleton();
+			auto* state = player ? player->AsActorState() : nullptr;
+			if (!state || !state->IsSneaking()) { return; }
+			player->SetGraphVariableInt("iIsInSneak", 0);
+			state->actorState1.sneaking = 0;
+			player->NotifyAnimationGraph("SneakStop");
+			g_sneakClears.fetch_add(1);
+			logger::info("swimming ({}): the player was sneaking; sneak cleared", a_reason);
 		}
 
 		// Caller holds g_lock.
@@ -1467,13 +1565,20 @@ namespace unbinder
 					g_land[d].push_back({ m.eventID.c_str() ? m.eventID.c_str() : "", m.inputKey, m.modifier });
 				}
 			}
+			// g_swimApplied is still false here, so the land keys read in this come from the map, which nothing has changed yet.
+			const auto effective = EffectiveSwimLinesLocked(a_map);
+			for (int d = 0; d < 3; ++d)
+			{
+				g_swimUpKey[d].store(kUnmapped);
+				g_swimDownKey[d].store(kUnmapped);
+			}
 			std::string moved;
 			for (int d = 0; d < 3; ++d)
 			{
 				auto* mappings = MappingsFor(a_map, kGameplayContext, d);
 				if (!mappings) { continue; }
 				std::vector<const Bind*> lines;
-				for (const auto& b : g_swim)
+				for (const auto& b : effective)
 				{
 					if (b.device == d) { lines.push_back(&b); }
 				}
@@ -1519,6 +1624,14 @@ namespace unbinder
 						logger::warn("swimming ({}): {}|{} -> {} not applied: an earlier [Swimming] line was given it first", a_reason, b->event, DeviceName(d), Hex(b->key));
 						continue;
 					}
+					if (IsVerticalRow(b->event))
+					{
+						// No mapping: the press is read raw (the input sink) and moves the player in PlayerMovementData below.
+						(IEquals(b->event, kSwimUpEvent) ? g_swimUpKey : g_swimDownKey)[d].store(b->key);
+						given.push_back(b->key);
+						moved += std::format("{}{} {} {}", moved.empty() ? "" : ", ", b->event, DeviceName(d), Hex(b->key));
+						continue;
+					}
 					auto found = Find(*mappings, b->event);
 					if (found.empty())
 					{
@@ -1562,9 +1675,10 @@ namespace unbinder
 		bool SwapWouldMoveHeldKeyLocked(RE::ControlMap* a_map)
 		{
 			std::vector<std::pair<int, std::uint32_t>> keys;
-			for (const auto& b : g_swim)
+			for (const auto& b : EffectiveSwimLinesLocked(a_map))
 			{
 				if (b.key != kUnmapped) { keys.emplace_back(b.device, b.key); }
+				if (IsVerticalRow(b.event)) { continue; }
 				if (g_swimApplied.load())
 				{
 					for (const auto& s : g_land[b.device])
@@ -1594,7 +1708,7 @@ namespace unbinder
 			auto* map = RE::ControlMap::GetSingleton();
 			if (!map) { return; }
 			std::scoped_lock l(g_lock);
-			const bool wanted = settings::general::enabled && !g_swim.empty() && g_swimStable.load() && !g_swimJournal.load();
+			const bool wanted = settings::general::enabled && g_haveSwimLines.load() && g_swimStable.load() && !g_swimJournal.load();
 			if (wanted == g_swimApplied.load()) { return; }
 			// The journal's Controls page is never made to wait: it needs the land layout now.
 			if (!g_swimJournal.load() && SwapWouldMoveHeldKeyLocked(map))
@@ -1604,7 +1718,65 @@ namespace unbinder
 			}
 			if (wanted) { ApplySwimLocked(map, "in water"); }
 			else { RestoreLandLocked(map, g_swimJournal.load() ? "journal open" : "out of water"); }
+			// The player never leaves the water sneaking: cleared on the way in, and again on the way out for a press that
+			// landed in the moment before the water layout came on. Never for the journal, which is not water.
+			if (VerticalOn() && !g_swimJournal.load()) { ClearSneakIfSet(wanted ? "in water" : "out of water"); }
 		}
+
+		bool AnyHeld(const std::array<std::atomic<std::uint16_t>, 3>& a_keys, std::int64_t a_now)
+		{
+			std::scoped_lock h(g_heldLock);
+			for (const auto& held : g_held)
+			{
+				if (held.device < 0 || held.device > 2 || a_now - held.seenMs > kHeldForgetMs) { continue; }
+				const auto key = a_keys[held.device].load(std::memory_order_relaxed);
+				if (key != kUnmapped && key == held.code) { return true; }
+			}
+			return false;
+		}
+
+		// The player's own slot of Actor::ModifyMovementData (NPCs have Character's, which this does not touch). Runs for the
+		// player every frame; out of water, and with the feature off, that is the one atomic read below. The translation is
+		// this frame's movement in game units and the character controller moves it, so walls, the floor and the water's
+		// physics stay the engine's. Underwater NG moves the player vertically in this same slot.
+		struct PlayerMovementData
+		{
+			static void Vertical(RE::PlayerCharacter* a_player, float a_delta, RE::NiPoint3& a_translation)
+			{
+				const auto* state = a_player->AsActorState();
+				if (!state || !state->IsSwimming() || a_delta <= 0.0f || !settings::general::swimVertical) { return; }
+				const auto now = NowMs();
+				const bool up = AnyHeld(g_swimUpKey, now);
+				const bool down = AnyHeld(g_swimDownKey, now);
+				if (up == down) { return; }  // neither, or both, which cancel
+				auto* controller = a_player->GetCharController();
+				if (!controller) { return; }
+				if (up && !controller->flags.any(RE::CHARACTER_FLAGS::kShouldersUnderWater))
+				{
+					// The engine's own surface: it sets this flag at 70% submerged and floats the player there. Swim Up stops
+					// here; only Jump, whose handler this never touches, leaves the water.
+					g_verticalStoppedAtSurface.fetch_add(1, std::memory_order_relaxed);
+					return;
+				}
+				if (down && controller->flags.any(RE::CHARACTER_FLAGS::kSupport))
+				{
+					g_verticalStoppedAtFloor.fetch_add(1, std::memory_order_relaxed);
+					return;
+				}
+				const float step = settings::general::swimVerticalSpeed * a_delta;
+				a_translation.z += up ? step : -step;
+				g_verticalFrames.fetch_add(1, std::memory_order_relaxed);
+				g_verticalLastStep.store(up ? step : -step, std::memory_order_relaxed);
+			}
+
+			static void thunk(RE::PlayerCharacter* a_this, float a_delta, RE::NiPoint3& a_translation, RE::NiPoint3& a_rotation)
+			{
+				func(a_this, a_delta, a_translation, a_rotation);
+				if (g_swimApplied.load(std::memory_order_relaxed)) { Vertical(a_this, a_delta, a_translation); }
+			}
+
+			static inline REL::Relocation<decltype(thunk)> func;
+		};
 
 		// Every frame the HUD advances. Reads the player's real swimming state, the one the game's own conditions read.
 		// Runs on the UI job, so the control map itself is only changed from the task it queues (as the journal's close does).
@@ -1648,6 +1820,16 @@ namespace unbinder
 		logger::info("hook: HUDMenu::AdvanceMovie (vtable {:X}, slot 5) wrapped; the player's swimming state is read after each HUD frame", vtbl.address());
 	}
 
+	void InstallSwimVertical()
+	{
+		static bool s_installed = false;
+		if (s_installed || !settings::general::swimVertical) { return; }
+		s_installed = true;
+		REL::Relocation<std::uintptr_t> vtbl{ RE::VTABLE_PlayerCharacter[0] };
+		PlayerMovementData::func = vtbl.write_vfunc(0x11A, PlayerMovementData::thunk);
+		logger::info("hook: PlayerCharacter::ModifyMovementData (vtable {:X}, slot 0x11A) wrapped, after every plugin's data-loaded hooks; Swim Up and Swim Down add to what they did", vtbl.address());
+	}
+
 	void OnJournalForSwim(bool a_open)
 	{
 		g_swimJournal.store(a_open);
@@ -1683,7 +1865,7 @@ namespace unbinder
 	{
 		std::scoped_lock l(g_lock);
 		g_swim = std::move(a_binds);
-		g_haveSwimLines.store(!g_swim.empty());
+		g_haveSwimLines.store(!g_swim.empty() || settings::general::swimVertical);
 	}
 
 	std::uint16_t SwimShownKey(std::string_view a_event, int a_device)
@@ -1691,35 +1873,16 @@ namespace unbinder
 		auto* map = RE::ControlMap::GetSingleton();
 		if (!map || a_device < 0 || a_device > 2) { return kUnmapped; }
 		std::scoped_lock l(g_lock);
-		for (const auto& b : g_swim)
+		const auto effective = EffectiveSwimLinesLocked(map);
+		for (const auto& b : effective)
 		{
 			if (b.device == a_device && IEquals(b.event, a_event)) { return b.key; }
 		}
+		// Swim Up or Swim Down with no line and no default on this device has no key
+		if (IsVerticalRow(a_event)) { return kUnmapped; }
 		// No line: the land key - unless a line took it, and then this control has no key in water
-		std::uint16_t land = kUnmapped;
-		if (g_swimApplied.load())
-		{
-			for (const auto& s : g_land[a_device])
-			{
-				if (IEquals(s.event, a_event) && s.key != kUnmapped)
-				{
-					land = s.key;
-					break;
-				}
-			}
-		}
-		else if (auto* mappings = MappingsFor(map, kGameplayContext, a_device))
-		{
-			for (auto* m : Find(*mappings, a_event))
-			{
-				if (m->inputKey != kUnmapped)
-				{
-					land = m->inputKey;
-					break;
-				}
-			}
-		}
-		for (const auto& b : g_swim)
+		const std::uint16_t land = LandKeyLocked(map, a_event, a_device);
+		for (const auto& b : effective)
 		{
 			if (b.device == a_device && b.key == land) { return kUnmapped; }
 		}
@@ -1733,8 +1896,9 @@ namespace unbinder
 			a_why = "AMF reserves that key";
 			return false;
 		}
+		auto* map = RE::ControlMap::GetSingleton();
 		std::scoped_lock l(g_lock);
-		for (const auto& b : g_swim)
+		for (const auto& b : map ? EffectiveSwimLinesLocked(map) : g_swim)
 		{
 			if (a_key != kUnmapped && b.device == a_device && b.key == a_key && !IEquals(b.event, a_event))
 			{
@@ -1771,7 +1935,11 @@ namespace unbinder
 			out += std::format(R"({}{{"event":"{}","device":"{}","key":"{}"}})", first ? "" : ",", EscapeJson(b.event), DeviceName(b.device), Hex(b.key));
 			first = false;
 		}
-		out += "]}";
+		out += std::format(R"(],"vertical":{{"on":{},"speed":{},"sneaking":{},"upKeys":["{}","{}","{}"],"downKeys":["{}","{}","{}"],"frames":{},"lastStep":{},"stoppedAtSurface":{},"stoppedAtFloor":{},"sneakClears":{}}}}})",
+						   VerticalOn() ? "true" : "false", settings::general::swimVerticalSpeed, state && state->IsSneaking() ? "true" : "false",
+						   Hex(g_swimUpKey[0].load()), Hex(g_swimUpKey[1].load()), Hex(g_swimUpKey[2].load()),
+						   Hex(g_swimDownKey[0].load()), Hex(g_swimDownKey[1].load()), Hex(g_swimDownKey[2].load()),
+						   g_verticalFrames.load(), g_verticalLastStep.load(), g_verticalStoppedAtSurface.load(), g_verticalStoppedAtFloor.load(), g_sneakClears.load());
 		return out;
 	}
 
