@@ -1314,22 +1314,15 @@ namespace unbinder
 	namespace
 	{
 		std::vector<Bind> g_swim;                          // [Swimming]; under g_lock
+		std::vector<Bind> g_horse;                         // [Horseback]; under g_lock
 		std::atomic<bool> g_haveSwimLines{ false };
-		std::atomic<bool> g_swimApplied{ false };          // the water layout is on the live map (written under g_lock)
-		std::atomic<bool> g_swimStable{ false };           // the player's swimming state, once it has settled
+		std::atomic<bool> g_haveHorseLines{ false };
+		std::atomic<int> g_layoutOn{ kLayoutLand };        // which layout is on the live map (written under g_lock)
+		std::atomic<int> g_stateStable{ kLayoutLand };     // the player's swimming or mounted state, once it has settled
 		std::atomic<bool> g_swimJournal{ false };          // the journal is open: the Controls page works on the land layout
 		std::atomic<bool> g_swimTaskQueued{ false };
 		std::atomic<int> g_swimFlips{ 0 };
 		std::atomic<int> g_swimWaited{ 0 };                // frames a swap waited for a held key
-
-		// Swim Up and Swim Down (Unbinder.h). The keys in force come from the last water layout; written under g_lock.
-		std::array<std::atomic<std::uint16_t>, 3> g_swimUpKey{};
-		std::array<std::atomic<std::uint16_t>, 3> g_swimDownKey{};
-		std::atomic<int> g_sneakClears{ 0 };
-		std::atomic<int> g_verticalFrames{ 0 };            // frames that really moved the player
-		std::atomic<int> g_verticalStoppedAtSurface{ 0 };  // frames Swim Up was held with the shoulders out of the water
-		std::atomic<int> g_verticalStoppedAtFloor{ 0 };    // frames Swim Down was held standing on something
-		std::atomic<float> g_verticalLastStep{ 0.0f };
 
 		struct SavedMapping
 		{
@@ -1355,20 +1348,20 @@ namespace unbinder
 
 		constexpr int kGameplayContext = 0;
 		constexpr std::int64_t kSwimSettleMs = 150;  // the state must hold this long: wading at the waterline flickers
+
+		std::vector<Bind>& LinesLocked(int a_layout) { return a_layout == kLayoutHorse ? g_horse : g_swim; }
+		const char* LayoutSection(int a_layout) { return a_layout == kLayoutHorse ? "Horseback" : "Swimming"; }
+
+		// The layout the player's state asks for. The journal's Controls page always works on the land layout.
+		int WantedLayout()
+		{
+			if (!settings::general::enabled || g_swimJournal.load()) { return kLayoutLand; }
+			const int state = g_stateStable.load();
+			if (state == kLayoutWater && g_haveSwimLines.load()) { return kLayoutWater; }
+			if (state == kLayoutHorse && g_haveHorseLines.load()) { return kLayoutHorse; }
+			return kLayoutLand;
+		}
 		constexpr std::int64_t kHeldForgetMs = 300;  // a held button repeats every frame; silence means its release was lost
-
-		constexpr const char* kSneakEvent = "Sneak";
-		constexpr const char* kSwimUpEvent = "Swim Up";
-		constexpr const char* kSwimDownEvent = "Swim Down";
-		// Swim Up's defaults. Its own buttons, never Jump's (the owner, 2026-11-03: "I want swim up and jump out of water to
-		// be separate things"). RB: a finger free while both thumbs steer, and its land use (Right Attack/Block in the
-		// shipped layout) does nothing while swimming. T: Wait's key on the stock map, which the shipped INI leaves free, and
-		// in reach of the WASD hand; no other mod of ours ships either (DEFAULT-KEYS.md).
-		constexpr std::uint16_t kSwimUpDefaultGamepad = 0x0200;
-		constexpr std::uint16_t kSwimUpDefaultKeyboard = 0x14;
-
-		bool IsVerticalRow(std::string_view a_event) { return IEquals(a_event, kSwimUpEvent) || IEquals(a_event, kSwimDownEvent); }
-		bool VerticalOn() { return settings::general::enabled && settings::general::swimVertical; }
 
 		// The SWIMMING block: the Gameplay controls that mean something in water. The keyboard page also gets the movement
 		// keys, which the controller has on its stick.
@@ -1378,8 +1371,14 @@ namespace unbinder
 			bool gamepad;
 		};
 		constexpr SwimRow kSwimRows[] = {
-			{ "Jump", true }, { kSwimUpEvent, true }, { kSwimDownEvent, true }, { "Sneak", true }, { "Sprint", true }, { "Activate", true }, { "Ready Weapon", true },
+			{ "Jump", true }, { "Sneak", true }, { "Sprint", true }, { "Activate", true }, { "Ready Weapon", true },
 			{ "Right Attack/Block", true }, { "Left Attack/Block", true }, { "Shout", true },
+			{ "Forward", false }, { "Back", false }, { "Strafe Left", false }, { "Strafe Right", false }, { "Run", false },
+		};
+		// The HORSEBACK block: the same, and the two a rider reaches for (the camera, and leaving the reins to Auto-Move).
+		constexpr SwimRow kHorseRows[] = {
+			{ "Jump", true }, { "Sneak", true }, { "Sprint", true }, { "Activate", true }, { "Ready Weapon", true },
+			{ "Right Attack/Block", true }, { "Left Attack/Block", true }, { "Shout", true }, { "Toggle POV", true }, { "Auto-Move", true },
 			{ "Forward", false }, { "Back", false }, { "Strafe Left", false }, { "Strafe Right", false }, { "Run", false },
 		};
 
@@ -1396,43 +1395,41 @@ namespace unbinder
 			{ "Up", true, false }, { "Down", true, false }, { "Left", true, false }, { "Right", true, false },
 		};
 
-		// The SWIMMING rows and the IN MAP rows join the menu rows' list once per session (caller holds g_lock). A row is
+		// The SWIMMING, HORSEBACK and IN MAP rows join the menu rows' list once per session (caller holds g_lock). A row is
 		// listed only for a control the map in force really has. The map's actions are not links in every control map, so
 		// IN MAP cannot depend on the link conversion: the owner's map and the shipped Fixed and Cleaned one have few or none.
 		void RecordContextRows(RE::ControlMap* a_map)
 		{
-			for (const auto& r : kSwimRows)
-			{
-				const std::string row = std::string("Swimming: ") + r.event;
-				if (std::any_of(g_delinked.begin(), g_delinked.end(), [&](const DelinkedAction& d) { return d.row == row; })) { continue; }
-				// Swim Up and Swim Down are this mod's: no mapping in the game's map, a row on both pages.
-				bool keyboard = IsVerticalRow(r.event), gamepad = IsVerticalRow(r.event);
-				for (int d = 0; d < 3; ++d)
+			const auto addRows = [&](const auto& a_rows, int a_layout, const char* a_block, const char* a_title) {
+				for (const auto& r : a_rows)
 				{
-					auto* mappings = MappingsFor(a_map, kGameplayContext, d);
-					if (!mappings || Find(*mappings, r.event).empty()) { continue; }
-					if (d == 2) { gamepad = r.gamepad; }
-					else { keyboard = true; }
+					const std::string row = std::string(a_block) + ": " + r.event;
+					if (std::any_of(g_delinked.begin(), g_delinked.end(), [&](const DelinkedAction& d) { return d.row == row; })) { continue; }
+					bool keyboard = false, gamepad = false;
+					for (int d = 0; d < 3; ++d)
+					{
+						auto* mappings = MappingsFor(a_map, kGameplayContext, d);
+						if (!mappings || Find(*mappings, r.event).empty()) { continue; }
+						if (d == 2) { gamepad = r.gamepad; }
+						else { keyboard = true; }
+					}
+					if (!keyboard && !gamepad) { continue; }
+					DelinkedAction d;
+					d.context = kGameplayContext;
+					d.event = r.event;
+					d.row = row;
+					d.block = a_block;
+					d.title = a_title;
+					d.action = r.event;
+					d.keyboardFamily = keyboard;
+					d.gamepad = gamepad;
+					d.layout = a_layout;
+					d.sheetContext = kGameplayContext;
+					g_delinked.push_back(std::move(d));
 				}
-				if (!keyboard && !gamepad) { continue; }
-				DelinkedAction d;
-				d.context = kGameplayContext;
-				d.event = r.event;
-				d.row = row;
-				d.block = "Swimming";
-				d.title = "SWIMMING";
-				d.action = r.event;
-				d.keyboardFamily = keyboard;
-				d.gamepad = gamepad;
-				d.swim = true;
-				d.sheetContext = kGameplayContext;
-				g_delinked.push_back(std::move(d));
-			}
-			// With Swim Up and Swim Down on, Sneak has no job in water, so it has no row; with them off, as before.
-			for (auto& d : g_delinked)
-			{
-				if (d.swim) { d.hidden = VerticalOn() ? IEquals(d.event, kSneakEvent) : IsVerticalRow(d.event); }
-			}
+			};
+			addRows(kSwimRows, kLayoutWater, "Swimming", "SWIMMING");
+			addRows(kHorseRows, kLayoutHorse, "Horseback", "HORSEBACK");
 
 			// IN MAP (the owner, 2026-11-03: "if there's not already a map context ... we need to add"). The engine's Map
 			// context has always been there and [Bound] lines already reach it; what was missing is rows for it.
@@ -1450,80 +1447,10 @@ namespace unbinder
 			}
 		}
 
-		// The first key a Gameplay control has on land, whichever layout is on the map now. Caller holds g_lock.
-		std::uint16_t LandKeyLocked(RE::ControlMap* a_map, std::string_view a_event, int a_device)
-		{
-			if (g_swimApplied.load())
-			{
-				for (const auto& s : g_land[a_device])
-				{
-					if (IEquals(s.event, a_event) && s.key != kUnmapped) { return s.key; }
-				}
-			}
-			else if (auto* mappings = MappingsFor(a_map, kGameplayContext, a_device))
-			{
-				for (auto* m : Find(*mappings, a_event))
-				{
-					if (m->inputKey != kUnmapped) { return m->inputKey; }
-				}
-			}
-			return kUnmapped;
-		}
-
-		// What the water layout really does: the [Swimming] lines, and with Swim Up and Swim Down on, Sneak with no key in
-		// water and the defaults of any row the player has not set. Swim Down's default is whatever Sneak holds on land, so
-		// the same press sinks. Swim Up's is its own. Caller holds g_lock.
-		std::vector<Bind> EffectiveSwimLinesLocked(RE::ControlMap* a_map)
-		{
-			std::vector<Bind> out;
-			const bool vertical = VerticalOn();
-			for (const auto& b : g_swim)
-			{
-				if (vertical ? IEquals(b.event, kSneakEvent) : IsVerticalRow(b.event)) { continue; }
-				out.push_back(b);
-			}
-			if (!vertical) { return out; }
-			const auto add = [&](const char* a_event, int a_device, std::uint16_t a_key) {
-				Bind b;
-				b.context = "Swimming";
-				b.event = a_event;
-				b.device = a_device;
-				b.key = a_key;
-				out.push_back(std::move(b));
-			};
-			const auto hasLine = [&](const char* a_event, int a_device) {
-				return std::any_of(g_swim.begin(), g_swim.end(), [&](const Bind& a_b) { return a_b.device == a_device && IEquals(a_b.event, a_event); });
-			};
-			for (int d = 0; d < 3; ++d)
-			{
-				const std::uint16_t sneak = LandKeyLocked(a_map, kSneakEvent, d);
-				if (sneak == kUnmapped) { continue; }
-				if (!hasLine(kSwimDownEvent, d)) { add(kSwimDownEvent, d, sneak); }
-				add(kSneakEvent, d, kUnmapped);
-			}
-			if (!hasLine(kSwimUpEvent, 0)) { add(kSwimUpEvent, 0, kSwimUpDefaultKeyboard); }
-			if (!hasLine(kSwimUpEvent, 2)) { add(kSwimUpEvent, 2, kSwimUpDefaultGamepad); }
-			return out;
-		}
-
-		// The game's own "stop sneaking" (Actor's sneak setter, 1.5.97 id 36926, off branch): the iIsInSneak graph variable and
-		// the state bit. SneakStop asks the behaviour graph to leave any sneak state it holds. Main thread only.
-		void ClearSneakIfSet(const char* a_reason)
-		{
-			auto* player = RE::PlayerCharacter::GetSingleton();
-			auto* state = player ? player->AsActorState() : nullptr;
-			if (!state || !state->IsSneaking()) { return; }
-			player->SetGraphVariableInt("iIsInSneak", 0);
-			state->actorState1.sneaking = 0;
-			player->NotifyAnimationGraph("SneakStop");
-			g_sneakClears.fetch_add(1);
-			logger::info("swimming ({}): the player was sneaking; sneak cleared", a_reason);
-		}
-
 		// Caller holds g_lock.
 		void RestoreLandLocked(RE::ControlMap* a_map, const char* a_reason)
 		{
-			if (!g_swimApplied.load()) { return; }
+			if (g_layoutOn.load() == kLayoutLand) { return; }
 			for (int d = 0; d < 3; ++d)
 			{
 				auto* mappings = MappingsFor(a_map, kGameplayContext, d);
@@ -1547,14 +1474,15 @@ namespace unbinder
 				}
 				SortByKey(*mappings);
 			}
-			g_swimApplied.store(false);
+			g_layoutOn.store(kLayoutLand);
 			g_swimFlips.fetch_add(1);
-			logger::info("swimming ({}): the land layout is back", a_reason);
+			logger::info("control layout ({}): the land layout is back", a_reason);
 		}
 
 		// Caller holds g_lock.
-		void ApplySwimLocked(RE::ControlMap* a_map, const char* a_reason)
+		void ApplyLayoutLocked(RE::ControlMap* a_map, int a_layout, const char* a_reason)
 		{
+			const char* section = LayoutSection(a_layout);
 			for (int d = 0; d < 3; ++d)
 			{
 				g_land[d].clear();
@@ -1565,20 +1493,13 @@ namespace unbinder
 					g_land[d].push_back({ m.eventID.c_str() ? m.eventID.c_str() : "", m.inputKey, m.modifier });
 				}
 			}
-			// g_swimApplied is still false here, so the land keys read in this come from the map, which nothing has changed yet.
-			const auto effective = EffectiveSwimLinesLocked(a_map);
-			for (int d = 0; d < 3; ++d)
-			{
-				g_swimUpKey[d].store(kUnmapped);
-				g_swimDownKey[d].store(kUnmapped);
-			}
 			std::string moved;
 			for (int d = 0; d < 3; ++d)
 			{
 				auto* mappings = MappingsFor(a_map, kGameplayContext, d);
 				if (!mappings) { continue; }
 				std::vector<const Bind*> lines;
-				for (const auto& b : effective)
+				for (const auto& b : LinesLocked(a_layout))
 				{
 					if (b.device == d) { lines.push_back(&b); }
 				}
@@ -1616,20 +1537,12 @@ namespace unbinder
 					}
 					if (d == 0 && IsAmfReserved(b->key))
 					{
-						logger::warn("swimming ({}): {}|keyboard -> {} refused: AMF reserves that key", a_reason, b->event, Hex(b->key));
+						logger::warn("{} ({}): {}|keyboard -> {} refused: AMF reserves that key", section, a_reason, b->event, Hex(b->key));
 						continue;
 					}
 					if (std::find(given.begin(), given.end(), b->key) != given.end())
 					{
-						logger::warn("swimming ({}): {}|{} -> {} not applied: an earlier [Swimming] line was given it first", a_reason, b->event, DeviceName(d), Hex(b->key));
-						continue;
-					}
-					if (IsVerticalRow(b->event))
-					{
-						// No mapping: the press is read raw (the input sink) and moves the player in PlayerMovementData below.
-						(IEquals(b->event, kSwimUpEvent) ? g_swimUpKey : g_swimDownKey)[d].store(b->key);
-						given.push_back(b->key);
-						moved += std::format("{}{} {} {}", moved.empty() ? "" : ", ", b->event, DeviceName(d), Hex(b->key));
+						logger::warn("{} ({}): {}|{} -> {} not applied: an earlier line of that block was given it first", section, a_reason, b->event, DeviceName(d), Hex(b->key));
 						continue;
 					}
 					auto found = Find(*mappings, b->event);
@@ -1652,7 +1565,7 @@ namespace unbinder
 						}
 						if (!have)
 						{
-							logger::warn("swimming ({}): {} is not a control this game has; the [Swimming] line does nothing", a_reason, b->event);
+							logger::warn("{} ({}): {} is not a control this game has; the line does nothing", section, a_reason, b->event);
 							continue;
 						}
 						copy.inputKey = b->key;
@@ -1666,34 +1579,39 @@ namespace unbinder
 				}
 				SortByKey(*mappings);
 			}
-			g_swimApplied.store(true);
+			g_layoutOn.store(a_layout);
 			g_swimFlips.fetch_add(1);
-			logger::info("swimming ({}): the water layout is on: {}", a_reason, moved);
+			logger::info("{} ({}): that layout is on: {}", section, a_reason, moved);
 		}
 
 		// True while a key the swap would move is down. Caller holds g_lock.
 		bool SwapWouldMoveHeldKeyLocked(RE::ControlMap* a_map)
 		{
 			std::vector<std::pair<int, std::uint32_t>> keys;
-			for (const auto& b : EffectiveSwimLinesLocked(a_map))
-			{
-				if (b.key != kUnmapped) { keys.emplace_back(b.device, b.key); }
-				if (IsVerticalRow(b.event)) { continue; }
-				if (g_swimApplied.load())
+			const int on = g_layoutOn.load();
+			const auto note = [&](const std::vector<Bind>& a_lines) {
+				for (const auto& b : a_lines)
 				{
-					for (const auto& s : g_land[b.device])
+					if (b.key != kUnmapped) { keys.emplace_back(b.device, b.key); }
+					if (on != kLayoutLand)
 					{
-						if (IEquals(s.event, b.event) && s.key != kUnmapped) { keys.emplace_back(b.device, s.key); }
+						for (const auto& s : g_land[b.device])
+						{
+							if (IEquals(s.event, b.event) && s.key != kUnmapped) { keys.emplace_back(b.device, s.key); }
+						}
+					}
+					else if (auto* mappings = MappingsFor(a_map, kGameplayContext, b.device))
+					{
+						for (auto* m : Find(*mappings, b.event))
+						{
+							if (m->inputKey != kUnmapped) { keys.emplace_back(b.device, m->inputKey); }
+						}
 					}
 				}
-				else if (auto* mappings = MappingsFor(a_map, kGameplayContext, b.device))
-				{
-					for (auto* m : Find(*mappings, b.event))
-					{
-						if (m->inputKey != kUnmapped) { keys.emplace_back(b.device, m->inputKey); }
-					}
-				}
-			}
+			};
+			// The layout going off and the one coming on.
+			if (on != kLayoutLand) { note(LinesLocked(on)); }
+			if (const int wanted = WantedLayout(); wanted != kLayoutLand && wanted != on) { note(LinesLocked(wanted)); }
 			const auto now = NowMs();
 			std::scoped_lock h(g_heldLock);
 			std::erase_if(g_held, [&](const HeldButton& a_h) { return now - a_h.seenMs > kHeldForgetMs; });
@@ -1708,96 +1626,49 @@ namespace unbinder
 			auto* map = RE::ControlMap::GetSingleton();
 			if (!map) { return; }
 			std::scoped_lock l(g_lock);
-			const bool wanted = settings::general::enabled && g_haveSwimLines.load() && g_swimStable.load() && !g_swimJournal.load();
-			if (wanted == g_swimApplied.load()) { return; }
+			const int wanted = WantedLayout();
+			if (wanted == g_layoutOn.load()) { return; }
 			// The journal's Controls page is never made to wait: it needs the land layout now.
 			if (!g_swimJournal.load() && SwapWouldMoveHeldKeyLocked(map))
 			{
 				g_swimWaited.fetch_add(1);
 				return;  // the next HUD frame asks again
 			}
-			if (wanted) { ApplySwimLocked(map, "in water"); }
-			else { RestoreLandLocked(map, g_swimJournal.load() ? "journal open" : "out of water"); }
-			// The player never leaves the water sneaking: cleared on the way in, and again on the way out for a press that
-			// landed in the moment before the water layout came on. Never for the journal, which is not water.
-			if (VerticalOn() && !g_swimJournal.load()) { ClearSneakIfSet(wanted ? "in water" : "out of water"); }
+			RestoreLandLocked(map, g_swimJournal.load() ? "journal open" : "the player's state changed");
+			if (wanted != kLayoutLand) { ApplyLayoutLocked(map, wanted, LayoutWhere(wanted)); }
 		}
 
-		bool AnyHeld(const std::array<std::atomic<std::uint16_t>, 3>& a_keys, std::int64_t a_now)
+		// A horse, or any other mount but a dragon: a dragon's back is its own set of controls and stays as it is.
+		bool OnHorseback(RE::PlayerCharacter* a_player)
 		{
-			std::scoped_lock h(g_heldLock);
-			for (const auto& held : g_held)
-			{
-				if (held.device < 0 || held.device > 2 || a_now - held.seenMs > kHeldForgetMs) { continue; }
-				const auto key = a_keys[held.device].load(std::memory_order_relaxed);
-				if (key != kUnmapped && key == held.code) { return true; }
-			}
-			return false;
+			if (!a_player->IsOnMount()) { return false; }
+			RE::NiPointer<RE::Actor> mount;
+			if (!a_player->GetMount(mount) || !mount) { return false; }
+			return !mount->HasKeywordString("ActorTypeDragon");
 		}
 
-		// The player's own slot of Actor::ModifyMovementData (NPCs have Character's, which this does not touch). Runs for the
-		// player every frame; out of water, and with the feature off, that is the one atomic read below. The translation is
-		// this frame's movement in game units and the character controller moves it, so walls, the floor and the water's
-		// physics stay the engine's. Underwater NG moves the player vertically in this same slot.
-		struct PlayerMovementData
-		{
-			static void Vertical(RE::PlayerCharacter* a_player, float a_delta, RE::NiPoint3& a_translation)
-			{
-				const auto* state = a_player->AsActorState();
-				if (!state || !state->IsSwimming() || a_delta <= 0.0f || !settings::general::swimVertical) { return; }
-				const auto now = NowMs();
-				const bool up = AnyHeld(g_swimUpKey, now);
-				const bool down = AnyHeld(g_swimDownKey, now);
-				if (up == down) { return; }  // neither, or both, which cancel
-				auto* controller = a_player->GetCharController();
-				if (!controller) { return; }
-				if (up && !controller->flags.any(RE::CHARACTER_FLAGS::kShouldersUnderWater))
-				{
-					// The engine's own surface: it sets this flag at 70% submerged and floats the player there. Swim Up stops
-					// here; only Jump, whose handler this never touches, leaves the water.
-					g_verticalStoppedAtSurface.fetch_add(1, std::memory_order_relaxed);
-					return;
-				}
-				if (down && controller->flags.any(RE::CHARACTER_FLAGS::kSupport))
-				{
-					g_verticalStoppedAtFloor.fetch_add(1, std::memory_order_relaxed);
-					return;
-				}
-				const float step = settings::general::swimVerticalSpeed * a_delta;
-				a_translation.z += up ? step : -step;
-				g_verticalFrames.fetch_add(1, std::memory_order_relaxed);
-				g_verticalLastStep.store(up ? step : -step, std::memory_order_relaxed);
-			}
-
-			static void thunk(RE::PlayerCharacter* a_this, float a_delta, RE::NiPoint3& a_translation, RE::NiPoint3& a_rotation)
-			{
-				func(a_this, a_delta, a_translation, a_rotation);
-				if (g_swimApplied.load(std::memory_order_relaxed)) { Vertical(a_this, a_delta, a_translation); }
-			}
-
-			static inline REL::Relocation<decltype(thunk)> func;
-		};
-
-		// Every frame the HUD advances. Reads the player's real swimming state, the one the game's own conditions read.
-		// Runs on the UI job, so the control map itself is only changed from the task it queues (as the journal's close does).
+		// Every frame the HUD advances. Reads the player's real swimming and mounted state, the ones the game's own conditions
+		// read, and only those some line needs. Runs on the UI job, so the control map itself is only changed from the task it
+		// queues (as the journal's close does).
 		void OnHudFrame()
 		{
-			if (!g_haveSwimLines.load(std::memory_order_relaxed) && !g_swimApplied.load(std::memory_order_relaxed)) { return; }
+			const bool haveSwim = g_haveSwimLines.load(std::memory_order_relaxed);
+			const bool haveHorse = g_haveHorseLines.load(std::memory_order_relaxed);
+			if (!haveSwim && !haveHorse && g_layoutOn.load(std::memory_order_relaxed) == kLayoutLand) { return; }
 			auto* player = RE::PlayerCharacter::GetSingleton();
 			const auto* state = player ? player->AsActorState() : nullptr;
 			if (!state) { return; }
-			static bool s_last = false;
+			static int s_last = kLayoutLand;
 			static std::int64_t s_changedAt = 0;
-			const bool swimming = state->IsSwimming();
+			const int current = haveHorse && OnHorseback(player) ? kLayoutHorse : (haveSwim && state->IsSwimming() ? kLayoutWater : kLayoutLand);
 			const auto now = NowMs();
-			if (swimming != s_last)
+			if (current != s_last)
 			{
-				s_last = swimming;
+				s_last = current;
 				s_changedAt = now;
 			}
-			if (now - s_changedAt >= kSwimSettleMs) { g_swimStable.store(s_last); }
-			const bool wanted = settings::general::enabled && g_haveSwimLines.load() && g_swimStable.load() && !g_swimJournal.load();
-			if (wanted == g_swimApplied.load() || g_swimTaskQueued.exchange(true)) { return; }
+			if (now - s_changedAt >= kSwimSettleMs) { g_stateStable.store(s_last); }
+			if (WantedLayout() == g_layoutOn.load() || g_swimTaskQueued.exchange(true)) { return; }
 			if (auto* tasks = SKSE::GetTaskInterface()) { tasks->AddTask([]() { SwimSync(); }); }
 			else { g_swimTaskQueued.store(false); }
 		}
@@ -1820,21 +1691,11 @@ namespace unbinder
 		logger::info("hook: HUDMenu::AdvanceMovie (vtable {:X}, slot 5) wrapped; the player's swimming state is read after each HUD frame", vtbl.address());
 	}
 
-	void InstallSwimVertical()
-	{
-		static bool s_installed = false;
-		if (s_installed || !settings::general::swimVertical) { return; }
-		s_installed = true;
-		REL::Relocation<std::uintptr_t> vtbl{ RE::VTABLE_PlayerCharacter[0] };
-		PlayerMovementData::func = vtbl.write_vfunc(0x11A, PlayerMovementData::thunk);
-		logger::info("hook: PlayerCharacter::ModifyMovementData (vtable {:X}, slot 0x11A) wrapped, after every plugin's data-loaded hooks; Swim Up and Swim Down add to what they did", vtbl.address());
-	}
-
 	void OnJournalForSwim(bool a_open)
 	{
 		g_swimJournal.store(a_open);
 		// The HUD does not always advance behind the journal, so its opening asks for the land layout itself.
-		if (a_open && g_swimApplied.load() && !g_swimTaskQueued.exchange(true))
+		if (a_open && g_layoutOn.load() != kLayoutLand && !g_swimTaskQueued.exchange(true))
 		{
 			if (auto* tasks = SKSE::GetTaskInterface()) { tasks->AddTask([]() { SwimSync(); }); }
 			else { g_swimTaskQueued.store(false); }
@@ -1843,7 +1704,7 @@ namespace unbinder
 
 	void NoteButton(int a_device, std::uint32_t a_code, bool a_up)
 	{
-		if (!g_haveSwimLines.load(std::memory_order_relaxed)) { return; }
+		if (!g_haveSwimLines.load(std::memory_order_relaxed) && !g_haveHorseLines.load(std::memory_order_relaxed)) { return; }
 		const auto now = NowMs();
 		std::scoped_lock h(g_heldLock);
 		const auto it = std::find_if(g_held.begin(), g_held.end(), [&](const HeldButton& a_h) { return a_h.device == a_device && a_h.code == a_code; });
@@ -1865,59 +1726,97 @@ namespace unbinder
 	{
 		std::scoped_lock l(g_lock);
 		g_swim = std::move(a_binds);
-		g_haveSwimLines.store(!g_swim.empty() || settings::general::swimVertical);
+		g_haveSwimLines.store(!g_swim.empty());
 	}
 
-	std::uint16_t SwimShownKey(std::string_view a_event, int a_device)
+	std::vector<Bind> GetHorseBinds()
+	{
+		std::scoped_lock l(g_lock);
+		return g_horse;
+	}
+
+	void SetHorseBinds(std::vector<Bind> a_binds)
+	{
+		std::scoped_lock l(g_lock);
+		g_horse = std::move(a_binds);
+		g_haveHorseLines.store(!g_horse.empty());
+	}
+
+	const char* LayoutWhere(int a_layout)
+	{
+		return a_layout == kLayoutHorse ? "on horseback" : "in water";
+	}
+
+	std::uint16_t LayoutShownKey(int a_layout, std::string_view a_event, int a_device)
 	{
 		auto* map = RE::ControlMap::GetSingleton();
 		if (!map || a_device < 0 || a_device > 2) { return kUnmapped; }
 		std::scoped_lock l(g_lock);
-		const auto effective = EffectiveSwimLinesLocked(map);
-		for (const auto& b : effective)
+		const auto& lines = LinesLocked(a_layout);
+		for (const auto& b : lines)
 		{
 			if (b.device == a_device && IEquals(b.event, a_event)) { return b.key; }
 		}
-		// Swim Up or Swim Down with no line and no default on this device has no key
-		if (IsVerticalRow(a_event)) { return kUnmapped; }
-		// No line: the land key - unless a line took it, and then this control has no key in water
-		const std::uint16_t land = LandKeyLocked(map, a_event, a_device);
-		for (const auto& b : effective)
+		// No line: the land key - unless a line took it, and then this control has no key in this layout
+		std::uint16_t land = kUnmapped;
+		if (g_layoutOn.load() != kLayoutLand)
+		{
+			for (const auto& s : g_land[a_device])
+			{
+				if (IEquals(s.event, a_event) && s.key != kUnmapped)
+				{
+					land = s.key;
+					break;
+				}
+			}
+		}
+		else if (auto* mappings = MappingsFor(map, kGameplayContext, a_device))
+		{
+			for (auto* m : Find(*mappings, a_event))
+			{
+				if (m->inputKey != kUnmapped)
+				{
+					land = m->inputKey;
+					break;
+				}
+			}
+		}
+		for (const auto& b : lines)
 		{
 			if (b.device == a_device && b.key == land) { return kUnmapped; }
 		}
 		return land;
 	}
 
-	bool SetSwimKey(std::string_view a_event, int a_device, std::uint16_t a_key, std::string& a_why)
+	bool SetLayoutKey(int a_layout, std::string_view a_event, int a_device, std::uint16_t a_key, std::string& a_why)
 	{
 		if (a_key != kUnmapped && a_device == 0 && IsAmfReserved(a_key))
 		{
 			a_why = "AMF reserves that key";
 			return false;
 		}
-		auto* map = RE::ControlMap::GetSingleton();
 		std::scoped_lock l(g_lock);
-		for (const auto& b : map ? EffectiveSwimLinesLocked(map) : g_swim)
+		auto& lines = LinesLocked(a_layout);
+		for (const auto& b : lines)
 		{
 			if (a_key != kUnmapped && b.device == a_device && b.key == a_key && !IEquals(b.event, a_event))
 			{
-				a_why = std::format("\"{}\" already holds it in water", b.event);
+				a_why = std::format("\"{}\" already holds it {}", b.event, LayoutWhere(a_layout));
 				return false;
 			}
 		}
-		const auto it = std::find_if(g_swim.begin(), g_swim.end(), [&](const Bind& b) { return b.device == a_device && IEquals(b.event, a_event); });
-		if (it != g_swim.end()) { it->key = a_key; }
+		const auto it = std::find_if(lines.begin(), lines.end(), [&](const Bind& b) { return b.device == a_device && IEquals(b.event, a_event); });
+		if (it != lines.end()) { it->key = a_key; }
 		else
 		{
 			Bind b;
-			b.context = "Swimming";
+			b.context = LayoutSection(a_layout);
 			b.event = std::string(a_event);
 			b.device = a_device;
 			b.key = a_key;
-			g_swim.push_back(std::move(b));
+			lines.push_back(std::move(b));
 		}
-		g_haveSwimLines.store(true);
+		(a_layout == kLayoutHorse ? g_haveHorseLines : g_haveSwimLines).store(true);
 		return true;
 	}
 
@@ -1926,21 +1825,20 @@ namespace unbinder
 		auto* player = RE::PlayerCharacter::GetSingleton();
 		const auto* state = player ? player->AsActorState() : nullptr;
 		std::scoped_lock l(g_lock);
-		std::string out = std::format(R"("swimming":{{"isSwimming":{},"settled":{},"waterLayoutOn":{},"journalOpen":{},"swaps":{},"framesWaitedForHeldKey":{},"lines":[)",
-									  state && state->IsSwimming() ? "true" : "false", g_swimStable.load() ? "true" : "false", g_swimApplied.load() ? "true" : "false",
-									  g_swimJournal.load() ? "true" : "false", g_swimFlips.load(), g_swimWaited.load());
-		bool first = true;
-		for (const auto& b : g_swim)
-		{
-			out += std::format(R"({}{{"event":"{}","device":"{}","key":"{}"}})", first ? "" : ",", EscapeJson(b.event), DeviceName(b.device), Hex(b.key));
-			first = false;
-		}
-		out += std::format(R"(],"vertical":{{"on":{},"speed":{},"sneaking":{},"upKeys":["{}","{}","{}"],"downKeys":["{}","{}","{}"],"frames":{},"lastStep":{},"stoppedAtSurface":{},"stoppedAtFloor":{},"sneakClears":{}}}}})",
-						   VerticalOn() ? "true" : "false", settings::general::swimVerticalSpeed, state && state->IsSneaking() ? "true" : "false",
-						   Hex(g_swimUpKey[0].load()), Hex(g_swimUpKey[1].load()), Hex(g_swimUpKey[2].load()),
-						   Hex(g_swimDownKey[0].load()), Hex(g_swimDownKey[1].load()), Hex(g_swimDownKey[2].load()),
-						   g_verticalFrames.load(), g_verticalLastStep.load(), g_verticalStoppedAtSurface.load(), g_verticalStoppedAtFloor.load(), g_sneakClears.load());
-		return out;
+		const int on = g_layoutOn.load();
+		const int stable = g_stateStable.load();
+		const auto linesJson = [](const std::vector<Bind>& a_lines) {
+			std::string out;
+			for (const auto& b : a_lines)
+			{
+				out += std::format(R"({}{{"event":"{}","device":"{}","key":"{}"}})", out.empty() ? "" : ",", EscapeJson(b.event), DeviceName(b.device), Hex(b.key));
+			}
+			return out;
+		};
+		return std::format(R"("swimming":{{"isSwimming":{},"settled":{},"waterLayoutOn":{},"journalOpen":{},"swaps":{},"framesWaitedForHeldKey":{},"lines":[{}]}},"horseback":{{"onMount":{},"settled":{},"horseLayoutOn":{},"lines":[{}]}})",
+						   state && state->IsSwimming() ? "true" : "false", stable == kLayoutWater ? "true" : "false", on == kLayoutWater ? "true" : "false",
+						   g_swimJournal.load() ? "true" : "false", g_swimFlips.load(), g_swimWaited.load(), linesJson(g_swim),
+						   player && player->IsOnMount() ? "true" : "false", stable == kLayoutHorse ? "true" : "false", on == kLayoutHorse ? "true" : "false", linesJson(g_horse));
 	}
 
 	void ApplyAll(const char* a_reason)
@@ -1948,10 +1846,10 @@ namespace unbinder
 		auto* map = RE::ControlMap::GetSingleton();
 		if (!map) { logger::warn("apply ({}): the ControlMap singleton is null; nothing applied", a_reason); return; }
 		std::scoped_lock l(g_lock);
-		// The lists are written over the land layout; the water layout, if the player is in water, returns on the next HUD frame.
+		// The lists are written over the land layout; a water or horseback layout returns on the next HUD frame.
 		RestoreLandLocked(map, a_reason);
 		g_lastConverted = ConvertLinkedMappings(map, a_reason);  // before the lists, bEnabled=0 included
-		RecordContextRows(map);  // the SWIMMING and IN MAP rows, from the keys the map has before the lists change them
+		RecordContextRows(map);  // the SWIMMING, HORSEBACK and IN MAP rows, from the keys the map has before the lists change them
 		g_convertedTotal += g_lastConverted;
 		if (g_lastConverted) { logger::info("apply ({}): {} linked menu mapping(s) turned into separate mappings", a_reason, g_lastConverted); }
 		// The DEFAULT F / Y, before the lists: an [Unbound] or [Bound] line for Item Menus|YButton - the Favorite Item row -

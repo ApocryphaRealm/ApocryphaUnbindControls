@@ -292,9 +292,9 @@ namespace DevBenchTool
 				a_write(a_sink, std::format(R"({{"ok":{},"op":"deliver","filesWritten":{}}})", ran ? "true" : "false", files).c_str());
 				return;
 			}
-			if (op == "swim")
+			if (op == "swim" || op == "horse")
 			{
-				a_write(a_sink, std::format("{{\"ok\":true,\"op\":\"swim\",{}}}", unbinder::SwimStateJson()).c_str());
+				a_write(a_sink, std::format("{{\"ok\":true,\"op\":\"{}\",{}}}", op, unbinder::SwimStateJson()).c_str());
 				return;
 			}
 			if (op == "apply")

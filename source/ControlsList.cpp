@@ -760,10 +760,10 @@ namespace controlslist
 		{
 			for (const int device : a_gamepad ? std::vector<int>{ 2 } : std::vector<int>{ 0, 1 })
 			{
-				if (a_d.swim)
+				if (a_d.layout != unbinder::kLayoutLand)
 				{
-					// A SWIMMING row shows the key the control has in water, not what the live map holds now.
-					const std::uint16_t k = unbinder::SwimShownKey(a_d.event, device);
+					// A SWIMMING or HORSEBACK row shows the key the control has in that layout, not what the live map holds now.
+					const std::uint16_t k = unbinder::LayoutShownKey(a_d.layout, a_d.event, device);
 					if (k != kUnmappedID) { return RowButtonName(k, device); }
 					continue;
 				}
@@ -775,16 +775,16 @@ namespace controlslist
 			return {};
 		}
 
-		// a_swim: the SWIMMING block, which goes straight after GAMEPLAY, or every other menu block, after the extra rows.
-		bool AddDelinkedRows(RE::GFxMovieView* a_movie, RE::GFxValue& a_entries, bool a_gamepad, bool a_swim)
+		// a_layout: the SWIMMING or HORSEBACK block, which go straight after GAMEPLAY, or kLayoutLand for every other menu block, after the extra rows.
+		bool AddDelinkedRows(RE::GFxMovieView* a_movie, RE::GFxValue& a_entries, bool a_gamepad, int a_layout)
 		{
 			auto list = unbinder::GetDelinked();
 			// One block per column, in the game's context order; inside a block, controlmap.txt's order. A row may be listed in
 			// another menu's column (Charge Item under ITEMS), and hidden rows are left off (2026-09-28).
-			std::erase_if(list, [&](const unbinder::DelinkedAction& a_d) { return a_d.hidden || a_d.swim != a_swim; });
+			std::erase_if(list, [&](const unbinder::DelinkedAction& a_d) { return a_d.hidden || a_d.layout != a_layout; });
 			// [Functions] rows that belong to a block of their own (Map Selector: the player sets it with the other map
 			// buttons). A function row is not a menu action, so it follows that block's rows.
-			const auto functionList = a_swim ? std::vector<functions::Function>{} : functions::GetFunctions();
+			const auto functionList = a_layout != unbinder::kLayoutLand ? std::vector<functions::Function>{} : functions::GetFunctions();
 			if (list.empty() && functionList.empty()) { return false; }
 			std::stable_sort(list.begin(), list.end(), [](const unbinder::DelinkedAction& a_l, const unbinder::DelinkedAction& a_r) { return a_l.sheetContext < a_r.sheetContext; });
 			std::vector<std::string> present;
@@ -980,21 +980,22 @@ namespace controlslist
 					SetRemapResult(std::format("\"{}\": the remap ended with no key recorded; the row is unchanged", event));
 					return;
 				}
-				if (menuRow.swim)
+				if (menuRow.layout != unbinder::kLayoutLand)
 				{
-					// A SWIMMING row writes its [Swimming] line: nothing on the live map changes until the player is in water.
-					const std::uint16_t shown = unbinder::SwimShownKey(menuRow.event, pressed.device);
+					// A SWIMMING or HORSEBACK row writes its line: nothing on the live map changes until the player is in that state.
+					const char* where = unbinder::LayoutWhere(menuRow.layout);
+					const std::uint16_t shown = unbinder::LayoutShownKey(menuRow.layout, menuRow.event, pressed.device);
 					const bool own = shown == static_cast<std::uint16_t>(pressed.code);
 					std::string why;
 					std::string text;
-					if (!unbinder::SetSwimKey(menuRow.event, pressed.device, own ? static_cast<std::uint16_t>(kUnmappedID) : static_cast<std::uint16_t>(pressed.code), why))
+					if (!unbinder::SetLayoutKey(menuRow.layout, menuRow.event, pressed.device, own ? static_cast<std::uint16_t>(kUnmappedID) : static_cast<std::uint16_t>(pressed.code), why))
 					{
 						text = std::format("\"{}\": {} refused - {}", event, pressedText, why);
 					}
 					else
 					{
-						text = own ? std::format("\"{}\": its own key pressed again ({}); no key in water on the {}", event, pressedText, unbinder::DeviceName(pressed.device)) :
-						             std::format("\"{}\": bound to {} in water", event, pressedText);
+						text = own ? std::format("\"{}\": its own key pressed again ({}); no key {} on the {}", event, pressedText, where, unbinder::DeviceName(pressed.device)) :
+						             std::format("\"{}\": bound to {} {}", event, pressedText, where);
 						settings::Save();
 					}
 					SetRemapResult(text);
@@ -1267,9 +1268,10 @@ namespace controlslist
 				changed = AddMissingRows(a_movie, entries, gamepad);
 				// Both are asked, and the order matters: the vanilla rows this mod puts back are placed by
 				// controlmap.txt order, and the extra rows go after all of them.
-				changed = AddDelinkedRows(a_movie, entries, gamepad, true) || changed;
+				changed = AddDelinkedRows(a_movie, entries, gamepad, unbinder::kLayoutWater) || changed;
+				changed = AddDelinkedRows(a_movie, entries, gamepad, unbinder::kLayoutHorse) || changed;
 				changed = AddFunctionRows(a_movie, entries, gamepad) || changed;
-				changed = AddDelinkedRows(a_movie, entries, gamepad, false) || changed;
+				changed = AddDelinkedRows(a_movie, entries, gamepad, unbinder::kLayoutLand) || changed;
 				changed = AddGameplayTitle(a_movie, entries) || changed;
 			}
 			if (changed)
@@ -1645,8 +1647,8 @@ namespace controlslist
 					g_sheet.captureEvent.clear();
 					if (unbinder::FindDelinkedRow(key, menuRow))
 					{
-						// A SWIMMING row is decided in EvaluateRemap, like an extra row: its key goes to [Swimming], not the live map.
-						if (!menuRow.swim)
+						// A SWIMMING or HORSEBACK row is decided in EvaluateRemap, like an extra row: its key goes to its list, not the live map.
+						if (menuRow.layout == unbinder::kLayoutLand)
 						{
 							g_sheet.captureContext = menuRow.context;
 							g_sheet.captureEvent = menuRow.event;

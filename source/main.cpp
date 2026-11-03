@@ -1,7 +1,7 @@
 // Unbind Vanilla Controls - own code, GPL-3.0-or-later (2026-09-13). Leaves the vanilla controls listed in its INI with
 // no key at all, by writing the engine's own "unmapped" value into the live control map, and draws those rows of
-// the game's Controls list with no key (ControlsList.h). No menu of its own, three hooks (the Journal Menu's AdvanceMovie, the
-// HUD's for the swimming context's state read, and the player's ModifyMovementData for Swim Up and Swim Down), no ESP, no scripts.
+// the game's Controls list with no key (ControlsList.h). No menu of its own, two hooks (the Journal Menu's AdvanceMovie, and the
+// HUD's for the swimming and horseback contexts' state read), no ESP, no scripts.
 // Since 1.0.7 a remap made in the game's Controls menu is kept in this mod's INI and the game's ControlMap_Custom.txt is removed
 // (bKeepRemapsInIni).
 #include "PCH.h"
@@ -42,13 +42,11 @@ namespace
 			DevBenchTool::Init(true);
 			break;
 		case SKSE::MessagingInterface::kPostLoadGame:
-			unbinder::InstallSwimVertical();
 			unbinder::ApplyAll("game loaded");
 			// Input Manager fills its action list in its own kDataLoaded handler, which may come after ours (1.2.0)
 			if (functions::ApiRowsAtFirstLoad("game loaded") > 0) { settings::Save(); }
 			break;
 		case SKSE::MessagingInterface::kNewGame:
-			unbinder::InstallSwimVertical();
 			unbinder::ApplyAll("new game");
 			if (functions::ApiRowsAtFirstLoad("new game") > 0) { settings::Save(); }
 			break;

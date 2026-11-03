@@ -1,4 +1,4 @@
-﻿Unbind Vanilla Controls
+Unbind Vanilla Controls
 Version 1.3.0
 
 Skyrim's own Controls menu can only move a control to another key. It cannot leave a control with no
@@ -26,16 +26,6 @@ centred, the highlight never lands on it, and every other row does exactly what 
 Works with the game's own journal and journals built on it, such as SkyUI's. Quest Journal Overhaul -
 Entire Journal Redesigned hides System rows from its own MCM settings, so this mod leaves that journal
 alone.
-
-SWIMMING UP AND DOWN
-The game has no button for rising or sinking in water. This mod adds two, in the SWIMMING block of the Controls page:
-Swim Up (RB, or T on the keyboard) and Swim Down (whatever key Sneak has). Hold one to rise or sink at any camera angle.
-Rising stops at the surface and sinking stops at the bottom. Sneak does not sneak in water, so you never climb out still
-sneaking, and if you walk into water sneaking, that ends as you start to swim. Jump keeps its own key and is what leaves
-the water: at the surface it does the game's own jump, and deeper down it does nothing, as in the unmodded game.
-While you are in water, the button Swim Up takes does nothing else; on land it goes back to what it was (RB is Right
-Attack/Block in the shipped layout). Speed and an off switch are in the INI: fSwimVerticalSpeed and bSwimVertical.
-Works beside look-pitch swimming, and with Underwater NG and sprint swimming mods: the movement is added to theirs.
 
 THE CONTROL MAP (INSTALLER CHOICE)
 The installer offers Controlmap.txt Fixed and Cleaned - Updated by DEEJMASTER333 and others, with
@@ -164,7 +154,7 @@ WHAT CHANGED
 
 Version 1.3.0
 Added a SWIMMING block on the Controls page: buttons that apply only while you are in water ([Swimming] in the INI). Everything goes back the moment you are out of the water.
-Added Swim Up and Swim Down, held to rise and sink, each with its own row. Sneak no longer sneaks in water, and Jump stays on its own key.
+Added a HORSEBACK block on the Controls page: buttons that apply only while you are mounted ([Horseback] in the INI). Everything goes back the moment you dismount.
 Added an IN MAP block that is always listed: the world map's own buttons, bound for the map alone.
 Added a Map Selector row in IN MAP for World Map Selector for Controller.
 

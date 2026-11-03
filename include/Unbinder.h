@@ -170,7 +170,7 @@ namespace unbinder
 		bool fixed = false;          // the Favourite button: never changed
 		int sheetContext = 0;        // the context whose column the row is listed in (Charge Item sits with ITEMS)
 		bool hidden = false;         // separate mapping kept, but no row on the Controls page
-		bool swim = false;           // a SWIMMING row: event is the Gameplay control, its key lives in the [Swimming] list
+		int layout = 0;              // a SWIMMING or HORSEBACK row (kLayoutWater, kLayoutHorse): event is the Gameplay control, its key lives in that block's list
 	};
 	std::vector<DelinkedAction> GetDelinked();
 	bool FindDelinkedRow(std::string_view a_row, DelinkedAction& a_out);
@@ -186,22 +186,27 @@ namespace unbinder
 	// A control with no line keeps its land key. The swap waits while a key it would move is held, so a release
 	// never lands on another control (a stuck sprint). The Controls page always works on the land layout: the journal
 	// opening puts the land layout back and its closing lets the water one return.
+	//
+	// THE HORSEBACK CONTEXT (1.3.0; the owner, 2026-11-03: "controls can be bound separately while mounted on a horse"). The
+	// same thing for the state "the player is mounted" (Actor::IsOnMount; a dragon's back is not a horse, and stays as it
+	// is): a [Horseback] line ("Horseback|Jump|gamepad|LB") gives a Gameplay control another key while mounted. Both are
+	// layouts of the one Gameplay context, one at a time, so they share the saved land layout. Mounted wins over swimming:
+	// a rider in water is on the horse's controls. With no lines for a layout nothing is read for it, and nothing changes.
+	constexpr int kLayoutLand = 0;
+	constexpr int kLayoutWater = 1;
+	constexpr int kLayoutHorse = 2;
 	std::vector<Bind> GetSwimBinds();
 	void SetSwimBinds(std::vector<Bind> a_binds);    // from the INI; does not apply. key 0xFF = no key in water
-	std::uint16_t SwimShownKey(std::string_view a_event, int a_device);  // the key a control has in water; 0xFF for none
-	// A SWIMMING row's remap (main thread; the caller saves): false with a_why when the key is refused. Its own key again
-	// means no key in water, as on every other row.
-	bool SetSwimKey(std::string_view a_event, int a_device, std::uint16_t a_key, std::string& a_why);
+	std::vector<Bind> GetHorseBinds();
+	void SetHorseBinds(std::vector<Bind> a_binds);   // from the INI; does not apply. key 0xFF = no key while mounted
+	std::uint16_t LayoutShownKey(int a_layout, std::string_view a_event, int a_device);  // the key a control has in that layout; 0xFF for none
+	const char* LayoutWhere(int a_layout);           // "in water" or "on horseback", for the remap's message and the log
+	// A SWIMMING or HORSEBACK row's remap (main thread; the caller saves): false with a_why when the key is refused. Its own
+	// key again means no key in that layout, as on every other row.
+	bool SetLayoutKey(int a_layout, std::string_view a_event, int a_device, std::uint16_t a_key, std::string& a_why);
 	void InstallSwimWatch();                         // HUDMenu::AdvanceMovie wrapped; call once at plugin load
-	// SWIM UP AND SWIM DOWN (1.3.0; the owner, 2026-11-03). The game has no vertical swim input: its swim state reads no
-	// button, the Sneak press only fires the sneak action, and sneaking does nothing for height. With bSwimVertical on,
-	// the water layout takes Sneak's key away (so a press cannot start a sneak) and two rows of this mod, read raw from the
-	// input sink, add to the player's own movement each frame: Swim Down on Sneak's key out of the box, Swim Up on its own.
-	// Jump keeps its mapping and its handler, so it alone leaves the water. Sneaking is cleared on the way into and out of
-	// the water. Installed late, so that it adds to what other mods' hooks in that slot did.
-	void InstallSwimVertical();                      // after data loaded (first load or new game); once
 	void NoteButton(int a_device, std::uint32_t a_code, bool a_up);  // from the input sink: what is held now
-	std::string SwimStateJson();                     // DevBench op=swim
+	std::string SwimStateJson();                     // DevBench op=swim and op=horse
 
 	// Main thread only.
 	bool Unbind(int a_context, std::string_view a_event, int a_device, std::string& a_why);  // adds to the list

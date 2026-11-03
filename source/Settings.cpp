@@ -30,8 +30,6 @@ namespace settings
 			std::uint32_t logLevel;
 			bool enabled;
 			bool keepRemapsInIni;
-			bool swimVertical;
-			float swimVerticalSpeed;
 			controls::Faces gamepadFaces;
 		} defaults{};
 
@@ -62,18 +60,6 @@ namespace settings
 			try { a_out = static_cast<std::uint32_t>(std::stoull(Trim(a_text), nullptr, 0)); return true; } catch (...) { return false; }
 		}
 
-		bool ParseSwimSpeed(const std::string& a_text, float& a_out)
-		{
-			try
-			{
-				const float v = std::stof(Trim(a_text));
-				if (!(v >= 10.0f && v <= 1000.0f)) { return false; }
-				a_out = v;
-				return true;
-			}
-			catch (...) { return false; }
-		}
-
 		bool ParseFaces(const std::string& a_text, controls::Faces& a_out)
 		{
 			const std::string v = Lower(Trim(a_text));
@@ -88,7 +74,7 @@ namespace settings
 		// Scalars go into the key:section map; each [Unbound] line - "Context|Control|Device", an "=..."
 		// after it is accepted and ignored - becomes an entry.
 		// Each [Bound] line - "Context|Control|Device|Button" - becomes a bind; a_sawBound says the section exists.
-		void ReadFile(std::map<std::string, std::string>& a_keys, std::vector<unbinder::Entry>& a_entries, std::vector<unbinder::Bind>& a_binds, std::vector<unbinder::Bind>& a_swim, bool& a_sawBound, std::vector<std::string>& a_rows, bool& a_sawSystemMenu, std::vector<functions::Function>& a_functions, bool& a_sawFunctions, std::vector<unbinder::Remappable>& a_remappable, bool& a_sawRemappable, std::vector<unbinder::ModifierKey>& a_modifiers, bool& a_sawModifier, int& a_badLines)
+		void ReadFile(std::map<std::string, std::string>& a_keys, std::vector<unbinder::Entry>& a_entries, std::vector<unbinder::Bind>& a_binds, std::vector<unbinder::Bind>& a_swim, std::vector<unbinder::Bind>& a_horse, bool& a_sawBound, std::vector<std::string>& a_rows, bool& a_sawSystemMenu, std::vector<functions::Function>& a_functions, bool& a_sawFunctions, std::vector<unbinder::Remappable>& a_remappable, bool& a_sawRemappable, std::vector<unbinder::ModifierKey>& a_modifiers, bool& a_sawModifier, int& a_badLines)
 		{
 			std::vector<std::string> a_seenRows;  // tokens of every [SystemMenu] row already read
 			std::ifstream in(iniPath);
@@ -151,9 +137,13 @@ namespace settings
 					a_binds.push_back(std::move(b));
 					continue;
 				}
-				if (section == "swimming")
+				if (section == "swimming" || section == "horseback")
 				{
-					// Swimming|Control|Device|Button, Button "none" for no key in water: the control's key while the player is in water.
+					// Swimming|Control|Device|Button or Horseback|Control|Device|Button, Button "none" for no key in that state: the
+					// control's key while the player is in water, or mounted.
+					const bool horse = section == "horseback";
+					auto& list = horse ? a_horse : a_swim;
+					const char* block = horse ? "Horseback" : "Swimming";
 					std::vector<std::string> parts;
 					std::size_t from = 0;
 					while (true)
@@ -163,20 +153,20 @@ namespace settings
 						if (bar == std::string::npos) { break; }
 						from = bar + 1;
 					}
-					if (parts.size() != 4 || Lower(parts[0]) != "swimming") { ++a_badLines; logger::warn("INI [Swimming] line \"{}\" is not Swimming|Control|Device|Button; ignored", t); continue; }
+					if (parts.size() != 4 || Lower(parts[0]) != section) { ++a_badLines; logger::warn("INI [{0}] line \"{1}\" is not {0}|Control|Device|Button; ignored", block, t); continue; }
 					unbinder::Bind b;
-					b.context = "Swimming";
+					b.context = block;
 					b.event = parts[1];
 					b.device = unbinder::DeviceIndex(parts[2]);
-					if (b.device < 0) { ++a_badLines; logger::warn("INI [Swimming] line \"{}\": unknown device; ignored (keyboard, mouse or gamepad)", t); continue; }
+					if (b.device < 0) { ++a_badLines; logger::warn("INI [{}] line \"{}\": unknown device; ignored (keyboard, mouse or gamepad)", block, t); continue; }
 					if (Lower(parts[3]) != "none")
 					{
 						b.key = unbinder::ParseButton(parts[3], b.device);
-						if (b.key == 0xFF) { ++a_badLines; logger::warn("INI [Swimming] line \"{}\": \"{}\" is not a button name or code; ignored", t, parts[3]); continue; }
+						if (b.key == 0xFF) { ++a_badLines; logger::warn("INI [{}] line \"{}\": \"{}\" is not a button name or code; ignored", block, t, parts[3]); continue; }
 					}
-					const bool dup = std::any_of(a_swim.begin(), a_swim.end(), [&](const unbinder::Bind& o) { return o.device == b.device && Lower(o.event) == Lower(b.event); });
-					if (dup) { logger::warn("INI [Swimming] line \"{}\" repeats an earlier line; ignored", t); continue; }
-					a_swim.push_back(std::move(b));
+					const bool dup = std::any_of(list.begin(), list.end(), [&](const unbinder::Bind& o) { return o.device == b.device && Lower(o.event) == Lower(b.event); });
+					if (dup) { logger::warn("INI [{}] line \"{}\" repeats an earlier line; ignored", block, t); continue; }
+					list.push_back(std::move(b));
 					continue;
 				}
 				if (section == "modifier")
@@ -350,7 +340,8 @@ namespace settings
 			bool sawModifier = false;
 			int bad = 0;
 			std::vector<unbinder::Bind> swim;
-			ReadFile(k, entries, binds, swim, sawBound, rows, sawSystemMenu, funcs, sawFunctions, remappable, sawRemappable, modifiers, sawModifier, bad);
+			std::vector<unbinder::Bind> horse;
+			ReadFile(k, entries, binds, swim, horse, sawBound, rows, sawSystemMenu, funcs, sawFunctions, remappable, sawRemappable, modifiers, sawModifier, bad);
 			auto get = [&](const char* a_key, auto& a_out, auto a_parse) {
 				const auto it = k.find(a_key);
 				if (it == k.end()) { logger::debug("INI key {} missing; keeping current value", a_key); return; }
@@ -359,8 +350,6 @@ namespace settings
 			get("uloglevel:debug", debug::logLevel, ParseUInt);
 			get("benabled:general", general::enabled, ParseBool);
 			get("bkeepremapsinini:general", general::keepRemapsInIni, ParseBool);
-			get("bswimvertical:general", general::swimVertical, ParseBool);
-			get("fswimverticalspeed:general", general::swimVerticalSpeed, ParseSwimSpeed);
 			get("gamepadfaces:controls", controls::gamepadFaces, ParseFaces);
 			logger::info("Controls sheet gamepad faces: {}", controls::FacesName(controls::gamepadFaces));
 			const std::size_t count = entries.size();
@@ -370,6 +359,8 @@ namespace settings
 			if (sawBound) { unbinder::SetBinds(std::move(binds)); }
 			logger::info("swimming context: {} [Swimming] line(s)", swim.size());
 			unbinder::SetSwimBinds(std::move(swim));
+			logger::info("horseback context: {} [Horseback] line(s)", horse.size());
+			unbinder::SetHorseBinds(std::move(horse));
 			// An INI from before 1.0.6 has no [SystemMenu] section: it gets the shipped hidden rows.
 			if (sawSystemMenu) { systemmenu::SetHidden(std::move(rows)); }
 			logger::info("System tab rows hidden: {}{}", systemmenu::GetHidden().size(), sawSystemMenu ? "" : " (no [SystemMenu] section - shipped rows kept)");
@@ -480,7 +471,7 @@ namespace settings
 	{
 		iniPath = (std::filesystem::current_path() / "Data" / "SKSE" / "Plugins" / a_iniFileName).string();
 
-		defaults = { debug::logLevel, general::enabled, general::keepRemapsInIni, general::swimVertical, general::swimVerticalSpeed, controls::gamepadFaces };
+		defaults = { debug::logLevel, general::enabled, general::keepRemapsInIni, controls::gamepadFaces };
 		// Compiled default list = the shipped INI's [Unbound] lines (rule 16). An INI that exists replaces it
 		// with whatever it lists, including nothing.
 		unbinder::SetEntries(unbinder::DefaultEntries());
@@ -524,8 +515,6 @@ namespace settings
 		ok &= WriteKey(lines, "Debug", "uLogLevel", std::to_string(debug::logLevel));
 		ok &= WriteKey(lines, "General", "bEnabled", general::enabled ? "1" : "0");
 		ok &= WriteKey(lines, "General", "bKeepRemapsInIni", general::keepRemapsInIni ? "1" : "0");
-		ok &= WriteKey(lines, "General", "bSwimVertical", general::swimVertical ? "1" : "0");
-		ok &= WriteKey(lines, "General", "fSwimVerticalSpeed", std::format("{}", general::swimVerticalSpeed));
 		const auto entries = unbinder::GetEntries();
 		std::vector<std::string> unboundLines;
 		for (const auto& e : entries) { unboundLines.push_back(std::format("{}|{}|{}", e.context, e.event, unbinder::DeviceName(e.device))); }
@@ -560,6 +549,13 @@ namespace settings
 			swimLines.push_back(std::format("Swimming|{}|{}|{}", b.event, unbinder::DeviceName(b.device), name[0] ? std::string(name) : std::format("0x{:02x}", b.key)));
 		}
 		WriteSection(lines, "[Swimming]", swimLines);
+		std::vector<std::string> horseLines;
+		for (const auto& b : unbinder::GetHorseBinds())
+		{
+			const char* name = b.key == 0xFF ? "none" : unbinder::ButtonName(b.key, b.device);
+			horseLines.push_back(std::format("Horseback|{}|{}|{}", b.event, unbinder::DeviceName(b.device), name[0] ? std::string(name) : std::format("0x{:02x}", b.key)));
+		}
+		WriteSection(lines, "[Horseback]", horseLines);
 		// The extra Controls-page rows, with whatever the player bound them to in the Controls menu. A row keeps its
 		// line even while unbound: the line is what MAKES the row exist, so dropping it would delete the row.
 		std::vector<std::string> functionLines;
@@ -629,8 +625,6 @@ namespace settings
 		debug::logLevel = defaults.logLevel;
 		general::enabled = defaults.enabled;
 		general::keepRemapsInIni = defaults.keepRemapsInIni;
-		general::swimVertical = defaults.swimVertical;
-		general::swimVerticalSpeed = defaults.swimVerticalSpeed;
 		controls::gamepadFaces = defaults.gamepadFaces;
 		ApplyLogLevel();
 	}
