@@ -7,6 +7,21 @@ Rule 61: this mod's own history, kept beside the code it describes.
 > number; at `.9` the MINOR rolls. The next number is LAST WORKING + 1; failed/scratch/
 > untested numbers are reused. Numbers come from version-gate.ps1.
 
+## 1.3.0 - 2026-11-03 - untested
+
+### Added
+- **A SWIMMING block on the Controls page: buttons that apply only in water** (the owner, 2026-11-02 and 2026-11-03). The game has no swimming input context, so this is a second layout of the Gameplay context: a [Swimming] line (`Swimming|Jump|gamepad|LB`, written by the page; `none` for no key in water) gives a control another key while the player is in water. A control with no line keeps its land key. A button a line takes does nothing else in water. The moment the player is out of the water every Gameplay mapping goes back exactly as it was. Rows: Jump, Sneak, Sprint, Activate, Ready Weapon, both attacks and Shout; the keyboard page adds Forward, Back, the strafes and Run. The block sits straight after GAMEPLAY.
+- The state is the player's own swimming flag (`ActorState::IsSwimming`), read once per HUD frame from a wrap of `HUDMenu::AdvanceMovie` (vtable slot 5, the shape the journal's wrap already uses, so no Address Library id on either build line). With no [Swimming] line the wrap reads nothing. The flag must hold for 150 ms before the layout changes, so wading at the waterline does not flip it; the map itself is changed from an SKSE task, as the journal's close already does.
+- The swap waits while a key it would move is held (the input sink now notes what is down), so a release can never land on another control and leave Sprint stuck. A button that stops repeating for 300 ms is forgotten, so a lost release cannot hold the swap up.
+- The Controls page always works on the land layout: the journal opening in water puts it back, its closing lets the water layout return, and every apply (load, journal close) starts from the land layout.
+- **An IN MAP block that is always there.** The engine's Map context already existed and [Bound] lines already reached it, but the page listed a map action only when controlmap.txt LINKED it to a gameplay control, so with a control map without those links there were no rows at all. It now lists Cancel, Select Location, Player Position, Local Map, Zoom In and Zoom Out on the controller page, and Cancel, Player Position, Local Map and the four Pan keys on the keyboard page, whatever the control map does. They bind in the Map context only: the Gameplay buttons of the same name do not move, and a button that is taken on land is free here.
+- **A Map Selector row for World Map Selector for Controller, in IN MAP.** It drives that mod's [Controls] MapMenuKey and MapMenuButton (a new adapter option `native`: the game's own codes in hex; `block=<title>` lists a [Functions] row in a block of the page instead of EXTRA CONTROLS, and only rows of the same block can hold a key against it, so D-pad up here does not clash with Call Horse on D-pad up in gameplay). Shown only when that mod is installed; takes the key the mod already has; refuses a mouse button, which the mod cannot read. The mod reads the two keys each time the world map opens (1.0.1), so a change applies at the next map.
+- DevBench: `uvc.control op=swim` reports `isSwimming`, `settled`, `waterLayoutOn`, `journalOpen`, `swaps`, `framesWaitedForHeldKey` and the lines.
+- The new labels ($SWIMMING, $IN MAP, $Map Selector, $Select Location, $Player Position, $Local Map, $Zoom In, $Zoom Out, $Pan Up, $Pan Down, $Pan Left, $Pan Right) in all eleven languages; the SWIMMING rows use the game's own labels.
+
+### Not in this version
+- Real Swim Up and Swim Down actions. No user event for them was found: the SWIMMING rows move the Gameplay controls that exist, so Jump and Sneak do in water whatever the game and the installed swim mods make them do. Whether they change height is a question for the test.
+
 ## 1.2.0 - 2026-10-23 - working
 
 ### Fixed (2026-11-01, from combined run B-20261031-230902-c9a0: the plain SkyUI journal failed)

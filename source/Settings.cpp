@@ -74,7 +74,7 @@ namespace settings
 		// Scalars go into the key:section map; each [Unbound] line - "Context|Control|Device", an "=..."
 		// after it is accepted and ignored - becomes an entry.
 		// Each [Bound] line - "Context|Control|Device|Button" - becomes a bind; a_sawBound says the section exists.
-		void ReadFile(std::map<std::string, std::string>& a_keys, std::vector<unbinder::Entry>& a_entries, std::vector<unbinder::Bind>& a_binds, bool& a_sawBound, std::vector<std::string>& a_rows, bool& a_sawSystemMenu, std::vector<functions::Function>& a_functions, bool& a_sawFunctions, std::vector<unbinder::Remappable>& a_remappable, bool& a_sawRemappable, std::vector<unbinder::ModifierKey>& a_modifiers, bool& a_sawModifier, int& a_badLines)
+		void ReadFile(std::map<std::string, std::string>& a_keys, std::vector<unbinder::Entry>& a_entries, std::vector<unbinder::Bind>& a_binds, std::vector<unbinder::Bind>& a_swim, bool& a_sawBound, std::vector<std::string>& a_rows, bool& a_sawSystemMenu, std::vector<functions::Function>& a_functions, bool& a_sawFunctions, std::vector<unbinder::Remappable>& a_remappable, bool& a_sawRemappable, std::vector<unbinder::ModifierKey>& a_modifiers, bool& a_sawModifier, int& a_badLines)
 		{
 			std::vector<std::string> a_seenRows;  // tokens of every [SystemMenu] row already read
 			std::ifstream in(iniPath);
@@ -135,6 +135,34 @@ namespace settings
 					const bool dup = std::any_of(a_binds.begin(), a_binds.end(), [&](const unbinder::Bind& o) { return o.device == b.device && Lower(o.context) == Lower(b.context) && Lower(o.event) == Lower(b.event); });
 					if (dup) { logger::warn("INI [Bound] line \"{}\" repeats an earlier line; ignored", t); continue; }
 					a_binds.push_back(std::move(b));
+					continue;
+				}
+				if (section == "swimming")
+				{
+					// Swimming|Control|Device|Button, Button "none" for no key in water: the control's key while the player is in water.
+					std::vector<std::string> parts;
+					std::size_t from = 0;
+					while (true)
+					{
+						const auto bar = t.find('|', from);
+						parts.push_back(Trim(t.substr(from, bar == std::string::npos ? std::string::npos : bar - from)));
+						if (bar == std::string::npos) { break; }
+						from = bar + 1;
+					}
+					if (parts.size() != 4 || Lower(parts[0]) != "swimming") { ++a_badLines; logger::warn("INI [Swimming] line \"{}\" is not Swimming|Control|Device|Button; ignored", t); continue; }
+					unbinder::Bind b;
+					b.context = "Swimming";
+					b.event = parts[1];
+					b.device = unbinder::DeviceIndex(parts[2]);
+					if (b.device < 0) { ++a_badLines; logger::warn("INI [Swimming] line \"{}\": unknown device; ignored (keyboard, mouse or gamepad)", t); continue; }
+					if (Lower(parts[3]) != "none")
+					{
+						b.key = unbinder::ParseButton(parts[3], b.device);
+						if (b.key == 0xFF) { ++a_badLines; logger::warn("INI [Swimming] line \"{}\": \"{}\" is not a button name or code; ignored", t, parts[3]); continue; }
+					}
+					const bool dup = std::any_of(a_swim.begin(), a_swim.end(), [&](const unbinder::Bind& o) { return o.device == b.device && Lower(o.event) == Lower(b.event); });
+					if (dup) { logger::warn("INI [Swimming] line \"{}\" repeats an earlier line; ignored", t); continue; }
+					a_swim.push_back(std::move(b));
 					continue;
 				}
 				if (section == "modifier")
@@ -307,7 +335,8 @@ namespace settings
 			std::vector<unbinder::ModifierKey> modifiers;
 			bool sawModifier = false;
 			int bad = 0;
-			ReadFile(k, entries, binds, sawBound, rows, sawSystemMenu, funcs, sawFunctions, remappable, sawRemappable, modifiers, sawModifier, bad);
+			std::vector<unbinder::Bind> swim;
+			ReadFile(k, entries, binds, swim, sawBound, rows, sawSystemMenu, funcs, sawFunctions, remappable, sawRemappable, modifiers, sawModifier, bad);
 			auto get = [&](const char* a_key, auto& a_out, auto a_parse) {
 				const auto it = k.find(a_key);
 				if (it == k.end()) { logger::debug("INI key {} missing; keeping current value", a_key); return; }
@@ -323,6 +352,8 @@ namespace settings
 			// An INI from before 1.0.5 has no [Bound] section: it keeps the shipped binds rather than losing them.
 			const std::size_t bindCount = sawBound ? binds.size() : unbinder::GetBinds().size();
 			if (sawBound) { unbinder::SetBinds(std::move(binds)); }
+			logger::info("swimming context: {} [Swimming] line(s)", swim.size());
+			unbinder::SetSwimBinds(std::move(swim));
 			// An INI from before 1.0.6 has no [SystemMenu] section: it gets the shipped hidden rows.
 			if (sawSystemMenu) { systemmenu::SetHidden(std::move(rows)); }
 			logger::info("System tab rows hidden: {}{}", systemmenu::GetHidden().size(), sawSystemMenu ? "" : " (no [SystemMenu] section - shipped rows kept)");
@@ -504,6 +535,13 @@ namespace settings
 			}
 		}
 		WriteSection(lines, "[Bound]", boundLines);
+		std::vector<std::string> swimLines;
+		for (const auto& b : unbinder::GetSwimBinds())
+		{
+			const char* name = b.key == 0xFF ? "none" : unbinder::ButtonName(b.key, b.device);
+			swimLines.push_back(std::format("Swimming|{}|{}|{}", b.event, unbinder::DeviceName(b.device), name[0] ? std::string(name) : std::format("0x{:02x}", b.key)));
+		}
+		WriteSection(lines, "[Swimming]", swimLines);
 		// The extra Controls-page rows, with whatever the player bound them to in the Controls menu. A row keeps its
 		// line even while unbound: the line is what MAKES the row exist, so dropping it would delete the row.
 		std::vector<std::string> functionLines;

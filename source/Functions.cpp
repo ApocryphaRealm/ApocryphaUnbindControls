@@ -214,6 +214,8 @@ namespace functions
 		if (!defaultsFile.empty()) { out += std::format("{}defaults={}", out.empty() ? "" : ";", defaultsFile); }
 		if (!api.empty()) { out += std::format("{}api={}", out.empty() ? "" : ";", api); }
 		if (!idCheck.empty()) { out += std::format("{}idcheck={}", out.empty() ? "" : ";", idCheck); }
+		if (!block.empty()) { out += std::format("{}block={}", out.empty() ? "" : ";", block); }
+		if (nativeCodes) { out += std::format("{}native", out.empty() ? "" : ";"); }
 		return out;
 	}
 
@@ -231,9 +233,20 @@ namespace functions
 				gamepadFirst = true;
 				continue;
 			}
+			if (IEquals(token, "native"))
+			{
+				nativeCodes = true;
+				continue;
+			}
 			const auto startsWith = [&](std::string_view a_prefix) {
 				return token.size() > a_prefix.size() && IEquals(std::string_view(token).substr(0, a_prefix.size()), a_prefix);
 			};
+			constexpr std::string_view kBlock = "block=";
+			if (startsWith(kBlock))
+			{
+				block = Trim(token.substr(kBlock.size()));
+				continue;
+			}
 			constexpr std::string_view kDefaults = "defaults=";
 			if (startsWith(kDefaults))
 			{
@@ -397,6 +410,18 @@ namespace functions
 		// Simple Lock-On SE: [Settings] uHotKey; a code past the last SKSE button never matches, so -1 is "no key".
 		add("Target Lock (Simple Lock-On)", target("SKSE\\Plugins\\SimpleLockOn.ini", "Settings", "uHotKey", "", -1, "SKSE\\Plugins\\SimpleLockOn.dll"));
 
+		// MAP SELECTOR. World Map Selector for Controller (ours): the key and button that open its map list on the world
+		// map, [Controls] MapMenuKey / MapMenuButton, in the game's own codes in hex; 0 turns one off. It reads them each time
+		// the world map opens, so a key set here applies at the next map. Listed with the other map buttons, in IN MAP.
+		{
+			Target t = target("SKSE\\Plugins\\WorldMapSelectorForController.ini", "Controls", "MapMenuKey", "", 0, "SKSE\\Plugins\\WorldMapSelectorForController.dll");
+			t.gamepadSection = "Controls";
+			t.gamepadKey = "MapMenuButton";
+			t.block = "IN MAP";
+			t.nativeCodes = true;
+			add("Map Selector", std::move(t));
+		}
+
 		// SCAVENGER SENSE (KShakes, Nexus 188380, 0.10.1beta; the owner, 2026-11-01: "a row in UVC"). Its settings menu is
 		// SKSE Menu Framework, it has no MCM Helper file and no control map: it reads built-in defaults, then the installer's
 		// fragments in SKSE\Plugins\ScavengerSense_setup\ (10-kshakes.ini holds every key), then the player's own
@@ -518,11 +543,18 @@ namespace functions
 			a_why = "AMF reserves that key";
 			return false;
 		}
+		if (a_device == 1 && g_functions[a_index].target.nativeCodes)
+		{
+			a_why = "this row takes a keyboard key or a controller button";
+			return false;
+		}
 		for (std::size_t i = 0; i < g_functions.size(); ++i)
 		{
 			if (i == a_index) { continue; }
 			// a row whose mod is not installed is not on the page and drives nothing: it cannot hold a key against this one
 			if (!TargetPresent(g_functions[i])) { continue; }
+			// another block is another context: the same button means something else there
+			if (!IEquals(g_functions[i].target.block, g_functions[a_index].target.block)) { continue; }
 			const auto& other = g_functions[i].bind[a_device];
 			if (other.key == a_key && other.modifier == g_functions[a_index].bind[a_device].modifier)
 			{
@@ -930,10 +962,11 @@ namespace functions
 					const std::string raw = ReadTargetValue(f.target, sectionName, f.target.KeyFor(forDevice));
 					if (raw.empty()) { continue; }
 					int code = f.target.none;
-					try { code = std::stoi(raw); } catch (...) { continue; }
+					// stoi with base 0 reads the 0x prefix a native target writes
+					try { code = f.target.nativeCodes ? std::stoi(raw, nullptr, 0) : std::stoi(raw); } catch (...) { continue; }
 					if (code == f.target.none) { continue; }
 					int decoded = -1;
-					const std::uint16_t key = FromInputCode(code, decoded);
+					const std::uint16_t key = f.target.nativeCodes ? static_cast<std::uint16_t>(code) : FromInputCode(code, decoded);
 					if (key == kUnbound) { continue; }
 					// The SECTION says which device it is; the number only has to give the button.
 					std::uint16_t modifier = 0;
@@ -1099,8 +1132,10 @@ namespace functions
 					{
 						if (sectionName.empty()) { continue; }
 						const auto& bound = f.bind[forDevice];
-						const int code = bound.key == kUnbound ? f.target.none : ToInputCode(bound.key, forDevice);
-						WriteKey(lines, sectionName, f.target.KeyFor(forDevice), std::to_string(code));
+						const int code = bound.key == kUnbound ? f.target.none : (f.target.nativeCodes ? static_cast<int>(bound.key) : ToInputCode(bound.key, forDevice));
+						// A native target's own format: 0x2E for a key, 0x0001 for a button (it refuses anything else).
+						WriteKey(lines, sectionName, f.target.KeyFor(forDevice),
+								 f.target.nativeCodes ? std::format("0x{:0{}X}", code, forDevice == 2 ? 4 : 2) : std::to_string(code));
 						// The modifier is written on EVERY delivery, so a wrong "no key" value corrupts it even when
 						// the row is bound - which is how Wheeler's toggleWheelModifier ended up -1 where it wanted 0
 						// and the wheel stopped opening (2026-09-16). It is logged for the same reason: the key was

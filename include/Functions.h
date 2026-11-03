@@ -90,12 +90,20 @@ namespace functions
 		//               SKSE\Plugins\BFCO NG\Settings.json:PowerAttackActionIDs) is CHECKED against the row's named action:
 		//               when its first id no longer names that action, the log says so (the mod would fire on whatever now
 		//               sits at that position). Nothing is written from it, and nothing is written to the mod's file.
+		//   block=<title> (1.3.0) - the row is listed in that block of the Controls page instead of EXTRA CONTROLS, and only
+		//               another row of the same block can hold a key against it (the blocks are different contexts: D-pad up
+		//               on the world map is not D-pad up in gameplay).
+		//   native (1.3.0) - the target's numbers are the game's own codes written in hex (a DX scan code, the controller's
+		//               mask), not the SKSE Input Script numbering, and it takes no mouse button. Ours: World Map Selector for
+		//               Controller's MapMenuKey=0x2E / MapMenuButton=0x0001.
 		bool gamepadFirst = false;
+		std::string block;
+		bool nativeCodes = false;
 		std::vector<Switch> switches;
 		std::string defaultsFile;
 		std::string api;      // "" or "InputManager"
 		std::string idCheck;  // "" or "<JSON>:<array key>" (api=InputManager rows only)
-		bool HasOptions() const { return gamepadFirst || !switches.empty() || !defaultsFile.empty() || !api.empty() || !idCheck.empty(); }
+		bool HasOptions() const { return gamepadFirst || !switches.empty() || !defaultsFile.empty() || !api.empty() || !idCheck.empty() || !block.empty() || nativeCodes; }
 		std::string OptionsText() const;          // the twelfth field as it is written back
 		bool ParseOptions(const std::string& a_text, std::string& a_why);
 	};

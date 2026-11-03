@@ -1,5 +1,5 @@
 ﻿Unbind Vanilla Controls
-Version 1.2.0
+Version 1.3.0
 
 Skyrim's own Controls menu can only move a control to another key. It cannot leave a control with no
 key at all. This mod can: every control listed in its INI has no key while you play, so pressing the
@@ -151,6 +151,11 @@ Send the log for any bug you find:
 Documents\My Games\Skyrim Special Edition\SKSE\UnbindControls.log
 
 WHAT CHANGED
+
+Version 1.3.0
+Added a SWIMMING block on the Controls page: buttons that apply only while you are in water ([Swimming] in the INI). Everything goes back the moment you are out of the water.
+Added an IN MAP block that is always listed: the world map's own buttons, bound for the map alone.
+Added a Map Selector row in IN MAP for World Map Selector for Controller.
 
 Version 1.2.0
 Fixed the Controls page running below the frame on SkyUI's journal: the last GAMEPLAY rows (Sprint,

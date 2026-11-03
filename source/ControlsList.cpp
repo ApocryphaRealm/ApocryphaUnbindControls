@@ -605,6 +605,66 @@ namespace controlslist
 			return true;
 		}
 
+		// One [Functions] row (a_index in the full list): added, or its key text brought up to date. True when the list changed.
+		bool AddOneFunctionRow(RE::GFxMovieView* a_movie, RE::GFxValue& a_entries, std::vector<std::string>& present, const std::vector<functions::Function>& list, std::size_t f, bool a_gamepad)
+		{
+			// The mod this row points at is not installed: no row, and nothing written on its behalf.
+			if (!functions::IsPresentAt(f)) { return false; }
+			const auto shown = functions::ShownBinding(f, a_gamepad);
+			const int fnDevice = a_gamepad ? 2 : 0;
+			// The tile shows the BUTTON; a modifier is spelled in front of it, the way a bound control's row is.
+			std::string keyText = RowButtonName(shown.key, fnDevice);
+			if (shown.key != kUnmappedID && shown.modifier != 0)
+			{
+				const std::string modPart = RowButtonName(shown.modifier, fnDevice);
+				if (!modPart.empty()) { keyText = modPart + " + " + keyText; }
+			}
+			const auto at = std::find(present.begin(), present.end(), list[f].name);
+			if (at != present.end())
+			{
+				// Already a row: only its key text can have changed.
+				RE::GFxValue entry;
+				const auto index = static_cast<std::uint32_t>(std::distance(present.begin(), at));
+				if (a_entries.GetElement(index, &entry) && entry.IsObject() && StringMember(entry, "buttonName") != keyText)
+				{
+					entry.SetMember("buttonName", RE::GFxValue(keyText.c_str()));
+					entry.SetMember("_uvcBaseName", RE::GFxValue(keyText.c_str()));
+					return true;  // the list is redrawn so the new key shows
+				}
+				return false;
+			}
+			RE::GFxValue value;
+			a_movie->CreateObject(&value);
+			// The last real row is the template: an extra row goes after every vanilla control, so that is the
+			// row it sits next to, and it carries whatever this journal's list keeps on a row.
+			RE::GFxValue last;
+			double sortIndex = 0.0;
+			bool hasSort = false;
+			if (a_entries.GetArraySize() > 0 && a_entries.GetElement(a_entries.GetArraySize() - 1, &last) && last.IsObject())
+			{
+				CloneRowMembers(last, value, list[f].name.c_str());
+				hasSort = NumberMember(last, "sortIndex", sortIndex);
+			}
+			value.SetMember("text", RE::GFxValue(list[f].name.c_str()));
+			value.SetMember("buttonName", RE::GFxValue(keyText.c_str()));
+			value.SetMember("buttonID", RE::GFxValue(static_cast<double>(kUnmappedID)));
+			// Appended, so it sorts after everything already there.
+			if (hasSort) { value.SetMember("sortIndex", RE::GFxValue(sortIndex + 1.0)); }
+			value.SetMember("_uvcAdded", RE::GFxValue(true));
+			value.SetMember("_uvcFunction", RE::GFxValue(true));
+			// ListShowsGamepad reads _uvcBaseName when it is there; an extra row must never be the row that
+			// decides the device family, because its name is one this mod composed, not one the game sent
+			// (the 1.0.8 finding that a modifier prefix turned "360_Y" into a name no family test matches).
+			value.SetMember("_uvcBaseName", RE::GFxValue(keyText.c_str()));
+			const auto size = a_entries.GetArraySize();
+			a_entries.SetArraySize(size + 1);
+			a_entries.SetElement(size, value);
+			present.push_back(list[f].name);
+			logger::info("controls list: extra row \"{}\" added at the end of the {} list (key \"{}\")", list[f].name,
+						 a_gamepad ? "gamepad" : "keyboard", keyText.empty() ? "none" : keyText);
+			return true;
+		}
+
 		// The extra rows ([Functions]) go at the END of the list, after every vanilla control. They are not user events,
 		// so controlmap.txt gives them no place in its order, and appending is the one position that cannot push a
 		// vanilla row out of the order the player already knows. Their key text is written on every pass rather than
@@ -685,61 +745,9 @@ namespace controlslist
 
 			for (std::size_t f = 0; f < list.size(); ++f)
 			{
-				// The mod this row points at is not installed: no row, and nothing written on its behalf.
-				if (!functions::IsPresentAt(f)) { continue; }
-				const auto shown = functions::ShownBinding(f, a_gamepad);
-				const int fnDevice = a_gamepad ? 2 : 0;
-				// The tile shows the BUTTON; a modifier is spelled in front of it, the way a bound control's row is.
-				std::string keyText = RowButtonName(shown.key, fnDevice);
-				if (shown.key != kUnmappedID && shown.modifier != 0)
-				{
-					const std::string modPart = RowButtonName(shown.modifier, fnDevice);
-					if (!modPart.empty()) { keyText = modPart + " + " + keyText; }
-				}
-				const auto at = std::find(present.begin(), present.end(), list[f].name);
-				if (at != present.end())
-				{
-					// Already a row: only its key text can have changed.
-					RE::GFxValue entry;
-					const auto index = static_cast<std::uint32_t>(std::distance(present.begin(), at));
-					if (a_entries.GetElement(index, &entry) && entry.IsObject() && StringMember(entry, "buttonName") != keyText)
-					{
-						entry.SetMember("buttonName", RE::GFxValue(keyText.c_str()));
-						entry.SetMember("_uvcBaseName", RE::GFxValue(keyText.c_str()));
-						++added;  // the list is redrawn so the new key shows
-					}
-					continue;
-				}
-				RE::GFxValue value;
-				a_movie->CreateObject(&value);
-				// The last real row is the template: an extra row goes after every vanilla control, so that is the
-				// row it sits next to, and it carries whatever this journal's list keeps on a row.
-				RE::GFxValue last;
-				double sortIndex = 0.0;
-				bool hasSort = false;
-				if (a_entries.GetArraySize() > 0 && a_entries.GetElement(a_entries.GetArraySize() - 1, &last) && last.IsObject())
-				{
-					CloneRowMembers(last, value, list[f].name.c_str());
-					hasSort = NumberMember(last, "sortIndex", sortIndex);
-				}
-				value.SetMember("text", RE::GFxValue(list[f].name.c_str()));
-				value.SetMember("buttonName", RE::GFxValue(keyText.c_str()));
-				value.SetMember("buttonID", RE::GFxValue(static_cast<double>(kUnmappedID)));
-				// Appended, so it sorts after everything already there.
-				if (hasSort) { value.SetMember("sortIndex", RE::GFxValue(sortIndex + 1.0)); }
-				value.SetMember("_uvcAdded", RE::GFxValue(true));
-				value.SetMember("_uvcFunction", RE::GFxValue(true));
-				// ListShowsGamepad reads _uvcBaseName when it is there; an extra row must never be the row that
-				// decides the device family, because its name is one this mod composed, not one the game sent
-				// (the 1.0.8 finding that a modifier prefix turned "360_Y" into a name no family test matches).
-				value.SetMember("_uvcBaseName", RE::GFxValue(keyText.c_str()));
-				const auto size = a_entries.GetArraySize();
-				a_entries.SetArraySize(size + 1);
-				a_entries.SetElement(size, value);
-				present.push_back(list[f].name);
-				++added;
-				logger::info("controls list: extra row \"{}\" added at the end of the {} list (key \"{}\")", list[f].name,
-							 a_gamepad ? "gamepad" : "keyboard", keyText.empty() ? "none" : keyText);
+				// A row listed in a block of its own (Map Selector, in IN MAP) is added with that block (AddDelinkedRows).
+				if (!list[f].target.block.empty()) { continue; }
+				if (AddOneFunctionRow(a_movie, a_entries, present, list, f, a_gamepad)) { ++added; }
 			}
 			return added > 0;
 		}
@@ -752,6 +760,13 @@ namespace controlslist
 		{
 			for (const int device : a_gamepad ? std::vector<int>{ 2 } : std::vector<int>{ 0, 1 })
 			{
+				if (a_d.swim)
+				{
+					// A SWIMMING row shows the key the control has in water, not what the live map holds now.
+					const std::uint16_t k = unbinder::SwimShownKey(a_d.event, device);
+					if (k != kUnmappedID) { return RowButtonName(k, device); }
+					continue;
+				}
 				for (const std::uint16_t k : unbinder::LiveKeysIn(a_d.context, a_d.event, device))
 				{
 					if (k != kUnmappedID) { return RowButtonName(k, device); }
@@ -760,14 +775,17 @@ namespace controlslist
 			return {};
 		}
 
-		bool AddDelinkedRows(RE::GFxMovieView* a_movie, RE::GFxValue& a_entries, bool a_gamepad)
+		// a_swim: the SWIMMING block, which goes straight after GAMEPLAY, or every other menu block, after the extra rows.
+		bool AddDelinkedRows(RE::GFxMovieView* a_movie, RE::GFxValue& a_entries, bool a_gamepad, bool a_swim)
 		{
 			auto list = unbinder::GetDelinked();
-			if (list.empty()) { return false; }
 			// One block per column, in the game's context order; inside a block, controlmap.txt's order. A row may be listed in
 			// another menu's column (Charge Item under ITEMS), and hidden rows are left off (2026-09-28).
-			std::erase_if(list, [](const unbinder::DelinkedAction& a_d) { return a_d.hidden; });
-			if (list.empty()) { return false; }
+			std::erase_if(list, [&](const unbinder::DelinkedAction& a_d) { return a_d.hidden || a_d.swim != a_swim; });
+			// [Functions] rows that belong to a block of their own (Map Selector: the player sets it with the other map
+			// buttons). A function row is not a menu action, so it follows that block's rows.
+			const auto functionList = a_swim ? std::vector<functions::Function>{} : functions::GetFunctions();
+			if (list.empty() && functionList.empty()) { return false; }
 			std::stable_sort(list.begin(), list.end(), [](const unbinder::DelinkedAction& a_l, const unbinder::DelinkedAction& a_r) { return a_l.sheetContext < a_r.sheetContext; });
 			std::vector<std::string> present;
 			for (std::uint32_t i = 0; i < a_entries.GetArraySize(); ++i)
@@ -776,9 +794,16 @@ namespace controlslist
 				present.push_back(a_entries.GetElement(i, &value) && value.IsObject() ? RowKey(value) : std::string());
 			}
 			int added = 0;
-			for (const auto& d : list)
-			{
-				if (a_gamepad ? !d.gamepad : !d.keyboardFamily) { continue; }
+			const auto addBlockFunctions = [&](const std::string& a_title) {
+				for (std::size_t f = 0; f < functionList.size(); ++f)
+				{
+					if (functionList[f].target.block != a_title || !functions::IsPresentAt(f)) { continue; }
+					if (AppendTitle(a_movie, a_entries, present, a_title)) { ++added; }
+					if (AddOneFunctionRow(a_movie, a_entries, present, functionList, f, a_gamepad)) { ++added; }
+				}
+			};
+			const auto addRow = [&](const unbinder::DelinkedAction& d) {
+				if (a_gamepad ? !d.gamepad : !d.keyboardFamily) { return; }
 				if (AppendTitle(a_movie, a_entries, present, d.title)) { ++added; }
 				const std::string keyText = DelinkedKeyText(d, a_gamepad);
 				const auto at = std::find(present.begin(), present.end(), d.row);
@@ -792,7 +817,7 @@ namespace controlslist
 						entry.SetMember("_uvcBaseName", RE::GFxValue(keyText.c_str()));
 						++added;
 					}
-					continue;
+					return;
 				}
 				RE::GFxValue value;
 				a_movie->CreateObject(&value);
@@ -818,6 +843,17 @@ namespace controlslist
 				present.push_back(d.row);
 				++added;
 				logger::debug("controls list: menu row \"{}\" added to the {} list (key \"{}\")", d.row, a_gamepad ? "gamepad" : "keyboard", keyText.empty() ? "none" : keyText);
+			};
+			for (std::size_t next = 0; next < list.size(); ++next)
+			{
+				addRow(list[next]);
+				// the block's last row, shown on this family or not: its function rows follow it
+				if (next + 1 == list.size() || list[next + 1].title != list[next].title) { addBlockFunctions(list[next].title); }
+			}
+			// A block with a function row and no menu rows on this control map still gets its title and its row.
+			for (const auto& fn : functionList)
+			{
+				if (!fn.target.block.empty()) { addBlockFunctions(fn.target.block); }
 			}
 			return added > 0;
 		}
@@ -843,6 +879,14 @@ namespace controlslist
 					if (e->GetEventType() != RE::INPUT_EVENT_TYPE::kButton) { continue; }
 					auto* button = e->AsButtonEvent();
 					if (!button) { continue; }
+					// the swimming context's swap waits while a key it would move is down (Unbinder.h)
+					{
+						const auto device = e->GetDevice();
+						if (device == RE::INPUT_DEVICE::kKeyboard || device == RE::INPUT_DEVICE::kMouse || device == RE::INPUT_DEVICE::kGamepad)
+						{
+							unbinder::NoteButton(static_cast<int>(device), button->GetIDCode(), button->IsUp());
+						}
+					}
 					if (!journalOpen && button->IsDown() && e->GetDevice() == RE::INPUT_DEVICE::kGamepad)
 					{
 						const auto* userEvents = RE::UserEvents::GetSingleton();
@@ -934,6 +978,27 @@ namespace controlslist
 				if (!hasPress || pressed.device < 0 || pressed.device > 2)
 				{
 					SetRemapResult(std::format("\"{}\": the remap ended with no key recorded; the row is unchanged", event));
+					return;
+				}
+				if (menuRow.swim)
+				{
+					// A SWIMMING row writes its [Swimming] line: nothing on the live map changes until the player is in water.
+					const std::uint16_t shown = unbinder::SwimShownKey(menuRow.event, pressed.device);
+					const bool own = shown == static_cast<std::uint16_t>(pressed.code);
+					std::string why;
+					std::string text;
+					if (!unbinder::SetSwimKey(menuRow.event, pressed.device, own ? static_cast<std::uint16_t>(kUnmappedID) : static_cast<std::uint16_t>(pressed.code), why))
+					{
+						text = std::format("\"{}\": {} refused - {}", event, pressedText, why);
+					}
+					else
+					{
+						text = own ? std::format("\"{}\": its own key pressed again ({}); no key in water on the {}", event, pressedText, unbinder::DeviceName(pressed.device)) :
+						             std::format("\"{}\": bound to {} in water", event, pressedText);
+						settings::Save();
+					}
+					SetRemapResult(text);
+					logger::info("controls list: {}", text);
 					return;
 				}
 				if (menuRow.fixed)
@@ -1202,8 +1267,9 @@ namespace controlslist
 				changed = AddMissingRows(a_movie, entries, gamepad);
 				// Both are asked, and the order matters: the vanilla rows this mod puts back are placed by
 				// controlmap.txt order, and the extra rows go after all of them.
+				changed = AddDelinkedRows(a_movie, entries, gamepad, true) || changed;
 				changed = AddFunctionRows(a_movie, entries, gamepad) || changed;
-				changed = AddDelinkedRows(a_movie, entries, gamepad) || changed;
+				changed = AddDelinkedRows(a_movie, entries, gamepad, false) || changed;
 				changed = AddGameplayTitle(a_movie, entries) || changed;
 			}
 			if (changed)
@@ -1579,8 +1645,12 @@ namespace controlslist
 					g_sheet.captureEvent.clear();
 					if (unbinder::FindDelinkedRow(key, menuRow))
 					{
-						g_sheet.captureContext = menuRow.context;
-						g_sheet.captureEvent = menuRow.event;
+						// A SWIMMING row is decided in EvaluateRemap, like an extra row: its key goes to [Swimming], not the live map.
+						if (!menuRow.swim)
+						{
+							g_sheet.captureContext = menuRow.context;
+							g_sheet.captureEvent = menuRow.event;
+						}
 					}
 					else if (!IsOwnRow(entry))
 					{

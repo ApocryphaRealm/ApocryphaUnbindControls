@@ -1,6 +1,7 @@
 // Unbind Vanilla Controls - own code, GPL-3.0-or-later (2026-09-13). Leaves the vanilla controls listed in its INI with
 // no key at all, by writing the engine's own "unmapped" value into the live control map, and draws those rows of
-// the game's Controls list with no key (ControlsList.h). No menu of its own, one hook (the Journal Menu's AdvanceMovie), no ESP, no scripts.
+// the game's Controls list with no key (ControlsList.h). No menu of its own, two hooks (the Journal Menu's AdvanceMovie, and the
+// HUD's for the swimming context's state read), no ESP, no scripts.
 // Since 1.0.7 a remap made in the game's Controls menu is kept in this mod's INI and the game's ControlMap_Custom.txt is removed
 // (bKeepRemapsInIni).
 #include "PCH.h"
@@ -72,6 +73,7 @@ SKSEPluginLoad(const SKSE::LoadInterface* a_skse)
 				 SKSE::PluginDeclaration::GetSingleton()->GetVersion().string("."));
 
 	controlslist::Install();
+	unbinder::InstallSwimWatch();
 
 	SKSE::GetMessagingInterface()->RegisterListener(MessageHandler);
 
