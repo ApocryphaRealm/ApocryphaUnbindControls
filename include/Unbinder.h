@@ -171,6 +171,7 @@ namespace unbinder
 		int sheetContext = 0;        // the context whose column the row is listed in (Charge Item sits with ITEMS)
 		bool hidden = false;         // separate mapping kept, but no row on the Controls page
 		int layout = 0;              // a SWIMMING or HORSEBACK row (kLayoutWater, kLayoutHorse): event is the Gameplay control, its key lives in that block's list
+		bool modRequest = false;     // a row another mod asked for through the request API; its key lives in the request list
 	};
 	std::vector<DelinkedAction> GetDelinked();
 	bool FindDelinkedRow(std::string_view a_row, DelinkedAction& a_out);
@@ -207,6 +208,39 @@ namespace unbinder
 	void InstallSwimWatch();                         // HUDMenu::AdvanceMovie wrapped; call once at plugin load
 	void NoteButton(int a_device, std::uint32_t a_code, bool a_up);  // from the input sink: what is held now
 	std::string SwimStateJson();                     // DevBench op=swim and op=horse
+
+	// REQUESTS FROM OTHER MODS (1.3.0; the owner, 2026-11-03: "accepting requests that other mods want to make to the
+	// controlmap.txt"). include/UVCRequestAPI.h is what they call. A request names a plugin, a user event or an action of its
+	// own, a context and a device, and asks for a key. Decided here: the player's choice ([ModRequests]) wins, a key something
+	// holds is refused or swapped for the alternative it names. An accepted one is one more mapping on the live map, applied by
+	// ApplyAll and the layouts like every other line, and a row on the Controls page. Requests live for the session; only the
+	// player's choice is saved. Nothing on disk in the game changes.
+	struct RequestChoice
+	{
+		std::string plugin;
+		std::string action;
+		std::string context;  // the context's name, "Swimming" or "Horseback" included
+		int device = 0;
+		std::uint16_t key = 0xFF;  // 0xFF: the player cleared it
+	};
+	struct RequestAnswer
+	{
+		int status = 7;            // UVCRequestAPI::Status
+		std::uint32_t key = 0xFF;
+		std::string why;
+	};
+	RequestAnswer AskRequest(std::string_view a_plugin, std::string_view a_action, std::string_view a_label, std::string_view a_context, int a_device, std::uint32_t a_key, std::uint32_t a_alternative);
+	RequestAnswer ReleaseRequest(std::string_view a_plugin, std::string_view a_action, std::string_view a_context, int a_device);
+	RequestAnswer QueryRequest(std::string_view a_plugin, std::string_view a_action, std::string_view a_context, int a_device);
+	void RequestsAtDataLoaded();                     // requests asked before this point are decided; main thread
+	void RedecideRequests();                         // after the INI was re-read; the caller applies. Main thread
+	std::vector<RequestChoice> GetRequestChoices();
+	void SetRequestChoices(std::vector<RequestChoice> a_list);  // from the INI; does not decide
+	std::uint16_t RequestRowKey(std::string_view a_row, int a_device);  // 0xFF for none
+	// The player pressed a key on a request's row (main thread; the caller saves and applies). False with a_why when refused.
+	bool SetRequestRowKey(std::string_view a_row, int a_device, std::uint16_t a_key, std::string& a_why);
+	std::string RequestsJson();                      // DevBench op=requests
+	std::string ControlWhyJson(std::string_view a_event);  // DevBench op=why: why a control does or does not fire; main thread
 
 	// Main thread only.
 	bool Unbind(int a_context, std::string_view a_event, int a_device, std::string& a_why);  // adds to the list

@@ -6,6 +6,7 @@
 #include "Functions.h"
 #include "Settings.h"
 #include "SystemMenu.h"
+#include "UVCRequestAPI.h"
 #include "utils/Logger.h"
 
 #include "REX/W32/KERNEL32.h"
@@ -21,6 +22,7 @@
 #include <mutex>
 #include <optional>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace unbinder
@@ -1398,6 +1400,364 @@ namespace unbinder
 			return IEquals(a_event, "Shout") || (IEquals(a_event, "Sneak") && !functions::ManualPettingOn());
 		}
 
+		// ---- requests from other mods (Unbinder.h) -------------------------------------------------------------------
+		struct ModRequest
+		{
+			std::string plugin;
+			std::string action;              // the user event or the mod's own action
+			std::string label;               // the row's name
+			int context = 0;                 // the engine's context index; 0 for a layout
+			int layout = kLayoutLand;
+			int device = 0;
+			std::uint32_t asked = kUnmapped;
+			std::uint32_t alternative = kUnmapped;
+			std::uint16_t key = kUnmapped;   // what it has now
+			int status = UVCRequestAPI::kQueued;
+			bool accepted = false;           // has a mapping and a row
+			bool pending = true;             // not decided yet
+			std::string why;
+		};
+		std::vector<ModRequest> g_requests;            // under g_lock
+		std::vector<RequestChoice> g_requestChoices;   // [ModRequests]; under g_lock
+		std::atomic<bool> g_requestsReady{ false };    // UVC's own first apply has run
+		std::atomic<std::thread::id> g_gameThread{};   // the thread ApplyAll last ran on
+		constexpr int kRequestSheetContext = 1000;     // a request's row goes after the other rows of its pass
+
+		// A function row's key, read before g_lock is taken (the Functions list has its own lock).
+		struct FunctionKey
+		{
+			std::string name;
+			int device = 0;
+			std::uint16_t key = kUnmapped;
+		};
+		std::vector<FunctionKey> GameplayFunctionKeys()
+		{
+			std::vector<FunctionKey> out;
+			const auto list = functions::GetFunctions();
+			for (std::size_t i = 0; i < list.size(); ++i)
+			{
+				const auto& f = list[i];
+				if (f.target.readOnly || !functions::IsPresentAt(i)) { continue; }
+				if (!f.target.block.empty() && !IEquals(f.target.block, functions::kHorseBlock)) { continue; }  // another block is another context
+				for (int d = 0; d < 3; ++d)
+				{
+					if (f.bind[d].key != functions::kUnbound) { out.push_back({ f.name, d, f.bind[d].key }); }
+				}
+			}
+			return out;
+		}
+
+		std::string RequestContextName(const std::string_view a_fallback, int a_layout)
+		{
+			return a_layout != kLayoutLand ? std::string(LayoutSection(a_layout)) : std::string(a_fallback);
+		}
+
+		std::string RequestContextName(const ModRequest& a_r)
+		{
+			return RequestContextName(ContextName(a_r.context), a_r.layout);
+		}
+
+		std::string RequestRow(const ModRequest& a_r)
+		{
+			return std::format("Mod Request: {}: {}: {}", a_r.plugin, a_r.action, RequestContextName(a_r));
+		}
+
+		std::string KeyText(std::uint32_t a_key, int a_device)
+		{
+			if (a_key == kUnmapped) { return "none"; }
+			const char* name = ButtonName(static_cast<std::uint16_t>(a_key), a_device);
+			return name[0] ? std::string(name) : Hex(static_cast<std::uint16_t>(a_key));
+		}
+
+		bool ParseRequestContext(std::string_view a_name, int& a_context, int& a_layout)
+		{
+			a_context = 0;
+			a_layout = kLayoutLand;
+			if (IEquals(a_name, "Swimming")) { a_layout = kLayoutWater; return true; }
+			if (IEquals(a_name, "Horseback")) { a_layout = kLayoutHorse; return true; }
+			a_context = ContextIndex(a_name);
+			return a_context >= 0;
+		}
+
+		bool SameRequest(const ModRequest& a_r, std::string_view a_plugin, std::string_view a_action, int a_context, int a_layout, int a_device)
+		{
+			return a_r.device == a_device && a_r.context == a_context && a_r.layout == a_layout && IEquals(a_r.plugin, a_plugin) && IEquals(a_r.action, a_action);
+		}
+
+		// Every mapping of a context on a device as it is on LAND: while a layout is on, the Gameplay array holds that layout, and the saved one is the truth.
+		template <class F>
+		void ForEachLandMapping(RE::ControlMap* a_map, int a_context, int a_device, F a_f)
+		{
+			if (a_context == kGameplayContext && g_layoutOn.load() != kLayoutLand)
+			{
+				for (const auto& s : g_land[a_device]) { a_f(std::string_view(s.event), s.key, s.modifier); }
+				return;
+			}
+			if (auto* mappings = a_map ? MappingsFor(a_map, a_context, a_device) : nullptr)
+			{
+				for (const auto& m : *mappings) { a_f(std::string_view(m.eventID.c_str() ? m.eventID.c_str() : ""), m.inputKey, m.modifier); }
+			}
+		}
+
+		// What holds a_key where a_r would use it, "" when nothing does. The same key under a land modifier is another input
+		// to the engine, so it does not count. Caller holds g_lock.
+		std::string KeyHolderLocked(RE::ControlMap* a_map, const std::vector<FunctionKey>& a_functions, const ModRequest& a_r, std::uint16_t a_key)
+		{
+			if (a_key == kUnmapped) { return {}; }
+			if (a_r.device == 0 && IsAmfReserved(a_key)) { return "AMF's reserved keys"; }
+			for (const auto& m : g_modifiers)
+			{
+				if (m.device == a_r.device && m.key == a_key) { return "the designated Modifier"; }
+			}
+			for (const auto& o : g_requests)
+			{
+				if (&o == &a_r || !o.accepted || o.device != a_r.device || o.key != a_key || o.context != a_r.context) { continue; }
+				// a key on land holds in every layout of that context; the swimming and the horseback layout do not meet
+				if (o.layout == a_r.layout || o.layout == kLayoutLand || a_r.layout == kLayoutLand) { return std::format("\"{}\" ({})", o.label, o.plugin); }
+			}
+			if (a_r.context == kGameplayContext)
+			{
+				for (const auto& f : a_functions)
+				{
+					if (f.device == a_r.device && f.key == a_key) { return std::format("\"{}\"", f.name); }
+				}
+			}
+			std::string holder;
+			const std::vector<Bind> noLines;
+			const std::vector<Bind>& lines = a_r.layout != kLayoutLand ? LinesLocked(a_r.layout) : noLines;
+			for (const auto& b : lines)
+			{
+				if (b.device == a_r.device && b.key == a_key && !IEquals(b.event, a_r.action)) { return std::format("\"{}\"", b.event); }
+			}
+			ForEachLandMapping(a_map, a_r.context, a_r.device, [&](std::string_view a_event, std::uint16_t a_k, std::uint16_t a_mod) {
+				if (!holder.empty() || a_k != a_key || a_mod != 0 || IEquals(a_event, a_r.action)) { return; }
+				if (a_r.layout != kLayoutLand)
+				{
+					// In a layout a control with a line of its own has left that key, and the horse layout frees its keys.
+					const bool moved = std::any_of(lines.begin(), lines.end(), [&](const Bind& a_b) { return a_b.device == a_r.device && IEquals(a_b.event, a_event); });
+					if (moved || (a_r.layout == kLayoutHorse && !g_horse.empty() && FreedWhileMounted(a_event))) { return; }
+				}
+				holder = std::format("\"{}\"", a_event);
+			});
+			return holder;
+		}
+
+		// The key a_r's action had from an earlier answer comes off the map (and off the saved land layout). Caller holds g_lock.
+		void ClearGrantLocked(RE::ControlMap* a_map, const ModRequest& a_r, std::uint16_t a_key)
+		{
+			if (a_key == kUnmapped || a_r.layout != kLayoutLand) { return; }
+			if (auto* mappings = a_map ? MappingsFor(a_map, a_r.context, a_r.device) : nullptr)
+			{
+				bool changed = false;
+				for (auto* m : Find(*mappings, a_r.action))
+				{
+					if (m->inputKey == a_key) { m->inputKey = kUnmapped; changed = true; }
+				}
+				if (changed) { SortByKey(*mappings); }
+			}
+			if (a_r.context == kGameplayContext)
+			{
+				for (auto& s : g_land[a_r.device])
+				{
+					if (s.key == a_key && IEquals(s.event, a_r.action)) { s.key = kUnmapped; }
+				}
+			}
+		}
+
+		void DecideLocked(RE::ControlMap* a_map, const std::vector<FunctionKey>& a_functions, ModRequest& a_r)
+		{
+			const std::uint16_t previous = a_r.key;
+			const std::string context = RequestContextName(a_r);
+			const auto answer = [&](int a_status, std::uint16_t a_key, bool a_accepted, std::string a_why) {
+				if (previous != a_key) { ClearGrantLocked(a_map, a_r, previous); }
+				a_r.status = a_status;
+				a_r.key = a_key;
+				a_r.accepted = a_accepted;
+				a_r.pending = false;
+				a_r.why = std::move(a_why);
+				logger::info("request: {}'s \"{}\" on {} in {} answered {}: key {}; {}", a_r.plugin, a_r.action, DeviceName(a_r.device), context, UVCRequestAPI::StatusName(a_status), KeyText(a_key, a_r.device), a_r.why);
+			};
+			if (!settings::general::enabled)
+			{
+				answer(UVCRequestAPI::kBadRequest, kUnmapped, false, "Unbind Vanilla Controls is switched off (bEnabled=0)");
+				return;
+			}
+			for (const auto& c : g_requestChoices)
+			{
+				if (c.device == a_r.device && IEquals(c.plugin, a_r.plugin) && IEquals(c.action, a_r.action) && IEquals(c.context, context))
+				{
+					answer(UVCRequestAPI::kPlayerChoice, c.key, true, "the player set this row");
+					return;
+				}
+			}
+			// A control of the game that already has a key on this device has it by the player's map: that stands.
+			if (a_r.layout != kLayoutLand)
+			{
+				for (const auto& b : LinesLocked(a_r.layout))
+				{
+					if (b.device == a_r.device && IEquals(b.event, a_r.action))
+					{
+						answer(UVCRequestAPI::kRefused, kUnmapped, false, std::format("the player's [{}] line for that control stands", LayoutSection(a_r.layout)));
+						return;
+					}
+				}
+			}
+			else
+			{
+				std::uint16_t own = kUnmapped;
+				ForEachLandMapping(a_map, a_r.context, a_r.device, [&](std::string_view a_event, std::uint16_t a_k, std::uint16_t) {
+					if (own == kUnmapped && a_k != kUnmapped && a_k != previous && IEquals(a_event, a_r.action)) { own = a_k; }
+				});
+				if (own != kUnmapped)
+				{
+					answer(UVCRequestAPI::kRefused, kUnmapped, false, std::format("that control already has {} on {}; the player's binding stands", KeyText(own, a_r.device), DeviceName(a_r.device)));
+					return;
+				}
+			}
+			const std::uint16_t asked = a_r.asked > 0xFFFF ? kUnmapped : static_cast<std::uint16_t>(a_r.asked);
+			const std::uint16_t alternative = a_r.alternative > 0xFFFF ? kUnmapped : static_cast<std::uint16_t>(a_r.alternative);
+			if (asked == kUnmapped && alternative == kUnmapped)
+			{
+				answer(UVCRequestAPI::kGranted, kUnmapped, true, "a row with no key, as asked; the player can give it one");
+				return;
+			}
+			const std::string askedHolder = KeyHolderLocked(a_map, a_functions, a_r, asked);
+			if (asked != kUnmapped && askedHolder.empty())
+			{
+				answer(UVCRequestAPI::kGranted, asked, true, "the key is free");
+				return;
+			}
+			const std::string reason = asked == kUnmapped ? std::string("no key asked for first") : std::format("{} holds {}", askedHolder, KeyText(asked, a_r.device));
+			if (alternative != kUnmapped)
+			{
+				const std::string alternativeHolder = KeyHolderLocked(a_map, a_functions, a_r, alternative);
+				if (alternativeHolder.empty())
+				{
+					answer(UVCRequestAPI::kAlternative, alternative, true, std::format("{}; the alternative is free", reason));
+					return;
+				}
+				answer(UVCRequestAPI::kRefused, kUnmapped, false, std::format("{}, and {} holds {}", reason, alternativeHolder, KeyText(alternative, a_r.device)));
+				return;
+			}
+			answer(UVCRequestAPI::kRefused, kUnmapped, false, reason);
+		}
+
+		void RebuildRequestRowsLocked()
+		{
+			std::erase_if(g_delinked, [](const DelinkedAction& a_d) { return a_d.modRequest; });
+			for (const auto& r : g_requests)
+			{
+				if (!r.accepted) { continue; }
+				const std::string row = RequestRow(r);
+				auto it = std::find_if(g_delinked.begin(), g_delinked.end(), [&](const DelinkedAction& a_d) { return a_d.row == row; });
+				if (it == g_delinked.end())
+				{
+					DelinkedAction d;
+					d.context = r.context;
+					d.event = r.action;
+					d.row = row;
+					d.block = "Mod Requests";
+					d.title = r.layout == kLayoutWater ? "SWIMMING" : (r.layout == kLayoutHorse ? "HORSEBACK" : "MOD REQUESTS");
+					d.action = std::format("{} ({})", r.label, r.plugin);
+					d.layout = r.layout;
+					d.sheetContext = kRequestSheetContext;
+					d.modRequest = true;
+					g_delinked.push_back(std::move(d));
+					it = std::prev(g_delinked.end());
+				}
+				if (r.device == 2) { it->gamepad = true; }
+				else { it->keyboardFamily = true; }
+			}
+		}
+
+		bool RequestWantsLayoutLocked(int a_layout)
+		{
+			return std::any_of(g_requests.begin(), g_requests.end(), [&](const ModRequest& a_r) { return a_r.accepted && a_r.layout == a_layout && a_r.key != kUnmapped; });
+		}
+
+		// A layout is on when the player has lines for it or a request holds a key in it.
+		void RefreshHaveLinesLocked()
+		{
+			g_haveSwimLines.store(!g_swim.empty() || RequestWantsLayoutLocked(kLayoutWater));
+			g_haveHorseLines.store(!g_horse.empty() || RequestWantsLayoutLocked(kLayoutHorse));
+		}
+
+		// A mapping of the request's action exists on its device from here on: a mod's own action is a new user event on the
+		// engine's array, with no group flags (no disabled-controls state can gate it) and not remappable (the game's Controls
+		// page does not list it; UVC's row does). Key 0xFF until something gives it one.
+		RE::ControlMap::UserEventMapping* EnsureRequestMapping(Mappings& a_mappings, const ModRequest& a_r)
+		{
+			auto found = Find(a_mappings, a_r.action);
+			if (!found.empty()) { return found.front(); }
+			RE::ControlMap::UserEventMapping mapping{};
+			mapping.eventID = a_r.action.c_str();
+			mapping.inputKey = kUnmapped;
+			mapping.modifier = 0;
+			mapping.indexInContext = 127;
+			mapping.remappable = false;
+			mapping.linked = false;
+			a_mappings.push_back(mapping);
+			logger::info("request: {}'s \"{}\" has a mapping of its own on {} in {}", a_r.plugin, a_r.action, DeviceName(a_r.device), RequestContextName(a_r));
+			found = Find(a_mappings, a_r.action);
+			return found.empty() ? nullptr : found.front();
+		}
+
+		// The accepted requests onto the land layout, after the player's lists: what a player's line took is the request's loss.
+		// Caller holds g_lock.
+		void ApplyRequestsLocked(RE::ControlMap* a_map, const char* a_reason)
+		{
+			std::vector<Mappings*> dirty;
+			bool rowsChanged = false;
+			for (auto& r : g_requests)
+			{
+				if (!r.accepted) { continue; }
+				auto* mappings = MappingsFor(a_map, r.context, r.device);
+				if (!mappings)
+				{
+					logger::warn("request ({}): {}'s \"{}\": context {} is not loaded", a_reason, r.plugin, r.action, RequestContextName(r));
+					continue;
+				}
+				auto* mapping = EnsureRequestMapping(*mappings, r);
+				if (std::find(dirty.begin(), dirty.end(), mappings) == dirty.end()) { dirty.push_back(mappings); }
+				if (!mapping || r.layout != kLayoutLand) { continue; }
+				std::string holder;
+				if (r.key != kUnmapped)
+				{
+					for (const auto& m : *mappings)
+					{
+						if (m.inputKey == r.key && m.modifier == 0 && m.eventID.c_str() && !IEquals(m.eventID.c_str(), r.action))
+						{
+							holder = m.eventID.c_str();
+							break;
+						}
+					}
+				}
+				if (!holder.empty())
+				{
+					logger::warn("request ({}): {}'s \"{}\" lost {} to \"{}\"", a_reason, r.plugin, r.action, KeyText(r.key, r.device), holder);
+					r.why = std::format("\"{}\" took {}", holder, KeyText(r.key, r.device));
+					r.status = UVCRequestAPI::kDisplaced;
+					r.key = kUnmapped;
+					rowsChanged = true;
+				}
+				mapping->inputKey = r.key;
+				mapping->modifier = 0;
+				mapping->linked = false;
+			}
+			for (auto* m : dirty) { SortByKey(*m); }
+			if (rowsChanged) { RebuildRequestRowsLocked(); }
+		}
+
+		bool IsRequestEventLocked(std::string_view a_event, int a_device)
+		{
+			return std::any_of(g_requests.begin(), g_requests.end(), [&](const ModRequest& a_r) { return a_r.context == kGameplayContext && a_r.device == a_device && IEquals(a_r.action, a_event); });
+		}
+
+		bool OnGameThread()
+		{
+			return g_gameThread.load() == std::this_thread::get_id();
+		}
+
 		struct MapRow
 		{
 			const char* event;
@@ -1523,7 +1883,8 @@ namespace unbinder
 				const auto isLine = [&](const char* a_event) {
 					return std::any_of(lines.begin(), lines.end(), [&](const Bind* a_b) { return IEquals(a_b->event, a_event); });
 				};
-				if (a_layout == kLayoutHorse)
+				// "With no lines nothing changes": a layout that is on only for a mod's request frees nothing of the player's.
+				if (a_layout == kLayoutHorse && !g_horse.empty())
 				{
 					for (auto& m : *mappings)
 					{
@@ -1532,8 +1893,29 @@ namespace unbinder
 						m.inputKey = kUnmapped;
 					}
 				}
+				const auto requestsHere = [&]() {
+					// After the player's lines, and never taking a key: what holds it now keeps it.
+					for (const auto& r : g_requests)
+					{
+						if (!r.accepted || r.layout != a_layout || r.device != d || r.key == kUnmapped) { continue; }
+						const auto held = std::find_if(mappings->begin(), mappings->end(), [&](const RE::ControlMap::UserEventMapping& a_m) {
+							return a_m.inputKey == r.key && a_m.modifier == 0 && a_m.eventID.c_str() && !IEquals(a_m.eventID.c_str(), r.action);
+						});
+						if (held != mappings->end())
+						{
+							logger::warn("{} ({}): {}'s \"{}\" -> {} not applied: \"{}\" holds it", section, a_reason, r.plugin, r.action, Hex(r.key), held->eventID.c_str());
+							continue;
+						}
+						auto* mapping = EnsureRequestMapping(*mappings, r);
+						if (!mapping) { continue; }
+						mapping->inputKey = r.key;
+						mapping->modifier = 0;
+						moved += std::format("{}{} {} {}", moved.empty() ? "" : ", ", r.action, DeviceName(d), Hex(r.key));
+					}
+				};
 				if (lines.empty())
 				{
+					requestsHere();
 					SortByKey(*mappings);
 					continue;
 				}
@@ -1607,6 +1989,7 @@ namespace unbinder
 					given.push_back(b->key);
 					moved += std::format("{}{} {} {}", moved.empty() ? "" : ", ", b->event, DeviceName(d), Hex(b->key));
 				}
+				requestsHere();
 				SortByKey(*mappings);
 			}
 			g_layoutOn.store(a_layout);
@@ -1643,8 +2026,12 @@ namespace unbinder
 			if (on != kLayoutLand) { note(LinesLocked(on)); }
 			const int wantedLayout = WantedLayout();
 			if (wantedLayout != kLayoutLand && wantedLayout != on) { note(LinesLocked(wantedLayout)); }
+			for (const auto& r : g_requests)
+			{
+				if (r.accepted && r.key != kUnmapped && r.layout != kLayoutLand && (r.layout == on || r.layout == wantedLayout)) { keys.emplace_back(r.device, r.key); }
+			}
 			// The controls the HORSEBACK layout frees move too.
-			if (on == kLayoutHorse || wantedLayout == kLayoutHorse)
+			if (!g_horse.empty() && (on == kLayoutHorse || wantedLayout == kLayoutHorse))
 			{
 				for (int d = 0; d < 3; ++d)
 				{
@@ -1778,7 +2165,7 @@ namespace unbinder
 	{
 		std::scoped_lock l(g_lock);
 		g_swim = std::move(a_binds);
-		g_haveSwimLines.store(!g_swim.empty());
+		RefreshHaveLinesLocked();
 	}
 
 	std::vector<Bind> GetHorseBinds()
@@ -1791,7 +2178,7 @@ namespace unbinder
 	{
 		std::scoped_lock l(g_lock);
 		g_horse = std::move(a_binds);
-		g_haveHorseLines.store(!g_horse.empty());
+		RefreshHaveLinesLocked();
 	}
 
 	const char* LayoutWhere(int a_layout)
@@ -1893,10 +2280,283 @@ namespace unbinder
 						   player && player->IsOnMount() ? "true" : "false", stable == kLayoutHorse ? "true" : "false", on == kLayoutHorse ? "true" : "false", functions::ManualPettingOn() ? "true" : "false", linesJson(g_horse));
 	}
 
+	void RedecideRequests()
+	{
+		auto* map = RE::ControlMap::GetSingleton();
+		const auto functionKeys = GameplayFunctionKeys();
+		std::scoped_lock l(g_lock);
+		for (auto& r : g_requests) { DecideLocked(map, functionKeys, r); }
+		RebuildRequestRowsLocked();
+		RefreshHaveLinesLocked();
+	}
+
+	namespace
+	{
+		void DecidePendingRequests()
+		{
+			auto* map = RE::ControlMap::GetSingleton();
+			const auto functionKeys = GameplayFunctionKeys();
+			bool any = false;
+			{
+				std::scoped_lock l(g_lock);
+				for (auto& r : g_requests)
+				{
+					if (!r.pending) { continue; }
+					DecideLocked(map, functionKeys, r);
+					any = true;
+				}
+				if (any)
+				{
+					RebuildRequestRowsLocked();
+					RefreshHaveLinesLocked();
+				}
+			}
+			if (any) { ApplyAll("mod request"); }
+		}
+	}
+
+	void RequestsAtDataLoaded()
+	{
+		g_gameThread.store(std::this_thread::get_id());
+		g_requestsReady.store(true);
+		DecidePendingRequests();
+	}
+
+	RequestAnswer AskRequest(std::string_view a_plugin, std::string_view a_action, std::string_view a_label, std::string_view a_context, int a_device, std::uint32_t a_key, std::uint32_t a_alternative)
+	{
+		int context = 0, layout = kLayoutLand;
+		const auto bad = [](std::string_view a_text) { return a_text.empty() || a_text.find_first_of("|\r\n") != std::string_view::npos; };
+		std::string problem;
+		if (bad(a_plugin)) { problem = "the plugin name is empty or holds a '|'"; }
+		else if (bad(a_action)) { problem = "the action name is empty or holds a '|'"; }
+		else if (a_label.find_first_of("|\r\n") != std::string_view::npos) { problem = "the label holds a '|'"; }
+		else if (a_device < 0 || a_device > 2) { problem = "the device is not 0 keyboard, 1 mouse or 2 gamepad"; }
+		else if (!ParseRequestContext(a_context, context, layout)) { problem = std::format("\"{}\" is not a context", a_context); }
+		logger::info("request: {} asks for \"{}\" on {} in {}: key {}, alternative {}", a_plugin, a_action, DeviceName(a_device), a_context, KeyText(a_key, a_device), KeyText(a_alternative, a_device));
+		if (!problem.empty())
+		{
+			logger::warn("request: {}'s \"{}\" answered badRequest: {}", a_plugin, a_action, problem);
+			return { UVCRequestAPI::kBadRequest, kUnmapped, problem };
+		}
+		const bool now = g_requestsReady.load() && OnGameThread();
+		{
+			std::scoped_lock l(g_lock);
+			auto it = std::find_if(g_requests.begin(), g_requests.end(), [&](const ModRequest& a_r) { return SameRequest(a_r, a_plugin, a_action, context, layout, a_device); });
+			if (it == g_requests.end())
+			{
+				ModRequest r;
+				r.plugin = std::string(a_plugin);
+				r.action = std::string(a_action);
+				r.context = context;
+				r.layout = layout;
+				r.device = a_device;
+				g_requests.push_back(std::move(r));
+				it = std::prev(g_requests.end());
+			}
+			it->label = a_label.empty() ? std::string(a_action) : std::string(a_label);
+			it->asked = a_key;
+			it->alternative = a_alternative;
+			it->pending = true;
+			it->status = UVCRequestAPI::kQueued;
+			it->why = "waiting for the game's main thread and its data";
+		}
+		if (!now)
+		{
+			if (g_requestsReady.load())
+			{
+				if (auto* tasks = SKSE::GetTaskInterface()) { tasks->AddTask([]() { DecidePendingRequests(); }); }
+			}
+			logger::info("request: {}'s \"{}\" answered queued: decided at the next chance", a_plugin, a_action);
+			return { UVCRequestAPI::kQueued, kUnmapped, "too early or off the main thread; it is decided at the next chance, and Query gives the answer" };
+		}
+		DecidePendingRequests();
+		std::scoped_lock l(g_lock);
+		const auto it = std::find_if(g_requests.begin(), g_requests.end(), [&](const ModRequest& a_r) { return SameRequest(a_r, a_plugin, a_action, context, layout, a_device); });
+		if (it == g_requests.end()) { return { UVCRequestAPI::kBadRequest, kUnmapped, "the request is gone" }; }
+		return { it->status, it->key, it->why };
+	}
+
+	RequestAnswer ReleaseRequest(std::string_view a_plugin, std::string_view a_action, std::string_view a_context, int a_device)
+	{
+		int context = 0, layout = kLayoutLand;
+		if (!ParseRequestContext(a_context, context, layout)) { return { UVCRequestAPI::kBadRequest, kUnmapped, std::format("\"{}\" is not a context", a_context) }; }
+		const bool now = g_requestsReady.load() && OnGameThread();
+		{
+			std::scoped_lock l(g_lock);
+			const auto it = std::find_if(g_requests.begin(), g_requests.end(), [&](const ModRequest& a_r) { return SameRequest(a_r, a_plugin, a_action, context, layout, a_device); });
+			if (it == g_requests.end())
+			{
+				logger::info("request: {} released \"{}\" on {} in {}, which it had not asked for", a_plugin, a_action, DeviceName(a_device), a_context);
+				return { UVCRequestAPI::kNotRequested, kUnmapped, "no such request" };
+			}
+			// Off the main thread the map is not touched here; the mapping the request made stays with its key until the
+			// task below. A request that never reached the map has nothing to take back.
+			if (now) { ClearGrantLocked(RE::ControlMap::GetSingleton(), *it, it->key); }
+			else if (it->key != kUnmapped && it->layout == kLayoutLand && g_requestsReady.load())
+			{
+				if (auto* tasks = SKSE::GetTaskInterface())
+				{
+					tasks->AddTask([context = it->context, device = it->device, action = it->action, key = it->key]() {
+						auto* map = RE::ControlMap::GetSingleton();
+						std::scoped_lock task(g_lock);
+						ModRequest gone;
+						gone.context = context;
+						gone.device = device;
+						gone.action = action;
+						ClearGrantLocked(map, gone, key);
+					});
+				}
+			}
+			g_requests.erase(it);
+			RebuildRequestRowsLocked();
+			RefreshHaveLinesLocked();
+		}
+		logger::info("request: {} released \"{}\" on {} in {}", a_plugin, a_action, DeviceName(a_device), a_context);
+		if (g_requestsReady.load())
+		{
+			if (now) { ApplyAll("mod request released"); }
+			else if (auto* tasks = SKSE::GetTaskInterface()) { tasks->AddTask([]() { ApplyAll("mod request released"); }); }
+		}
+		return { UVCRequestAPI::kReleased, kUnmapped, "released; the player's choice for it, if any, stays in the INI" };
+	}
+
+	RequestAnswer QueryRequest(std::string_view a_plugin, std::string_view a_action, std::string_view a_context, int a_device)
+	{
+		int context = 0, layout = kLayoutLand;
+		if (a_device < 0 || a_device > 2) { return { UVCRequestAPI::kBadRequest, kUnmapped, "the device is not 0 keyboard, 1 mouse or 2 gamepad" }; }
+		if (!ParseRequestContext(a_context, context, layout)) { return { UVCRequestAPI::kBadRequest, kUnmapped, std::format("\"{}\" is not a context", a_context) }; }
+		{
+			std::scoped_lock l(g_lock);
+			const auto it = std::find_if(g_requests.begin(), g_requests.end(), [&](const ModRequest& a_r) { return SameRequest(a_r, a_plugin, a_action, context, layout, a_device); });
+			if (it != g_requests.end())
+			{
+				logger::debug("request: {} queried \"{}\": {}", a_plugin, a_action, UVCRequestAPI::StatusName(it->status));
+				return { it->status, it->key, it->why };
+			}
+		}
+		if (!OnGameThread()) { return { UVCRequestAPI::kNotRequested, kUnmapped, "not requested; a control of the game can only be read from the main thread" }; }
+		// Not a request: what the control has now.
+		if (layout != kLayoutLand)
+		{
+			return { UVCRequestAPI::kNotRequested, LayoutShownKey(layout, a_action, a_device), "not requested; the key that control has in that layout" };
+		}
+		auto* map = RE::ControlMap::GetSingleton();
+		std::scoped_lock l(g_lock);
+		std::uint32_t key = kUnmapped;
+		ForEachLandMapping(map, context, a_device, [&](std::string_view a_event, std::uint16_t a_k, std::uint16_t) {
+			if (key == kUnmapped && a_k != kUnmapped && IEquals(a_event, a_action)) { key = a_k; }
+		});
+		return { UVCRequestAPI::kNotRequested, key, "not requested; the key that control has now" };
+	}
+
+	std::vector<RequestChoice> GetRequestChoices()
+	{
+		std::scoped_lock l(g_lock);
+		return g_requestChoices;
+	}
+
+	void SetRequestChoices(std::vector<RequestChoice> a_list)
+	{
+		std::scoped_lock l(g_lock);
+		g_requestChoices = std::move(a_list);
+	}
+
+	std::uint16_t RequestRowKey(std::string_view a_row, int a_device)
+	{
+		std::scoped_lock l(g_lock);
+		for (const auto& r : g_requests)
+		{
+			if (r.device == a_device && r.accepted && RequestRow(r) == a_row) { return r.key; }
+		}
+		return kUnmapped;
+	}
+
+	bool SetRequestRowKey(std::string_view a_row, int a_device, std::uint16_t a_key, std::string& a_why)
+	{
+		auto* map = RE::ControlMap::GetSingleton();
+		const auto functionKeys = GameplayFunctionKeys();
+		std::scoped_lock l(g_lock);
+		const auto it = std::find_if(g_requests.begin(), g_requests.end(), [&](const ModRequest& a_r) { return a_r.device == a_device && a_r.accepted && RequestRow(a_r) == a_row; });
+		if (it == g_requests.end())
+		{
+			a_why = std::format("that mod asked for no key on the {}", DeviceName(a_device));
+			return false;
+		}
+		const std::string holder = KeyHolderLocked(map, functionKeys, *it, a_key);
+		if (!holder.empty())
+		{
+			a_why = std::format("{} holds it", holder);
+			return false;
+		}
+		const std::string context = RequestContextName(*it);
+		const auto choice = std::find_if(g_requestChoices.begin(), g_requestChoices.end(), [&](const RequestChoice& a_c) {
+			return a_c.device == a_device && IEquals(a_c.plugin, it->plugin) && IEquals(a_c.action, it->action) && IEquals(a_c.context, context);
+		});
+		if (choice != g_requestChoices.end()) { choice->key = a_key; }
+		else { g_requestChoices.push_back({ it->plugin, it->action, context, a_device, a_key }); }
+		if (it->key != a_key) { ClearGrantLocked(map, *it, it->key); }
+		it->key = a_key;
+		it->status = UVCRequestAPI::kPlayerChoice;
+		it->why = "the player set this row";
+		RefreshHaveLinesLocked();
+		logger::info("request: the player set {}'s \"{}\" on {} in {} to {}", it->plugin, it->action, DeviceName(a_device), context, KeyText(a_key, a_device));
+		return true;
+	}
+
+	std::string RequestsJson()
+	{
+		std::scoped_lock l(g_lock);
+		std::string out = std::format(R"({{"ok":true,"op":"requests","ready":{},"requests":[)", g_requestsReady.load() ? "true" : "false");
+		bool first = true;
+		for (const auto& r : g_requests)
+		{
+			out += std::format(R"({}{{"plugin":"{}","action":"{}","label":"{}","context":"{}","device":"{}","asked":"{}","alternative":"{}","key":"{}","status":"{}","accepted":{},"row":"{}","why":"{}"}})",
+							   first ? "" : ",", EscapeJson(r.plugin), EscapeJson(r.action), EscapeJson(r.label), RequestContextName(r), DeviceName(r.device), KeyText(r.asked, r.device), KeyText(r.alternative, r.device),
+							   KeyText(r.key, r.device), UVCRequestAPI::StatusName(r.status), r.accepted ? "true" : "false", EscapeJson(RequestRow(r)), EscapeJson(r.why));
+			first = false;
+		}
+		out += R"(],"playerChoices":[)";
+		first = true;
+		for (const auto& c : g_requestChoices)
+		{
+			out += std::format(R"({}{{"plugin":"{}","action":"{}","context":"{}","device":"{}","key":"{}"}})", first ? "" : ",", EscapeJson(c.plugin), EscapeJson(c.action), EscapeJson(c.context), DeviceName(c.device), KeyText(c.key, c.device));
+			first = false;
+		}
+		out += "]}";
+		return out;
+	}
+
+	std::string ControlWhyJson(std::string_view a_event)
+	{
+		auto* map = RE::ControlMap::GetSingleton();
+		if (!map) { return R"({"ok":false,"op":"why","error":"ControlMap singleton is null"})"; }
+		std::scoped_lock l(g_lock);
+		std::string out = std::format(R"({{"ok":true,"op":"why","event":"{}","sneakingControlsEnabled":{},"movementControlsEnabled":{},"fightingControlsEnabled":{},"layoutOn":{},"journalOpen":{},"devices":{{)",
+									  EscapeJson(a_event), map->IsSneakingControlsEnabled() ? "true" : "false", map->IsMovementControlsEnabled() ? "true" : "false", map->IsFightingControlsEnabled() ? "true" : "false", g_layoutOn.load(), g_swimJournal.load() ? "true" : "false");
+		for (int d = 0; d < 3; ++d)
+		{
+			out += std::format(R"({}"{}":{{"default":"{}","live":[)", d ? "," : "", DeviceName(d), KeyText(DefaultKey(a_event, d), d));
+			auto* mappings = MappingsFor(map, kGameplayContext, d);
+			bool first = true;
+			if (mappings)
+			{
+				for (auto* m : Find(*mappings, a_event))
+				{
+					out += std::format(R"({}{{"key":"{}","modifier":"{}","groupFlags":"{:#x}"}})", first ? "" : ",", KeyText(m->inputKey, d), Hex(m->modifier), static_cast<std::uint32_t>(m->userEventGroupFlag.underlying()));
+					first = false;
+				}
+			}
+			out += "]}";
+		}
+		out += "}}";
+		return out;
+	}
+
 	void ApplyAll(const char* a_reason)
 	{
 		auto* map = RE::ControlMap::GetSingleton();
 		if (!map) { logger::warn("apply ({}): the ControlMap singleton is null; nothing applied", a_reason); return; }
+		g_gameThread.store(std::this_thread::get_id());
 		std::scoped_lock l(g_lock);
 		// The lists are written over the land layout; a water or horseback layout returns on the next HUD frame.
 		RestoreLandLocked(map, a_reason);
@@ -1938,6 +2598,18 @@ namespace unbinder
 		for (auto* m : dirty) { SortByKey(*m); }
 		g_lastRemappable = ApplyRemappable(map, a_reason);
 		g_lastBound = ApplyBinds(map, a_reason);
+		ApplyRequestsLocked(map, a_reason);
+		// The game's own switch for the Sneak control (DisablePlayerControls and ToggleControls clear it), said when it changes:
+		// with it off no Sneak key does anything, whatever this mod's lists say, and a reload does not turn it back on.
+		{
+			static bool s_sneakOff = false;
+			const bool off = !map->IsSneakingControlsEnabled();
+			if (off != s_sneakOff)
+			{
+				s_sneakOff = off;
+				logger::info("apply ({}): the game's Sneak controls are {}", a_reason, off ? "DISABLED (something called DisablePlayerControls or ToggleControls; no Sneak key works meanwhile)" : "enabled again");
+			}
+		}
 		g_lastApply = a_reason;
 		++g_applyCount;
 		g_lastTouched = touched;
@@ -2142,6 +2814,7 @@ namespace unbinder
 			{
 				const std::vector<std::uint16_t> before = was == a_before.events.end() ? std::vector<std::uint16_t>{} : a_before.keys[static_cast<std::size_t>(was - a_before.events.begin())][d];
 				if (Sorted(before) == Sorted(after.keys[i][d])) { continue; }
+				if (IsRequestEventLocked(after.events[i], d)) { continue; }  // a mod's request: the request list holds it, not the INI's lists
 				changed += RecordLocked(after.events[i], d, after.keys[i][d], a_reason);
 			}
 		}
@@ -2169,6 +2842,7 @@ namespace unbinder
 			{
 				const auto& keys = live.keys[i][d];
 				if (keys.empty()) { continue; }                                          // no mapping for it on that device
+				if (IsRequestEventLocked(live.events[i], d)) { continue; }               // a mod's request, not a remap
 				if (FindEntry(0, live.events[i], d) != g_entries.end()) { continue; }  // the INI already decides it
 				const bool bound = std::any_of(g_binds.begin(), g_binds.end(), [&](const Bind& b) {
 					return b.device == d && IEquals(b.context, "Gameplay") && IEquals(b.event, live.events[i]);

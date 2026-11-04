@@ -74,7 +74,7 @@ namespace settings
 		// Scalars go into the key:section map; each [Unbound] line - "Context|Control|Device", an "=..."
 		// after it is accepted and ignored - becomes an entry.
 		// Each [Bound] line - "Context|Control|Device|Button" - becomes a bind; a_sawBound says the section exists.
-		void ReadFile(std::map<std::string, std::string>& a_keys, std::vector<unbinder::Entry>& a_entries, std::vector<unbinder::Bind>& a_binds, std::vector<unbinder::Bind>& a_swim, std::vector<unbinder::Bind>& a_horse, bool& a_sawBound, std::vector<std::string>& a_rows, bool& a_sawSystemMenu, std::vector<functions::Function>& a_functions, bool& a_sawFunctions, std::vector<unbinder::Remappable>& a_remappable, bool& a_sawRemappable, std::vector<unbinder::ModifierKey>& a_modifiers, bool& a_sawModifier, int& a_badLines)
+		void ReadFile(std::map<std::string, std::string>& a_keys, std::vector<unbinder::Entry>& a_entries, std::vector<unbinder::Bind>& a_binds, std::vector<unbinder::Bind>& a_swim, std::vector<unbinder::Bind>& a_horse, bool& a_sawBound, std::vector<std::string>& a_rows, bool& a_sawSystemMenu, std::vector<functions::Function>& a_functions, bool& a_sawFunctions, std::vector<unbinder::Remappable>& a_remappable, bool& a_sawRemappable, std::vector<unbinder::ModifierKey>& a_modifiers, bool& a_sawModifier, std::vector<unbinder::RequestChoice>& a_requestChoices, int& a_badLines)
 		{
 			std::vector<std::string> a_seenRows;  // tokens of every [SystemMenu] row already read
 			std::ifstream in(iniPath);
@@ -135,6 +135,33 @@ namespace settings
 					const bool dup = std::any_of(a_binds.begin(), a_binds.end(), [&](const unbinder::Bind& o) { return o.device == b.device && Lower(o.context) == Lower(b.context) && Lower(o.event) == Lower(b.event); });
 					if (dup) { logger::warn("INI [Bound] line \"{}\" repeats an earlier line; ignored", t); continue; }
 					a_binds.push_back(std::move(b));
+					continue;
+				}
+				if (section == "modrequests")
+				{
+					// Plugin|Action|Context|Device|Button: what the player gave a row another mod asked for (none: cleared it).
+					std::vector<std::string> parts;
+					std::size_t from = 0;
+					while (true)
+					{
+						const auto bar = t.find('|', from);
+						parts.push_back(Trim(t.substr(from, bar == std::string::npos ? std::string::npos : bar - from)));
+						if (bar == std::string::npos) { break; }
+						from = bar + 1;
+					}
+					if (parts.size() != 5) { ++a_badLines; logger::warn("INI [ModRequests] line \"{}\" is not Plugin|Action|Context|Device|Button; ignored", t); continue; }
+					unbinder::RequestChoice c;
+					c.plugin = parts[0];
+					c.action = parts[1];
+					c.context = parts[2];
+					c.device = unbinder::DeviceIndex(parts[3]);
+					if (c.device < 0) { ++a_badLines; logger::warn("INI [ModRequests] line \"{}\": unknown device; ignored (keyboard, mouse or gamepad)", t); continue; }
+					if (Lower(parts[4]) != "none")
+					{
+						c.key = unbinder::ParseButton(parts[4], c.device);
+						if (c.key == 0xFF) { ++a_badLines; logger::warn("INI [ModRequests] line \"{}\": \"{}\" is not a button name or code; ignored", t, parts[4]); continue; }
+					}
+					a_requestChoices.push_back(std::move(c));
 					continue;
 				}
 				if (section == "swimming" || section == "horseback")
@@ -341,7 +368,8 @@ namespace settings
 			int bad = 0;
 			std::vector<unbinder::Bind> swim;
 			std::vector<unbinder::Bind> horse;
-			ReadFile(k, entries, binds, swim, horse, sawBound, rows, sawSystemMenu, funcs, sawFunctions, remappable, sawRemappable, modifiers, sawModifier, bad);
+			std::vector<unbinder::RequestChoice> requestChoices;
+			ReadFile(k, entries, binds, swim, horse, sawBound, rows, sawSystemMenu, funcs, sawFunctions, remappable, sawRemappable, modifiers, sawModifier, requestChoices, bad);
 			auto get = [&](const char* a_key, auto& a_out, auto a_parse) {
 				const auto it = k.find(a_key);
 				if (it == k.end()) { logger::debug("INI key {} missing; keeping current value", a_key); return; }
@@ -361,6 +389,8 @@ namespace settings
 			unbinder::SetSwimBinds(std::move(swim));
 			logger::info("horseback context: {} [Horseback] line(s)", horse.size());
 			unbinder::SetHorseBinds(std::move(horse));
+			logger::info("mod requests: {} [ModRequests] choice(s) of the player's", requestChoices.size());
+			unbinder::SetRequestChoices(std::move(requestChoices));
 			// An INI from before 1.0.6 has no [SystemMenu] section: it gets the shipped hidden rows.
 			if (sawSystemMenu) { systemmenu::SetHidden(std::move(rows)); }
 			logger::info("System tab rows hidden: {}{}", systemmenu::GetHidden().size(), sawSystemMenu ? "" : " (no [SystemMenu] section - shipped rows kept)");
@@ -556,6 +586,13 @@ namespace settings
 			horseLines.push_back(std::format("Horseback|{}|{}|{}", b.event, unbinder::DeviceName(b.device), name[0] ? std::string(name) : std::format("0x{:02x}", b.key)));
 		}
 		WriteSection(lines, "[Horseback]", horseLines);
+		std::vector<std::string> requestLines;
+		for (const auto& c : unbinder::GetRequestChoices())
+		{
+			const char* name = c.key == 0xFF ? "none" : unbinder::ButtonName(c.key, c.device);
+			requestLines.push_back(std::format("{}|{}|{}|{}|{}", c.plugin, c.action, c.context, unbinder::DeviceName(c.device), name[0] ? std::string(name) : std::format("0x{:02x}", c.key)));
+		}
+		WriteSection(lines, "[ModRequests]", requestLines);
 		// The extra Controls-page rows, with whatever the player bound them to in the Controls menu. A row keeps its
 		// line even while unbound: the line is what MAKES the row exist, so dropping it would delete the row.
 		std::vector<std::string> functionLines;

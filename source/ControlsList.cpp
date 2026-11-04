@@ -779,6 +779,13 @@ namespace controlslist
 		{
 			for (const int device : a_gamepad ? std::vector<int>{ 2 } : std::vector<int>{ 0, 1 })
 			{
+				if (a_d.modRequest)
+				{
+					// Another mod's row: the key its request holds now, whatever the live map has at this moment.
+					const std::uint16_t k = unbinder::RequestRowKey(a_d.row, device);
+					if (k != kUnmappedID) { return RowButtonName(k, device); }
+					continue;
+				}
 				if (a_d.layout != unbinder::kLayoutLand)
 				{
 					// A SWIMMING or HORSEBACK row shows the key the control has in that layout, not what the live map holds now.
@@ -998,6 +1005,28 @@ namespace controlslist
 				if (!hasPress || pressed.device < 0 || pressed.device > 2)
 				{
 					SetRemapResult(std::format("\"{}\": the remap ended with no key recorded; the row is unchanged", event));
+					return;
+				}
+				if (menuRow.modRequest)
+				{
+					// Another mod's row: the press is the player's choice, kept in [ModRequests] and above whatever that mod asks next.
+					const std::uint16_t shown = unbinder::RequestRowKey(menuRow.row, pressed.device);
+					const bool own = shown == static_cast<std::uint16_t>(pressed.code);
+					std::string why;
+					std::string text;
+					if (!unbinder::SetRequestRowKey(menuRow.row, pressed.device, own ? static_cast<std::uint16_t>(kUnmappedID) : static_cast<std::uint16_t>(pressed.code), why))
+					{
+						text = std::format("\"{}\": {} refused - {}", event, pressedText, why);
+					}
+					else
+					{
+						text = own ? std::format("\"{}\": its own key pressed again ({}); no key on the {}", event, pressedText, unbinder::DeviceName(pressed.device)) :
+						             std::format("\"{}\": bound to {}", event, pressedText);
+						settings::Save();
+						unbinder::ApplyAll("mod request row set");
+					}
+					SetRemapResult(text);
+					logger::info("controls list: {}", text);
 					return;
 				}
 				if (menuRow.layout != unbinder::kLayoutLand)
@@ -1699,7 +1728,7 @@ namespace controlslist
 					if (unbinder::FindDelinkedRow(key, menuRow))
 					{
 						// A SWIMMING or HORSEBACK row is decided in EvaluateRemap, like an extra row: its key goes to its list, not the live map.
-						if (menuRow.layout == unbinder::kLayoutLand)
+						if (menuRow.layout == unbinder::kLayoutLand && !menuRow.modRequest)
 						{
 							g_sheet.captureContext = menuRow.context;
 							g_sheet.captureEvent = menuRow.event;
@@ -1871,6 +1900,8 @@ namespace controlslist
 			logger::debug("controls list: the System page's input now reaches the controls sheet first");
 		}
 
+		bool g_sheetOnPage = false;  // the System page is on its Controls panel: the sheet stands in for the list's rows (UI thread)
+
 		void HideSheet(RE::GFxValue& a_list)
 		{
 			for (int c = 0; c < kSheetCols; ++c)
@@ -1903,6 +1934,47 @@ namespace controlslist
 				RE::GFxValue part;
 				if (a_list.GetMember(name, &part) && part.IsDisplayObject() && IsVisible(part)) { SetVisible(part, false); }
 			}
+		}
+
+		// The list's own UpdateList, wrapped: its rows are hidden in the same call that shows them. Hiding them once per frame
+		// after AdvanceMovie left one rendered frame whenever the list redrew between two of those: pressing a keyboard key on the
+		// controller page (the game swaps the list to the keyboard's at that press) drew the keyboard's native rows, at the
+		// list's own spacing, over the sheet. A screenshot key is exactly that press, so every shot of the page had it (the
+		// owner's five shots of 2026-11-03 fall in the seconds the log shows the list swapping to the keyboard's).
+		class ListRedraw : public RE::GFxFunctionHandler
+		{
+		public:
+			void Call(Params& a_params) override
+			{
+				if (!a_params.thisPtr) { return; }
+				RE::GFxValue original;
+				if (!a_params.thisPtr->GetMember("_uvcUpdateList", &original) || original.IsUndefined()) { return; }
+				std::vector<RE::GFxValue> args;
+				args.push_back(*a_params.thisPtr);
+				for (std::uint32_t i = 0; i < a_params.argCount; ++i) { args.push_back(a_params.args[i]); }
+				RE::GFxValue result;
+				original.Invoke("call", &result, args.data(), args.size());
+				if (a_params.retVal) { *a_params.retVal = result; }
+				if (g_sheetOnPage) { HideListChrome(*a_params.thisPtr); }
+			}
+		};
+
+		void InstallListRedraw(RE::GFxMovieView* a_movie, RE::GFxValue& a_list)
+		{
+			RE::GFxValue installed;
+			if (a_list.GetMember("_uvcUpdateList", &installed) && !installed.IsUndefined()) { return; }
+			RE::GFxValue original;
+			if (!a_list.GetMember("UpdateList", &original) || original.IsUndefined())
+			{
+				if (g_loggedRows.insert("sheet|noupdatelist").second) { logger::info("controls list: this journal's list has no UpdateList; its rows are hidden once per frame only"); }
+				return;
+			}
+			static ListRedraw* handler = new ListRedraw();
+			RE::GFxValue fn;
+			a_movie->CreateFunction(&fn, handler);
+			a_list.SetMember("_uvcUpdateList", original);
+			a_list.SetMember("UpdateList", fn);
+			logger::debug("controls list: the list's redraw now hides its own rows while the sheet is up");
 		}
 
 		// A key combination ("PS3_LT + PS3_RT", "L-Shift + Q") drawn as its tiles: InputMappingArt draws several tiles when
@@ -2494,10 +2566,13 @@ namespace controlslist
 			RE::GFxValue page;
 			if (!PageInControls(a_movie, page))
 			{
+				g_sheetOnPage = false;
 				HideSheet(list);
 				return;
 			}
+			g_sheetOnPage = true;
 			InstallSheetInput(a_movie, page);
+			InstallListRedraw(a_movie, list);
 			HideListChrome(list);
 			GiveListTheWheel(a_movie, list);
 

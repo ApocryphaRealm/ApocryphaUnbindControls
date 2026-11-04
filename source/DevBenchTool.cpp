@@ -8,6 +8,7 @@
 #include "Settings.h"
 #include "SystemMenu.h"
 #include "TweenWait.h"
+#include "UVCRequestAPI.h"
 #include "Unbinder.h"
 #include "utils/Logger.h"
 
@@ -297,6 +298,94 @@ namespace DevBenchTool
 				a_write(a_sink, std::format("{{\"ok\":true,\"op\":\"{}\",{}}}", op, unbinder::SwimStateJson()).c_str());
 				return;
 			}
+			// Requests from other mods. These go through the public header and the DLL's own exports, the path another mod takes,
+			// so the tool is the test caller: no other mod is needed to prove them in game.
+			if (op == "requests")
+			{
+				a_write(a_sink, unbinder::RequestsJson().c_str());
+				return;
+			}
+			if (op == "why")
+			{
+				std::string event = Get(args, "event");
+				if (event.empty()) { event = "Sneak"; }
+				std::string out;
+				if (!RunOnMainThread([&]() { out = unbinder::ControlWhyJson(event); })) { a_write(a_sink, R"({"ok":false,"op":"why","error":"main thread did not run the task in time"})"); return; }
+				a_write(a_sink, out.c_str());
+				return;
+			}
+			if (op == "request" || op == "release" || op == "query")
+			{
+				const auto api = UVCRequestAPI::GetAPI();
+				const std::string plugin = Get(args, "plugin").empty() ? std::string("UVC Test") : Get(args, "plugin");
+				const std::string action = Get(args, "event");
+				const std::string label = Get(args, "label");
+				const std::string contextName = Get(args, "context").empty() ? std::string("Gameplay") : Get(args, "context");
+				const int device = unbinder::DeviceIndex(Get(args, "device"));
+				const auto keyArg = [&](const char* a_name) -> std::uint32_t {
+					const std::string text = Get(args, a_name);
+					return text.empty() || text == "none" ? UVCRequestAPI::kNoKey : unbinder::ParseButton(text, device);
+				};
+				if (!api.IsAvailable())
+				{
+					a_write(a_sink, std::format(R"({{"ok":false,"op":"{}","error":"the DLL's exports were not found through the public header"}})", op).c_str());
+					return;
+				}
+				UVCRequestAPI::Answer answer;
+				const bool ran = RunOnMainThread([&]() {
+					if (op == "request") { answer = api.Request(plugin.c_str(), action.c_str(), label.c_str(), contextName.c_str(), device, keyArg("key"), keyArg("alt")); }
+					else if (op == "release") { answer = api.Release(plugin.c_str(), action.c_str(), contextName.c_str(), device); }
+					else { answer = api.Query(plugin.c_str(), action.c_str(), contextName.c_str(), device); }
+				});
+				a_write(a_sink, std::format(R"({{"ok":{},"op":"{}","status":"{}","key":"{:#x}","why":"{}"}})", ran ? "true" : "false", op, UVCRequestAPI::StatusName(answer.status), answer.key, EscapeJson(answer.why)).c_str());
+				return;
+			}
+			if (op == "requesttest")
+			{
+				// Three answers in one call, on the keyboard so it does not depend on a controller: a key a control holds with no
+				// alternative (refused, names the holder), a free key (granted), a held key with a free alternative (alternative).
+				// release=1 takes all three back. The two accepted ones are rows on the Controls page until then.
+				const auto api = UVCRequestAPI::GetAPI();
+				if (!api.IsAvailable()) { a_write(a_sink, R"({"ok":false,"op":"requesttest","error":"the DLL's exports were not found through the public header"})"); return; }
+				constexpr const char* kPlugin = "UVC Test";
+				const bool release = Get(args, "release") == "1";
+				std::string out;
+				const bool ran = RunOnMainThread([&]() {
+					const auto line = [&](const char* a_step, const UVCRequestAPI::Answer& a_answer) {
+						out += std::format(R"({}{{"step":"{}","status":"{}","key":"{:#x}","why":"{}"}})", out.empty() ? "" : ",", a_step, UVCRequestAPI::StatusName(a_answer.status), a_answer.key, EscapeJson(a_answer.why));
+					};
+					if (release)
+					{
+						for (const char* action : { "UVC Test Taken", "UVC Test Free", "UVC Test Alternative" }) { line(action, api.Release(kPlugin, action, "Gameplay", UVCRequestAPI::kKeyboard)); }
+						return;
+					}
+					std::uint16_t taken = 0xFF, modifier = 0;
+					unbinder::LiveBinding(0, "Activate", 0, taken, modifier);
+					line("taken", api.Request(kPlugin, "UVC Test Taken", "Test: Taken", "Gameplay", UVCRequestAPI::kKeyboard, taken));
+					// F10, F8 ... until one is free on this player's map.
+					constexpr std::uint32_t kCandidates[] = { 0x44, 0x42, 0x41, 0x40, 0x3e, 0x3d, 0x3c, 0x3b, 0x0a, 0x09, 0x08, 0x07 };
+					std::size_t next = 0;
+					UVCRequestAPI::Answer free;
+					for (; next < std::size(kCandidates); ++next)
+					{
+						free = api.Request(kPlugin, "UVC Test Free", "Test: Free", "Gameplay", UVCRequestAPI::kKeyboard, kCandidates[next]);
+						if (free.status == UVCRequestAPI::kGranted || free.status == UVCRequestAPI::kPlayerChoice) { break; }
+					}
+					line("free", free);
+					++next;
+					UVCRequestAPI::Answer alternative;
+					for (; next < std::size(kCandidates); ++next)
+					{
+						alternative = api.Request(kPlugin, "UVC Test Alternative", "Test: Alternative", "Gameplay", UVCRequestAPI::kKeyboard, taken, kCandidates[next]);
+						if (alternative.status == UVCRequestAPI::kAlternative || alternative.status == UVCRequestAPI::kPlayerChoice) { break; }
+					}
+					line("alternative", alternative);
+					line("query free", api.Query(kPlugin, "UVC Test Free", "Gameplay", UVCRequestAPI::kKeyboard));
+					line("query Activate, not requested", api.Query(kPlugin, "Activate", "Gameplay", UVCRequestAPI::kKeyboard));
+				});
+				a_write(a_sink, std::format(R"({{"ok":{},"op":"requesttest","answers":[{}]}})", ran ? "true" : "false", out).c_str());
+				return;
+			}
 			if (op == "apply")
 			{
 				const bool ran = RunOnMainThread([]() { unbinder::ApplyAll("tool"); });
@@ -315,7 +404,7 @@ namespace DevBenchTool
 			if (op == "reload")
 			{
 				bool ok = false;
-				const bool ran = RunOnMainThread([&]() { unbinder::RestoreAll("tool reload"); ok = settings::Reload(); unbinder::ApplyAll("tool reload"); });
+				const bool ran = RunOnMainThread([&]() { unbinder::RestoreAll("tool reload"); ok = settings::Reload(); unbinder::RedecideRequests(); unbinder::ApplyAll("tool reload"); });
 				a_write(a_sink, std::format("{{\"ok\":{},\"op\":\"reload\"}}", (ran && ok) ? "true" : "false").c_str());
 				return;
 			}
@@ -347,8 +436,8 @@ namespace DevBenchTool
 			"keys captured this session, last apply. op=dump [context]: every mapping of the live ControlMap (event, key, modifier, "
 			"remappable) per context and device. op=unbind / op=rebind with context (name or index), event, device "
 			"(keyboard|mouse|gamepad): add to or remove from the list, applied and written to the INI. op=apply re-applies the list; "
-			"op=reload gives the keys back, re-reads the INI and applies. op=rows (journal open): every row of the game's Controls list - event, the buttonName and buttonID the game sent, whether this mod draws it blank and why. op=listen [seconds, default 20, 1-120]: log every button event - device, code, the user event the game attached, value, held time - to the mod's log. op=systemrows (journal open): the System page - whether it picks rows by name, every row it knows (canonical), the rows it shows, the [SystemMenu] list and the rows removed this open. op=own: controls with no INI line whose live keys differ from controlmap.txt are written into the INI, and ControlMap_Custom.txt is removed from the game folder; op=state reports customMap, lastOwn and ownLines. op=function with event (the extra row's name), device and key (a button name or code, or \"none\" to unbind): binds an extra [Functions] row and writes its value into the target mod's settings file. op=deliver writes every extra row's value to its target file now. op=opencontrols opens the System page's Controls panel (journal open, System tab) by setting the page's own state, never by driving keys. op=state lists the extra rows with the SKSE input code each one delivers. op=tweenwait: Tween Menu Overhaul Wait requests seen, answered (keyboard Wait had no key) and the last result; fire=1 (tween menu open) sends the request its Wait option sends.\","
-			"\"inputSchema\":{\"type\":\"object\",\"properties\":{\"op\":{\"type\":\"string\"},\"context\":{\"type\":\"string\"},\"event\":{\"type\":\"string\"},\"device\":{\"type\":\"string\"},\"key\":{\"type\":\"string\"},\"seconds\":{\"type\":\"string\"},\"fire\":{\"type\":\"string\"}}},"
+			"op=reload gives the keys back, re-reads the INI and applies. op=rows (journal open): every row of the game's Controls list - event, the buttonName and buttonID the game sent, whether this mod draws it blank and why. op=listen [seconds, default 20, 1-120]: log every button event - device, code, the user event the game attached, value, held time - to the mod's log. op=systemrows (journal open): the System page - whether it picks rows by name, every row it knows (canonical), the rows it shows, the [SystemMenu] list and the rows removed this open. op=own: controls with no INI line whose live keys differ from controlmap.txt are written into the INI, and ControlMap_Custom.txt is removed from the game folder; op=state reports customMap, lastOwn and ownLines. op=function with event (the extra row's name), device and key (a button name or code, or \"none\" to unbind): binds an extra [Functions] row and writes its value into the target mod's settings file. op=deliver writes every extra row's value to its target file now. op=opencontrols opens the System page's Controls panel (journal open, System tab) by setting the page's own state, never by driving keys. op=state lists the extra rows with the SKSE input code each one delivers. op=tweenwait: Tween Menu Overhaul Wait requests seen, answered (keyboard Wait had no key) and the last result; fire=1 (tween menu open) sends the request its Wait option sends. op=requests: every request other mods made, its answer and why, and the player's saved choices. op=request (plugin, event, label, context, device, key, alt), op=release, op=query (plugin, event, context, device): the request API through its public header, as another mod calls it. op=requesttest [release=1]: refused, granted and alternative answers in one call on the keyboard, with two rows left on the Controls page until release=1. op=why [event, default Sneak]: the game's switches for Sneak, movement and fighting, and the control's default and live keys, modifier and group flags per device.\","
+			"\"inputSchema\":{\"type\":\"object\",\"properties\":{\"op\":{\"type\":\"string\"},\"context\":{\"type\":\"string\"},\"event\":{\"type\":\"string\"},\"device\":{\"type\":\"string\"},\"key\":{\"type\":\"string\"},\"seconds\":{\"type\":\"string\"},\"fire\":{\"type\":\"string\"},\"plugin\":{\"type\":\"string\"},\"label\":{\"type\":\"string\"},\"alt\":{\"type\":\"string\"},\"release\":{\"type\":\"string\"}}},"
 			"\"readOnly\":false"
 			"}";
 

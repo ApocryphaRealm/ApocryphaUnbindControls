@@ -39,6 +39,7 @@ namespace
 			// own setting.
 			if (functions::Adopt("data loaded") > 0) { settings::Save(); }
 			functions::Deliver("data loaded", false);
+			unbinder::RequestsAtDataLoaded();  // what other mods asked before now is decided, after the player's lists and rows are read
 			DevBenchTool::Init(true);
 			break;
 		case SKSE::MessagingInterface::kPostLoadGame:

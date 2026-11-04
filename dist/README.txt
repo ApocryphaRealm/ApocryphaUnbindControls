@@ -14,6 +14,30 @@ that D-pad up can be Toggle POV. A menu action the game ties to an unbound contr
 If you use Wheeler on Q or the D-pad instead of the Favorites menu, the INI has the author's two
 Favorites lines ready to switch on, with what to change beside them.
 
+FOR MOD AUTHORS: ASKING FOR A KEY
+A mod can ask this mod for a key instead of shipping one of its own, so the player sets it on one page
+with everything else, and two mods cannot land on the same key without anyone knowing.
+Copy include/UVCRequestAPI.h from this mod's source into your plugin. Nothing to link: it finds this
+mod's exports at run time, and with this mod absent IsAvailable() is false and your plugin carries on.
+  const auto uvc = UVCRequestAPI::GetAPI();
+  const auto a = uvc.Request("My Mod", "MyMod Dash", "Dash", "Gameplay", UVCRequestAPI::kGamepad, 0x4000, 0x0002);
+That asks for X on the controller, or D-pad down if X is taken, for an action of your own in the
+Gameplay context. The press reaches your input sink as a button event whose user event is "MyMod Dash".
+Also: Release takes the key back and removes the row, Query reads what an action has now.
+- Contexts: Gameplay, Swimming, Horseback, and the game's others (Menu Mode, Map, Item Menus ...).
+- Keys: the codes controlmap.txt uses, per device. No modifier combinations in this version.
+- A user event of the game's own works too, on a device where it has no key (Hotkey3, say).
+- The answer: granted, alternative, playerChoice, refused, queued, released, notRequested, badRequest
+  or displaced, the key, and a sentence saying why, naming what holds the key.
+- The player always wins. A key a control, one of this mod's rows or another mod's request holds is not
+  given. An accepted request is a row on the Controls page, "Dash (My Mod)", under MOD REQUESTS or in
+  the SWIMMING or HORSEBACK block. What the player sets there stays in the INI's [ModRequests], above
+  whatever you ask next, and if they later give your key to something else your answer says displaced.
+- Ask at every game start, from kDataLoaded onward on the main thread. Earlier or from another thread the
+  answer is queued: it is decided at the next chance and Query gives the result.
+- Everything happens in the game's control map in memory. controlmap.txt on disk is never edited.
+There is no Papyrus route in this version.
+
 SYSTEM TAB ON THE CONTROLLER
 Skyrim gives the System tab no controller button. This mod puts it on Start: pressing Start opens the
 journal on the System tab, the same as Esc on the keyboard. Move it to another button in the game's
