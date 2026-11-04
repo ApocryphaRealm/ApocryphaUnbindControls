@@ -154,7 +154,8 @@ WHAT CHANGED
 
 Version 1.3.0
 Added a SWIMMING block on the Controls page: buttons that apply only while you are in water ([Swimming] in the INI). Everything goes back the moment you are out of the water.
-Added a HORSEBACK block on the Controls page: buttons that apply only while you are mounted ([Horseback] in the INI). Everything goes back the moment you dismount.
+Added a HORSEBACK block on the Controls page: its own control map while you are mounted ([Horseback] in the INI). It lists what a rider can use, menus included, and leaves out Sneak and Shout, whose keys are free while you ride once the block has a line. Everything goes back the moment you dismount.
+Added horse keys of other mods to the HORSEBACK block: Call Horse (Simplest Horses, Press H to Horse) moved here and can be set; HorsePower's Pet Horse can be set; Better Third Person Selection's hold to dismount and tap to use, HorsePower's horse attack and Convenient Horses' charge are listed, each only while that mod is there.
 Changed the Controls page to scroll top to bottom: every block is reached with up and down, no sideways sliding.
 Added an IN MAP block that is always listed: the world map's own buttons, bound for the map alone.
 Added a Map Selector row in IN MAP for World Map Selector for Controller.

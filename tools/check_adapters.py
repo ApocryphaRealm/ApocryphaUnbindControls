@@ -36,6 +36,8 @@ def adapters():
             opts.append("padfirst")
         for s, k, b, u, pad in re.findall(r't\.switches\.push_back\(\{\s*"([^"]*)",\s*"([^"]*)",\s*"([^"]*)",\s*"([^"]*)",\s*(true|false)\s*\}\);', m.group(7)):
             opts.append("%s=%s:%s=%s/%s" % ("padswitch" if pad == "true" else "switch", s, k, b, u))
+        if "t.readOnly = true" in m.group(7):
+            opts.append("readonly")
         d = re.search(r't\.defaultsFile = "([^"]*)";', m.group(7))
         if d:
             opts.append("defaults=" + d.group(1).replace("\\\\", "\\"))
@@ -167,6 +169,10 @@ def main():
         print("FAIL: only %d adapters parsed out of BuiltInAdapters() - the parser and the source disagree" % len(ads))
         return 1
     for name, file, section, key, modkey, none, requires, opts in ads:
+        # a listed row with no gate names no setting of its mod: nothing to check
+        if "readonly" in opts.split(";") and not key:
+            lines.append("ok   %-42s [listed only] requires %s" % (name, requires))
+            continue
         if "api=InputManager" in opts.split(";"):
             bad, live = check_input_manager_row(a.instance, name, file, key, none, requires, opts)
             fails += bool(bad)

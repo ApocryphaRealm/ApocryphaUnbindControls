@@ -96,14 +96,21 @@ namespace functions
 		//   native (1.3.0) - the target's numbers are the game's own codes written in hex (a DX scan code, the controller's
 		//               mask), not the SKSE Input Script numbering, and it takes no mouse button. Ours: World Map Selector for
 		//               Controller's MapMenuKey=0x2E / MapMenuButton=0x0001.
+		//   readonly (1.3.0) - a LISTED row: it says what a key does and who owns it, and nothing here can change it. It is never
+		//               adopted, written or captured. Key, when it is not empty, names an on/off setting of that mod (File,
+		//               Section, Key, defaults=): the row is shown only while that setting is on.
+		//   follows=<Gameplay control> (1.3.0, with readonly) - the mod acts on that control's user event, so the row shows the
+		//               key the control has in the row's block. Without it the row shows "MCM": the key is in that mod's own menu.
 		bool gamepadFirst = false;
 		std::string block;
 		bool nativeCodes = false;
+		bool readOnly = false;
+		std::string follows;
 		std::vector<Switch> switches;
 		std::string defaultsFile;
 		std::string api;      // "" or "InputManager"
 		std::string idCheck;  // "" or "<JSON>:<array key>" (api=InputManager rows only)
-		bool HasOptions() const { return gamepadFirst || !switches.empty() || !defaultsFile.empty() || !api.empty() || !idCheck.empty() || !block.empty() || nativeCodes; }
+		bool HasOptions() const { return gamepadFirst || !switches.empty() || !defaultsFile.empty() || !api.empty() || !idCheck.empty() || !block.empty() || nativeCodes || readOnly; }
 		std::string OptionsText() const;          // the twelfth field as it is written back
 		bool ParseOptions(const std::string& a_text, std::string& a_why);
 	};
@@ -144,6 +151,14 @@ namespace functions
 	// supported mod, named "<Function> (<Mod>)". They are added to the INI's list at load (MergeBuiltIns) so an INI
 	// written by an older version gets them too, and like every row they show only while their mod is installed.
 	std::vector<Function> BuiltInAdapters();
+	// The block whose rows are the HORSEBACK context. A mod's key in it is the mod's own key, which that mod reads on foot and
+	// mounted alike, so unlike IN MAP it can clash with any other row outside a block.
+	inline constexpr std::string_view kHorseBlock = "HORSEBACK";
+	// HorsePower's Manual Horseback Petting: on, its pet follows the Sneak user event while mounted, so Sneak means something
+	// on a horse (HorsePower.dll there and bManualPetting on).
+	bool ManualPettingOn();
+	// True when the row at this index is a listed row (Target::readOnly).
+	bool IsReadOnlyRow(std::size_t a_index);
 	// Adds each built-in adapter the list does not already have - by name, or by a row that already writes the same
 	// file, section and key (a player's own row for that mod keeps its place). Returns how many were added.
 	int MergeBuiltIns(std::vector<Function>& a_list);

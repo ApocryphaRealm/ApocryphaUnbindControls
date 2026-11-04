@@ -102,6 +102,7 @@ namespace controlslist
 			int row = 0;                // ... and its line in `lines`, never a title
 			int firstLine = 0;          // the first line on screen
 			bool capture = false;       // a row is waiting for its key
+			bool listedMessage = false; // the page says a listed row cannot be set, until the selection moves
 			int captureContext = -1;    // the context a game control or menu action is bound in (-1: an extra row)
 			std::string captureEvent;   // its event id
 			long long releaseAtMs = 0;  // when the page's remap guard comes off after that capture
@@ -336,7 +337,8 @@ namespace controlslist
 			{
 				f.function = true;
 				f.functionIndex = index;
-				if (functions::ShownBinding(index, a_gamepad).key == functions::kUnbound)
+				// A listed row's key is the control it follows (or "MCM"), not a binding of its own.
+				if (functions::IsReadOnlyRow(index) ? f.buttonName.empty() : functions::ShownBinding(index, a_gamepad).key == functions::kUnbound)
 				{
 					f.blank = true;
 					f.why = a_gamepad ? "an extra row with no gamepad button" : "an extra row with no keyboard or mouse key";
@@ -619,6 +621,23 @@ namespace controlslist
 				const std::string modPart = RowButtonName(shown.modifier, fnDevice);
 				if (!modPart.empty()) { keyText = modPart + " + " + keyText; }
 			}
+			// A listed row: the key of the control the mod acts on, in that block's layout, or the place the key really lives.
+			if (list[f].target.readOnly)
+			{
+				keyText = list[f].target.follows.empty() ? std::string("MCM") : std::string();
+				if (!list[f].target.follows.empty())
+				{
+					for (const int device : a_gamepad ? std::vector<int>{ 2 } : std::vector<int>{ 0, 1 })
+					{
+						const std::uint16_t k = unbinder::LayoutShownKey(unbinder::kLayoutHorse, list[f].target.follows, device);
+						if (k != kUnmappedID)
+						{
+							keyText = RowButtonName(k, device);
+							break;
+						}
+					}
+				}
+			}
 			const auto at = std::find(present.begin(), present.end(), list[f].name);
 			if (at != present.end())
 			{
@@ -784,7 +803,7 @@ namespace controlslist
 			std::erase_if(list, [&](const unbinder::DelinkedAction& a_d) { return a_d.hidden || a_d.layout != a_layout; });
 			// [Functions] rows that belong to a block of their own (Map Selector: the player sets it with the other map
 			// buttons). A function row is not a menu action, so it follows that block's rows.
-			const auto functionList = a_layout != unbinder::kLayoutLand ? std::vector<functions::Function>{} : functions::GetFunctions();
+			const auto functionList = a_layout == unbinder::kLayoutWater ? std::vector<functions::Function>{} : functions::GetFunctions();
 			if (list.empty() && functionList.empty()) { return false; }
 			std::stable_sort(list.begin(), list.end(), [](const unbinder::DelinkedAction& a_l, const unbinder::DelinkedAction& a_r) { return a_l.sheetContext < a_r.sheetContext; });
 			std::vector<std::string> present;
@@ -853,7 +872,8 @@ namespace controlslist
 			// A block with a function row and no menu rows on this control map still gets its title and its row.
 			for (const auto& fn : functionList)
 			{
-				if (!fn.target.block.empty()) { addBlockFunctions(fn.target.block); }
+				// HORSEBACK's come with that block's pass; the other blocks with the last pass.
+				if (!fn.target.block.empty() && (a_layout == unbinder::kLayoutHorse) == IEqualsView(fn.target.block, functions::kHorseBlock)) { addBlockFunctions(fn.target.block); }
 			}
 			return added > 0;
 		}
@@ -1046,6 +1066,11 @@ namespace controlslist
 			std::size_t functionIndex = 0;
 			if (functions::IsFunctionRow(event, &functionIndex))
 			{
+				if (functions::IsReadOnlyRow(functionIndex))
+				{
+					SetRemapResult(std::format("\"{}\" is listed only: the mod in its name owns this key", event));
+					return;
+				}
 				if (!hasPress || pressed.device < 0 || pressed.device > 2)
 				{
 					SetRemapResult(std::format("\"{}\": the remap ended with no key recorded; the row is unchanged", event));
@@ -1644,6 +1669,14 @@ namespace controlslist
 			{
 				RE::GFxValue entry;
 				if (!entries.GetElement(i, &entry) || !entry.IsObject() || RowKey(entry) != key) { continue; }
+				// A listed row has nothing to set: it says so and takes no key.
+				if (std::size_t functionIndex = 0; functions::IsFunctionRow(key, &functionIndex) && functions::IsReadOnlyRow(functionIndex))
+				{
+					SheetMessage(a_page, "$Set by the mod it names, not here.");
+					g_sheet.listedMessage = true;
+					logger::debug("controls list: sheet cell \"{}\" is a listed row; no key taken", key);
+					return;
+				}
 				{
 					unbinder::DelinkedAction menuRow;
 					g_sheet.capture = true;
@@ -1725,6 +1758,11 @@ namespace controlslist
 					logger::trace("controls sheet: input value \"{}\" nav \"{}\" code {} (column {}, row {})", value, nav, code, g_sheet.col, g_sheet.row);
 				}
 				if (value != "keyDown" && value != "keyHold") { return false; }
+				if (g_sheet.listedMessage && (nav == "up" || nav == "down" || nav == "left" || nav == "right"))
+				{
+					SheetMessage(a_page, "");
+					g_sheet.listedMessage = false;
+				}
 				if (nav == "up") { MoveRow(-1); }
 				else if (nav == "down") { MoveRow(1); }
 				else if (nav == "left")

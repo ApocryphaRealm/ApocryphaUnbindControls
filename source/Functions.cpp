@@ -109,6 +109,29 @@ namespace functions
 		}
 	}
 
+	namespace
+	{
+		std::string ReadTargetValue(const Target& a_target, const std::string& a_section, const std::string& a_key);
+
+		// An on/off setting of another mod (a listed row's gate, HorsePower's petting). The Controls page asks once per visible
+		// row per frame, so the file is read at most every two seconds; a change in that mod's own menu shows soon after.
+		bool SettingOn(const Target& a_target)
+		{
+			static std::mutex lock;
+			static std::map<std::string, std::pair<bool, std::int64_t>> cache;
+			const std::int64_t now = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+			const std::string id = a_target.section + ":" + a_target.key;
+			std::scoped_lock l(lock);
+			const auto it = cache.find(id);
+			if (it != cache.end() && now - it->second.second < 2000) { return it->second.first; }
+			const std::string value = ReadTargetValue(a_target, a_target.section, a_target.key);
+			const bool on = value == "1" || IEquals(value, "true");
+			if (it == cache.end() || it->second.first != on) { logger::debug("functions: {} in {} is \"{}\": {}", id, a_target.file, value, on ? "on" : "off"); }
+			cache[id] = { on, now };
+			return on;
+		}
+	}
+
 	// Is the mod this row points at actually installed?
 	//
 	// Asked of the file system, once per call, because it is the only honest answer available: a row exists to set
@@ -121,7 +144,16 @@ namespace functions
 		const std::string& probe = a_function.target.requiresFile.empty() ? a_function.target.file : a_function.target.requiresFile;
 		if (probe.empty()) { return false; }
 		std::error_code ec;
-		if (!std::filesystem::exists(std::filesystem::path(g_dataPath) / probe, ec) || ec) { return false; }
+		// Several names, comma-separated, when a listed row's mod has been seen under more than one.
+		bool found = false;
+		for (std::size_t from = 0; from <= probe.size() && !found;)
+		{
+			const auto comma = probe.find(',', from);
+			found = std::filesystem::exists(std::filesystem::path(g_dataPath) / probe.substr(from, comma == std::string::npos ? std::string::npos : comma - from), ec) && !ec;
+			from = comma == std::string::npos ? probe.size() + 1 : comma + 1;
+		}
+		if (!found) { return false; }
+		if (a_function.target.readOnly && !a_function.target.key.empty() && !SettingOn(a_function.target)) { return false; }
 		// An Input Manager row needs Input Manager too (its File is InputManager.dll), as well as the mod it is for.
 		if (!a_function.target.api.empty() && !a_function.target.requiresFile.empty())
 		{
@@ -216,6 +248,8 @@ namespace functions
 		if (!idCheck.empty()) { out += std::format("{}idcheck={}", out.empty() ? "" : ";", idCheck); }
 		if (!block.empty()) { out += std::format("{}block={}", out.empty() ? "" : ";", block); }
 		if (nativeCodes) { out += std::format("{}native", out.empty() ? "" : ";"); }
+		if (readOnly) { out += std::format("{}readonly", out.empty() ? "" : ";"); }
+		if (!follows.empty()) { out += std::format("{}follows={}", out.empty() ? "" : ";", follows); }
 		return out;
 	}
 
@@ -238,9 +272,20 @@ namespace functions
 				nativeCodes = true;
 				continue;
 			}
+			if (IEquals(token, "readonly"))
+			{
+				readOnly = true;
+				continue;
+			}
 			const auto startsWith = [&](std::string_view a_prefix) {
 				return token.size() > a_prefix.size() && IEquals(std::string_view(token).substr(0, a_prefix.size()), a_prefix);
 			};
+			constexpr std::string_view kFollows = "follows=";
+			if (startsWith(kFollows))
+			{
+				follows = Trim(token.substr(kFollows.size()));
+				continue;
+			}
 			constexpr std::string_view kBlock = "block=";
 			if (startsWith(kBlock))
 			{
@@ -338,9 +383,57 @@ namespace functions
 
 		// CALL HORSE. Simplest Horses: hold the key (0.7 s) and let go to call the horse, tap to make it follow or wait
 		// (MCM Helper; RegisterForKey takes SKSE codes, so a pad button works). Press H to Horse: its horse key (MCM
-		// Helper; hold 0.9 s for the treat / horse menu).
-		add("Call Horse (Simplest Horses)", target("MCM\\Settings\\SimplestHorses.ini", "Main", "iHorse_hotkey", "", -1, "SimplestHorses.esp"));
-		add("Call Horse (Press H to Horse)", target("MCM\\Settings\\H2Horse.ini", "General", "iHorseKey", "", -1, "H2Horse.esp"));
+		// Helper; hold 0.9 s for the treat / horse menu). Listed in HORSEBACK (the owner, 2026-11-03); the key itself is the
+		// mod's own and works on foot as well.
+		{
+			Target t = target("MCM\\Settings\\SimplestHorses.ini", "Main", "iHorse_hotkey", "", -1, "SimplestHorses.esp");
+			t.block = std::string(kHorseBlock);
+			add("Call Horse (Simplest Horses)", std::move(t));
+		}
+		{
+			Target t = target("MCM\\Settings\\H2Horse.ini", "General", "iHorseKey", "", -1, "H2Horse.esp");
+			t.block = std::string(kHorseBlock);
+			add("Call Horse (Press H to Horse)", std::move(t));
+		}
+
+		// LISTED ROWS IN HORSEBACK (the owner, 2026-11-03: "that should be listed in the horse context"). Each is something a
+		// mod does with a key this mod cannot set for it.
+		// Better Third Person Selection hooks the game's ActivateHandler, so it acts on the Activate user event: while
+		// bIsHoldToDismountEnabled is on, holding Activate dismounts (fHoldToDismountTime, its MCM) and a tap only activates
+		// what is selected (bIsEnabledOnHorseBack). Its keys therefore move with the HORSEBACK Activate row.
+		{
+			Target t = target("MCM\\Settings\\BetterThirdPersonSelection.ini", "General", "bIsHoldToDismountEnabled", "", -1, "SKSE\\Plugins\\BetterThirdPersonSelection.dll");
+			t.block = std::string(kHorseBlock);
+			t.readOnly = true;
+			t.follows = "Activate";
+			add("Hold Activate to Dismount (BTPS)", std::move(t));
+		}
+		{
+			Target t = target("MCM\\Settings\\BetterThirdPersonSelection.ini", "General", "bIsEnabledOnHorseBack", "", -1, "SKSE\\Plugins\\BetterThirdPersonSelection.dll");
+			t.block = std::string(kHorseBlock);
+			t.readOnly = true;
+			t.follows = "Activate";
+			add("Tap Activate to Use Target (BTPS)", std::move(t));
+		}
+		// HorsePower's experimental horse attack: both attack user events pressed together with a weapon drawn. Off by default.
+		// (Its petting is a real row, on the Sneak control: Unbinder.cpp, kHorsePetRow.)
+		{
+			Target t = target("SKSE\\Plugins\\HorsepowerCustom.ini", "Experimental", "bEnableManualHorseAttacks", "", -1, "SKSE\\Plugins\\HorsePower.dll");
+			t.defaultsFile = "SKSE\\Plugins\\HorsePower.ini";
+			t.block = std::string(kHorseBlock);
+			t.readOnly = true;
+			t.follows = "Right Attack/Block";
+			add("Both Attacks for Horse Attack (HorsePower)", std::move(t));
+		}
+		// Convenient Horses keeps its keys in its Papyrus MCM, in the save (see above): nothing to write, so it is listed only,
+		// and only while its plugin is there. Not on the owner's list when this was written, so the name and plugin come from
+		// the owner's description and its public pages, not from its files.
+		{
+			Target t = target("", "", "", "", -1, "Convenient Horses.esp,ConvenientHorses.esp");
+			t.block = std::string(kHorseBlock);
+			t.readOnly = true;
+			add("Horse Charge (Convenient Horses)", std::move(t));
+		}
 
 		// DODGE. The four TK Dodge "RE" builds all ship TK_Dodge_RE.dll, so each is told apart by its own settings file.
 		// TK Dodge RE and TK Dodge NG: [Main] DodgeHotkey, no "none" of their own - 0 is a key no input produces.
@@ -488,6 +581,15 @@ namespace functions
 					f.target.idCheck = b.target.idCheck;
 				}
 			}
+			// A row saved before it moved to a block of the page (Call Horse into HORSEBACK) keeps its keys and takes the block.
+			for (auto& f : a_list)
+			{
+				if (!b.target.block.empty() && f.target.block.empty() && IEquals(f.name, b.name))
+				{
+					logger::info("[Functions]: \"{}\" is listed in {} now", f.name, b.target.block);
+					f.target.block = b.target.block;
+				}
+			}
 			const bool have = std::any_of(a_list.begin(), a_list.end(), [&](const Function& a_f) {
 				return IEquals(a_f.name, b.name) ||
 				       (IEquals(a_f.target.file, b.target.file) && IEquals(a_f.target.section, b.target.section) && IEquals(a_f.target.key, b.target.key));
@@ -538,6 +640,11 @@ namespace functions
 	{
 		std::scoped_lock l(g_lock);
 		if (a_index >= g_functions.size() || a_device < 0 || a_device > 2) { a_why = "no such row"; return false; }
+		if (g_functions[a_index].target.readOnly)
+		{
+			a_why = "the mod in its name owns this key";
+			return false;
+		}
 		if (a_device == 0 && IsAmfReserved(a_key))
 		{
 			a_why = "AMF reserves that key";
@@ -553,8 +660,12 @@ namespace functions
 			if (i == a_index) { continue; }
 			// a row whose mod is not installed is not on the page and drives nothing: it cannot hold a key against this one
 			if (!TargetPresent(g_functions[i])) { continue; }
-			// another block is another context: the same button means something else there
-			if (!IEquals(g_functions[i].target.block, g_functions[a_index].target.block)) { continue; }
+			// a listed row holds no key of its own
+			if (g_functions[i].target.readOnly) { continue; }
+			// another block is another context: the same button means something else there. HORSEBACK is not one for a mod's
+			// key: the mod reads it on foot and mounted alike.
+			const auto contextOf = [](const std::string& a_block) { return IEquals(a_block, kHorseBlock) ? std::string_view{} : std::string_view(a_block); };
+			if (!IEquals(contextOf(g_functions[i].target.block), contextOf(g_functions[a_index].target.block))) { continue; }
 			const auto& other = g_functions[i].bind[a_device];
 			if (other.key == a_key && other.modifier == g_functions[a_index].bind[a_device].modifier)
 			{
@@ -565,6 +676,26 @@ namespace functions
 		g_functions[a_index].bind[a_device].key = a_key;
 		g_functions[a_index].clearedByPlayer = false;
 		return true;
+	}
+
+	bool IsReadOnlyRow(std::size_t a_index)
+	{
+		std::scoped_lock l(g_lock);
+		return a_index < g_functions.size() && g_functions[a_index].target.readOnly;
+	}
+
+	bool ManualPettingOn()
+	{
+		if (g_dataPath.empty()) { return false; }
+		std::error_code ec;
+		if (!std::filesystem::exists(std::filesystem::path(g_dataPath) / "SKSE" / "Plugins" / "HorsePower.dll", ec) || ec) { return false; }
+		// HorsePower reads HorsePower.ini, then the player's HorsepowerCustom.ini over it.
+		Target t;
+		t.file = "SKSE\\Plugins\\HorsepowerCustom.ini";
+		t.defaultsFile = "SKSE\\Plugins\\HorsePower.ini";
+		t.section = "Settings";
+		t.key = "bManualPetting";
+		return SettingOn(t);
 	}
 
 	bool Unbind(std::size_t a_index, int a_device)
@@ -931,6 +1062,7 @@ namespace functions
 			if (!TargetPresent(f)) { continue; }
 			if (f.target.file.empty() || f.target.key.empty()) { continue; }
 			if (!f.target.api.empty()) { continue; }  // AdoptInputManagerRows, below
+			if (f.target.readOnly) { continue; }  // its Key is an on/off setting, not a key
 			// A SPLIT target is adopted PER DEVICE, because the INI stores only one device's binding per row: the
 			// save writes the first device that is bound, so a row holding both a keyboard and a gamepad key loses
 			// one of them on the next save. Re-adopting the missing side from the target on every load is what
@@ -1054,7 +1186,7 @@ namespace functions
 			// row delivered "no key" into every other unbound row's file (TK Dodge AIO's uDodgeKey 42 -> 1, batch 11).
 			std::erase_if(snapshot, [a_writeUnbound](const Function& a_f) {
 				const bool bound = std::any_of(a_f.bind.begin(), a_f.bind.end(), [](const Binding& a_b) { return a_b.key != kUnbound; });
-				return !bound && !(a_writeUnbound && a_f.clearedByPlayer);
+				return a_f.target.readOnly || (!bound && !(a_writeUnbound && a_f.clearedByPlayer));
 			});
 			return snapshot;
 		}
@@ -1226,8 +1358,9 @@ namespace functions
 		{
 			const auto& f = g_functions[i];
 			out += std::format(
-				"{}{{\"name\":\"{}\",\"file\":\"{}\",\"section\":\"{}\",\"key\":\"{}\",\"modifierKey\":\"{}\"",
-				i ? "," : "", JsonText(f.name), JsonText(f.target.file), JsonText(f.target.section), JsonText(f.target.key), JsonText(f.target.modifierKey));
+				"{}{{\"name\":\"{}\",\"file\":\"{}\",\"section\":\"{}\",\"key\":\"{}\",\"modifierKey\":\"{}\",\"block\":\"{}\",\"readOnly\":{},\"follows\":\"{}\",\"present\":{}",
+				i ? "," : "", JsonText(f.name), JsonText(f.target.file), JsonText(f.target.section), JsonText(f.target.key), JsonText(f.target.modifierKey),
+				JsonText(f.target.block), f.target.readOnly ? "true" : "false", JsonText(f.target.follows), TargetPresent(f) ? "true" : "false");
 			for (int d = 0; d < 3; ++d)
 			{
 				out += std::format(",\"{}\":{{\"key\":{},\"modifier\":{},\"code\":{}}}", unbinder::DeviceName(d),

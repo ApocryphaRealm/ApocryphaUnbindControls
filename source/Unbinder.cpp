@@ -3,6 +3,7 @@
 #include "Unbinder.h"
 
 #include "ControlsList.h"
+#include "Functions.h"
 #include "Settings.h"
 #include "SystemMenu.h"
 #include "utils/Logger.h"
@@ -1369,18 +1370,33 @@ namespace unbinder
 		{
 			const char* event;
 			bool gamepad;
+			const char* label = nullptr;  // the row's name when it is not the control's
 		};
 		constexpr SwimRow kSwimRows[] = {
 			{ "Jump", true }, { "Sneak", true }, { "Sprint", true }, { "Activate", true }, { "Ready Weapon", true },
 			{ "Right Attack/Block", true }, { "Left Attack/Block", true }, { "Shout", true },
 			{ "Forward", false }, { "Back", false }, { "Strafe Left", false }, { "Strafe Right", false }, { "Run", false },
 		};
-		// The HORSEBACK block: the same, and the two a rider reaches for (the camera, and leaving the reins to Auto-Move).
+		// The HORSEBACK block (the owner, 2026-11-03: "an actual separate control map, because you don't need something like
+		// sneaking while on a horse"): the controls a rider can use. Jump rears or jumps, Sprint gallops, Activate dismounts,
+		// weapons and bows work mounted, and the menus still open. The game's controlmap.txt has no mounted context to read this
+		// from, so the list is by what the game does: Sneak does nothing mounted, and neither spells nor shouts can be used.
 		constexpr SwimRow kHorseRows[] = {
-			{ "Jump", true }, { "Sneak", true }, { "Sprint", true }, { "Activate", true }, { "Ready Weapon", true },
-			{ "Right Attack/Block", true }, { "Left Attack/Block", true }, { "Shout", true }, { "Toggle POV", true }, { "Auto-Move", true },
-			{ "Forward", false }, { "Back", false }, { "Strafe Left", false }, { "Strafe Right", false }, { "Run", false },
+			{ "Jump", true }, { "Sprint", true }, { "Activate", true }, { "Ready Weapon", true },
+			{ "Right Attack/Block", true }, { "Left Attack/Block", true }, { "Toggle POV", true }, { "Auto-Move", true },
+			{ "Tween Menu", true }, { "Favorites", true }, { "Wait", true }, { "Journal", true }, { "Pause", true },
+			{ "Forward", false }, { "Back", false }, { "Strafe Left", false }, { "Strafe Right", false }, { "Run", false }, { "Toggle Always Run", false },
+			{ "Quick Inventory", false }, { "Quick Magic", false }, { "Quick Stats", false }, { "Quick Map", false },
 		};
+		// HorsePower pets the horse on the Sneak user event while mounted, so with its Manual Horseback Petting on, Sneak has a job
+		// on a horse: this row is that control under the name of what it does there. Its key is a real [Horseback] Sneak line.
+		constexpr SwimRow kHorsePetRow[] = { { "Sneak", true, "Pet Horse (HorsePower)" } };
+
+		// A control the HORSEBACK layout takes off its keys while it is on, so they are free while riding. A line of its own wins.
+		bool FreedWhileMounted(std::string_view a_event)
+		{
+			return IEquals(a_event, "Shout") || (IEquals(a_event, "Sneak") && !functions::ManualPettingOn());
+		}
 
 		struct MapRow
 		{
@@ -1420,7 +1436,7 @@ namespace unbinder
 					d.row = row;
 					d.block = a_block;
 					d.title = a_title;
-					d.action = r.event;
+					d.action = r.label ? r.label : r.event;
 					d.keyboardFamily = keyboard;
 					d.gamepad = gamepad;
 					d.layout = a_layout;
@@ -1430,6 +1446,7 @@ namespace unbinder
 			};
 			addRows(kSwimRows, kLayoutWater, "Swimming", "SWIMMING");
 			addRows(kHorseRows, kLayoutHorse, "Horseback", "HORSEBACK");
+			if (functions::ManualPettingOn()) { addRows(kHorsePetRow, kLayoutHorse, "Horseback", "HORSEBACK"); }
 
 			// IN MAP (the owner, 2026-11-03: "if there's not already a map context ... we need to add"). The engine's Map
 			// context has always been there and [Bound] lines already reach it; what was missing is rows for it.
@@ -1503,10 +1520,23 @@ namespace unbinder
 				{
 					if (b.device == d) { lines.push_back(&b); }
 				}
-				if (lines.empty()) { continue; }
 				const auto isLine = [&](const char* a_event) {
 					return std::any_of(lines.begin(), lines.end(), [&](const Bind* a_b) { return IEquals(a_b->event, a_event); });
 				};
+				if (a_layout == kLayoutHorse)
+				{
+					for (auto& m : *mappings)
+					{
+						if (m.inputKey == kUnmapped || !m.eventID.c_str() || !FreedWhileMounted(m.eventID.c_str()) || isLine(m.eventID.c_str())) { continue; }
+						moved += std::format("{}{} {} free", moved.empty() ? "" : ", ", m.eventID.c_str(), DeviceName(d));
+						m.inputKey = kUnmapped;
+					}
+				}
+				if (lines.empty())
+				{
+					SortByKey(*mappings);
+					continue;
+				}
 				// A key a line takes leaves whatever holds it: this is the point of the context. The same key with a land
 				// modifier is another input to the engine, so it stays.
 				for (const auto* b : lines)
@@ -1611,7 +1641,29 @@ namespace unbinder
 			};
 			// The layout going off and the one coming on.
 			if (on != kLayoutLand) { note(LinesLocked(on)); }
-			if (const int wanted = WantedLayout(); wanted != kLayoutLand && wanted != on) { note(LinesLocked(wanted)); }
+			const int wantedLayout = WantedLayout();
+			if (wantedLayout != kLayoutLand && wantedLayout != on) { note(LinesLocked(wantedLayout)); }
+			// The controls the HORSEBACK layout frees move too.
+			if (on == kLayoutHorse || wantedLayout == kLayoutHorse)
+			{
+				for (int d = 0; d < 3; ++d)
+				{
+					if (on == kLayoutHorse)
+					{
+						for (const auto& s : g_land[d])
+						{
+							if (s.key != kUnmapped && FreedWhileMounted(s.event)) { keys.emplace_back(d, s.key); }
+						}
+					}
+					else if (auto* mappings = MappingsFor(a_map, kGameplayContext, d))
+					{
+						for (const auto& m : *mappings)
+						{
+							if (m.inputKey != kUnmapped && m.eventID.c_str() && FreedWhileMounted(m.eventID.c_str())) { keys.emplace_back(d, m.inputKey); }
+						}
+					}
+				}
+			}
 			const auto now = NowMs();
 			std::scoped_lock h(g_heldLock);
 			std::erase_if(g_held, [&](const HeldButton& a_h) { return now - a_h.seenMs > kHeldForgetMs; });
@@ -1835,10 +1887,10 @@ namespace unbinder
 			}
 			return out;
 		};
-		return std::format(R"("swimming":{{"isSwimming":{},"settled":{},"waterLayoutOn":{},"journalOpen":{},"swaps":{},"framesWaitedForHeldKey":{},"lines":[{}]}},"horseback":{{"onMount":{},"settled":{},"horseLayoutOn":{},"lines":[{}]}})",
+		return std::format(R"("swimming":{{"isSwimming":{},"settled":{},"waterLayoutOn":{},"journalOpen":{},"swaps":{},"framesWaitedForHeldKey":{},"lines":[{}]}},"horseback":{{"onMount":{},"settled":{},"horseLayoutOn":{},"petting":{},"lines":[{}]}})",
 						   state && state->IsSwimming() ? "true" : "false", stable == kLayoutWater ? "true" : "false", on == kLayoutWater ? "true" : "false",
 						   g_swimJournal.load() ? "true" : "false", g_swimFlips.load(), g_swimWaited.load(), linesJson(g_swim),
-						   player && player->IsOnMount() ? "true" : "false", stable == kLayoutHorse ? "true" : "false", on == kLayoutHorse ? "true" : "false", linesJson(g_horse));
+						   player && player->IsOnMount() ? "true" : "false", stable == kLayoutHorse ? "true" : "false", on == kLayoutHorse ? "true" : "false", functions::ManualPettingOn() ? "true" : "false", linesJson(g_horse));
 	}
 
 	void ApplyAll(const char* a_reason)
