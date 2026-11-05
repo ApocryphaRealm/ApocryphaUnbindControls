@@ -232,6 +232,16 @@ namespace unbinder
 	RequestAnswer AskRequest(std::string_view a_plugin, std::string_view a_action, std::string_view a_label, std::string_view a_context, int a_device, std::uint32_t a_key, std::uint32_t a_alternative);
 	RequestAnswer ReleaseRequest(std::string_view a_plugin, std::string_view a_action, std::string_view a_context, int a_device);
 	RequestAnswer QueryRequest(std::string_view a_plugin, std::string_view a_action, std::string_view a_context, int a_device);
+	// UVC_ForEachBinding: every row with a key on a device, land layout, for a mod that shows them (UVC Controller Layout). Main thread; empty elsewhere.
+	struct BindingRow
+	{
+		std::string block;
+		std::string event;
+		std::string label;
+		std::uint32_t key = 0xFF;
+		std::uint32_t modifier = 0;
+	};
+	std::vector<BindingRow> AllBindings(int a_device);
 	void RequestsAtDataLoaded();                     // requests asked before this point are decided; main thread
 	void RedecideRequests();                         // after the INI was re-read; the caller applies. Main thread
 	std::vector<RequestChoice> GetRequestChoices();

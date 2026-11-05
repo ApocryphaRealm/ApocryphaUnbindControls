@@ -2449,6 +2449,59 @@ namespace unbinder
 		return { UVCRequestAPI::kNotRequested, key, "not requested; the key that control has now" };
 	}
 
+	std::vector<BindingRow> AllBindings(int a_device)
+	{
+		std::vector<BindingRow> out;
+		auto* map = RE::ControlMap::GetSingleton();
+		if (!map || a_device < 0 || a_device > 2 || !OnGameThread()) { return out; }
+		{
+			std::scoped_lock l(g_lock);
+			for (int context = 0; context < ContextCount(); ++context)
+			{
+				const std::string block = ContextName(context);
+				ForEachLandMapping(map, context, a_device, [&](std::string_view a_event, std::uint16_t a_k, std::uint16_t a_mod) {
+					if (a_k == kUnmapped || a_event.empty()) { return; }
+					std::string label;
+					for (const auto& r : g_requests)
+					{
+						if (r.accepted && r.layout == kLayoutLand && r.context == context && r.device == a_device && IEquals(r.action, a_event))
+						{
+							label = std::format("{} ({})", r.label, r.plugin);
+							break;
+						}
+					}
+					out.push_back({ block, std::string(a_event), std::move(label), a_k, a_mod });
+				});
+			}
+			const auto designated = [&](const Bind& a_b) -> std::uint32_t {
+				if (!a_b.useDesignatedModifier) { return a_b.modifier; }
+				for (const auto& m : g_modifiers)
+				{
+					if (m.device == a_device) { return m.key; }
+				}
+				return 0;
+			};
+			for (const auto& b : g_swim)
+			{
+				if (b.device == a_device && b.key != kUnmapped) { out.push_back({ "Swimming", b.event, {}, b.key, designated(b) }); }
+			}
+			for (const auto& b : g_horse)
+			{
+				if (b.device == a_device && b.key != kUnmapped) { out.push_back({ "Horseback", b.event, {}, b.key, designated(b) }); }
+			}
+			for (const auto& m : g_modifiers)
+			{
+				if (m.device == a_device && m.key != kUnmapped) { out.push_back({ "Modifier", kModifierRowName, {}, m.key, 0 }); }
+			}
+		}
+		for (const auto& f : functions::GetPresentFunctions())
+		{
+			const auto& bind = f.bind[static_cast<std::size_t>(a_device)];
+			if (bind.key != kUnmapped) { out.push_back({ f.target.block.empty() ? "Mod" : f.target.block, f.name, f.name, bind.key, bind.modifier }); }
+		}
+		return out;
+	}
+
 	std::vector<RequestChoice> GetRequestChoices()
 	{
 		std::scoped_lock l(g_lock);

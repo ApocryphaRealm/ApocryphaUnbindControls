@@ -96,12 +96,31 @@ namespace UVCRequestAPI
 	using ReleaseBind_t = void (*)(const char* a_plugin, const char* a_action, const char* a_context, std::int32_t a_device, Answer* a_out);
 	using QueryBind_t = void (*)(const char* a_plugin, const char* a_action, const char* a_context, std::int32_t a_device, Answer* a_out);
 
+	// EVERY BINDING, FOR A MOD THAT SHOWS THEM (UVC Controller Layout). One call per row UVC knows on that device, on the calling
+	// thread, before ForEachBinding returns. Main thread only; from another thread there are no calls. The land layout, whatever the
+	// player is doing now. Rows with no key are left out. The strings last only for the call.
+	// block: an engine context ("Gameplay", "Map"...), or "Swimming", "Horseback", "Modifier" (the designated modifier), or a Controls
+	// page block for another mod's function ("Mod" when it has none). event: the user event; for a function, its row's name. label: the
+	// row's name when it differs from the event (a requested row, a function), else empty. key and modifier: the codes controlmap.txt
+	// uses; modifier 0 or kNoKey means none.
+	struct BindingRow
+	{
+		const char* block = "";
+		const char* event = "";
+		const char* label = "";
+		std::uint32_t key = kNoKey;
+		std::uint32_t modifier = 0;
+	};
+	using BindingRowFn_t = void (*)(const BindingRow* a_row, void* a_user);
+	using ForEachBinding_t = void (*)(std::int32_t a_device, BindingRowFn_t a_fn, void* a_user);
+
 	struct API
 	{
 		GetApiVersion_t getApiVersion = nullptr;
 		RequestBind_t requestBind = nullptr;
 		ReleaseBind_t releaseBind = nullptr;
 		QueryBind_t queryBind = nullptr;
+		ForEachBinding_t forEachBinding = nullptr;  // not part of IsAvailable: an older UVC has none
 
 		bool IsAvailable() const { return getApiVersion && requestBind && releaseBind && queryBind; }
 
@@ -145,6 +164,7 @@ namespace UVCRequestAPI
 		api.requestBind = reinterpret_cast<RequestBind_t>(find("UVC_RequestBind"));
 		api.releaseBind = reinterpret_cast<ReleaseBind_t>(find("UVC_ReleaseBind"));
 		api.queryBind = reinterpret_cast<QueryBind_t>(find("UVC_QueryBind"));
+		api.forEachBinding = reinterpret_cast<ForEachBinding_t>(find("UVC_ForEachBinding"));
 		return api;
 	}
 }

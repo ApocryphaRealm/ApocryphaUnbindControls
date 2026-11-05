@@ -41,4 +41,14 @@ extern "C"
 	{
 		Fill(unbinder::QueryRequest(Text(a_plugin), Text(a_action), Text(a_context), a_device), a_out);
 	}
+
+	DLLEXPORT void UVC_ForEachBinding(std::int32_t a_device, UVCRequestAPI::BindingRowFn_t a_fn, void* a_user)
+	{
+		if (!a_fn) { return; }
+		for (const auto& row : unbinder::AllBindings(a_device))
+		{
+			const UVCRequestAPI::BindingRow out{ row.block.c_str(), row.event.c_str(), row.label.c_str(), row.key, row.modifier };
+			a_fn(&out, a_user);
+		}
+	}
 }
