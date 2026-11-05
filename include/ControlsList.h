@@ -44,6 +44,8 @@ namespace controlslist
 	// Opens the System page's Controls panel (DevBench driving; main thread). False with a_why set when it cannot.
 	// Never drives keys to do it - a spliced press in the Controls menu remaps a control (logic library 4680).
 	bool OpenControlsPanel(std::string& a_why);
+	// The block on the page, by a_delta, wrapping round (DevBench driving; main thread). False when the sheet has no blocks yet.
+	bool SwitchSheetBlock(int a_delta, std::string& a_title);
 
 	std::string RowsJson();
 	std::string RowClipsJson();  // DevBench op=rowclips: the row clips and their text fields

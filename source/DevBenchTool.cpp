@@ -193,6 +193,20 @@ namespace DevBenchTool
 				a_write(a_sink, result->c_str());
 				return;
 			}
+			if (op == "sheetblock")
+			{
+				int delta = 1;
+				try { delta = std::stoi(Get(args, "value")); }
+				catch (...) { delta = 1; }
+				auto result = std::make_shared<std::string>();
+				if (!RunOnUIThread([result, delta]() {
+						std::string title;
+						const bool ok = controlslist::SwitchSheetBlock(delta, title);
+						*result = std::format(R"({{"ok":{},"op":"sheetblock","block":"{}"}})", ok, title);
+					})) { a_write(a_sink, R"({"ok":false,"op":"sheetblock","error":"UI thread did not run the task in time"})"); return; }
+				a_write(a_sink, result->c_str());
+				return;
+			}
 			if (op == "rowclips")
 			{
 				auto result = std::make_shared<std::string>();

@@ -97,9 +97,10 @@ namespace UVCRequestAPI
 	using QueryBind_t = void (*)(const char* a_plugin, const char* a_action, const char* a_context, std::int32_t a_device, Answer* a_out);
 
 	// EVERY BINDING, FOR A MOD THAT SHOWS THEM (UVC Controller Layout). One call per row UVC knows on that device, on the calling
-	// thread, before ForEachBinding returns. Main thread only; from another thread there are no calls. The land layout, whatever the
-	// player is doing now. Rows with no key are left out. The strings last only for the call.
-	// block: an engine context ("Gameplay", "Map"...), or "Swimming", "Horseback", "Modifier" (the designated modifier), or a Controls
+	// thread, before ForEachBinding returns. Main thread only; from another thread there are no calls. As set, whatever the player is
+	// doing now. Rows with no key are left out. The strings last only for the call.
+	// block: an engine context ("Gameplay", "Map"...), or "Swimming" or "Horseback" (each whole: every Gameplay control as it is there),
+	// "Modifier" (the designated modifier), or a Controls
 	// page block for another mod's function ("Mod" when it has none). event: the user event; for a function, its row's name. label: the
 	// row's name when it differs from the event (a requested row, a function), else empty. key and modifier: the codes controlmap.txt
 	// uses; modifier 0 or kNoKey means none.

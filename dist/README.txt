@@ -91,10 +91,10 @@ with it. This mod gives each of those menu buttons a key of its own, in its own 
 control map gives it out of the box - so changing a gameplay control never changes a menu button.
 
 THE CONTROLS PAGE
-Journal > System > Controls is laid out as a sheet, one block under another: GAMEPLAY, SWIMMING, HORSEBACK, then EXTRA
-CONTROLS (the rows this mod adds), then one block per menu - MENUS, ITEMS and IN MAP. Up and down (the D-pad, the arrow keys
-or the mouse wheel) walk every row of every block and the sheet scrolls to follow; left and right move along a line. The
-block's title stays at the top, with which block of how many at the top right.
+Journal > System > Controls shows one block at a time: GAMEPLAY, SWIMMING, HORSEBACK, then EXTRA CONTROLS (the rows this
+mod adds), then one block per menu - MENUS, ITEMS and IN MAP. LB and RB change the block and go round, as do PgUp and PgDn or
+a click on the title at the top (its left end goes back). Up and down (the D-pad, the arrow keys or the mouse wheel) walk the
+block's rows; left and right move along a line. Which block of how many is at the top right.
 Select a row and press Accept (or click it), then press the new key. A key another gameplay control uses
 is swapped with it, the way the game does it; a key the game reserves is refused. Hold the Modifier (Left
 Trigger on a controller) and press a button to bind a combination, shown as two key pictures.

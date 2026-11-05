@@ -106,8 +106,10 @@ namespace controlslist
 			int captureContext = -1;    // the context a game control or menu action is bound in (-1: an extra row)
 			std::string captureEvent;   // its event id
 			long long releaseAtMs = 0;  // when the page's remap guard comes off after that capture
-			std::vector<SheetLine> lines;
+			std::vector<SheetLine> lines;    // the block on the page only
 			std::vector<std::string> drawn;  // what each cell last showed, so SetEntry runs only on a change
+			std::vector<std::string> blocks;  // the title of every block with rows, in page order
+			int blockIndex = 0;               // which of them is on the page
 		};
 		SheetState g_sheet;  // main thread (the journal's frame and its input both run there)
 		std::array<std::vector<std::uint16_t>, 3> g_before;  // main thread: the control's keys when the remap began
@@ -1455,6 +1457,12 @@ namespace controlslist
 			g_rowsBlankNow.store(blankNow);
 		}
 
+		// ONE BLOCK AT A TIME (the owner, 2026-11-04, replacing the top-to-bottom sheet below and his earlier "no need for bumpers or
+		// tabs": one context on the page, like The Witcher 3's controls screen). The page shows one block, its title at the top with
+		// which of how many. LB and RB, PgUp and PgDn, or a click on the title change it, wrapping round. Up and down walk that block
+		// only. Everything else below still holds, and a remap's capture is untouched: while bRemapMode is set the input wrap returns
+		// before it looks at any button, so LB and RB bind as usual.
+		//
 		// THE CONTROLS SHEET (the owner, 2026-09-28, in turn: "break up all these different control rows so that they're not
 		// just vertical, but are also separated horizontally ... each column would be for a different context"; "There's no
 		// need to have the bumpers navigate anything or to have tabs. This is just one continuous sheet of D-pad selectable
@@ -1602,16 +1610,28 @@ namespace controlslist
 			return blocks;
 		}
 
-		// Every block, top to bottom: its title line, then its rows left to right in a_cols columns.
+		// The block on the page: its title line, then its rows left to right in a_cols columns. Notes every block's title in g_sheet, and
+		// follows the block by its title, since a block can come and go as the entries are rebuilt.
 		std::vector<SheetLine> BuildSheet(const RE::GFxValue& a_entries, int a_cols)
 		{
 			std::vector<SheetLine> out;
 			const std::size_t perLine = static_cast<std::size_t>(std::max(1, a_cols));
-			int blockIndex = 0;
-			for (const auto& b : SheetBlocks(a_entries))
+			const std::string wanted = g_sheet.blockIndex >= 0 && g_sheet.blockIndex < static_cast<int>(g_sheet.blocks.size()) ? g_sheet.blocks[static_cast<std::size_t>(g_sheet.blockIndex)] : std::string();
+			std::vector<std::string> titles;
+			const auto all = SheetBlocks(a_entries);
+			for (const auto& b : all)
 			{
-				if (b.rows.empty()) { continue; }
-				++blockIndex;
+				if (!b.rows.empty()) { titles.push_back(b.title); }
+			}
+			const auto found = std::find(titles.begin(), titles.end(), wanted);
+			g_sheet.blockIndex = found != titles.end() ? static_cast<int>(found - titles.begin()) : 0;
+			g_sheet.blocks = std::move(titles);
+			if (g_sheet.blocks.empty()) { return out; }
+			const std::string& onPage = g_sheet.blocks[static_cast<std::size_t>(g_sheet.blockIndex)];
+			const int blockIndex = g_sheet.blockIndex + 1;
+			for (const auto& b : all)
+			{
+				if (b.rows.empty() || b.title != onPage) { continue; }
 				if (!b.title.empty())
 				{
 					SheetLine title;
@@ -1628,8 +1648,21 @@ namespace controlslist
 					line.cells.assign(b.rows.begin() + static_cast<std::ptrdiff_t>(at), b.rows.begin() + static_cast<std::ptrdiff_t>(std::min(b.rows.size(), at + perLine)));
 					out.push_back(std::move(line));
 				}
+				break;
 			}
 			return out;
+		}
+
+		// The next or previous block on the page, wrapping round. Main thread.
+		void SwitchBlock(int a_delta)
+		{
+			const int count = static_cast<int>(g_sheet.blocks.size());
+			if (count < 2) { return; }
+			g_sheet.blockIndex = (g_sheet.blockIndex + a_delta % count + count) % count;
+			g_sheet.row = 0;
+			g_sheet.col = 0;
+			g_sheet.firstLine = 0;
+			logger::debug("controls sheet: block {} of {}: \"{}\"", g_sheet.blockIndex + 1, count, g_sheet.blocks[static_cast<std::size_t>(g_sheet.blockIndex)]);
 		}
 
 		bool PageInControls(RE::GFxMovieView* a_movie, RE::GFxValue& a_page)
@@ -1787,6 +1820,25 @@ namespace controlslist
 					logger::trace("controls sheet: input value \"{}\" nav \"{}\" code {} (column {}, row {})", value, nav, code, g_sheet.col, g_sheet.row);
 				}
 				if (value != "keyDown" && value != "keyHold") { return false; }
+				// The block: LB and RB, or PgUp and PgDn (33 and 34, the keyboard's codes in these movies). Not on a key held down.
+				{
+					double code = -1.0;
+					NumberMember(a_details, "code", code);
+					const int asked = nav == "gamepad_L1" || nav == "pageUp" || static_cast<int>(code) == 33 ? -1 : (nav == "gamepad_R1" || nav == "pageDown" || static_cast<int>(code) == 34 ? 1 : 0);
+					if (asked != 0)
+					{
+						if (value == "keyDown")
+						{
+							if (g_sheet.listedMessage)
+							{
+								SheetMessage(a_page, "");
+								g_sheet.listedMessage = false;
+							}
+							SwitchBlock(asked);
+						}
+						return true;
+					}
+				}
 				if (g_sheet.listedMessage && (nav == "up" || nav == "down" || nav == "left" || nav == "right"))
 				{
 					SheetMessage(a_page, "");
@@ -1831,6 +1883,22 @@ namespace controlslist
 				if (!NumberMember(*a_params.thisPtr, "_uvcCol", col) || !NumberMember(*a_params.thisPtr, "_uvcSlot", slot)) { return; }
 				const int column = static_cast<int>(col);
 				const int row = LineAtSlot(static_cast<int>(slot));
+				// The top line is the block's title: a click on its left end goes back a block, anywhere else on the line goes on one.
+				if (static_cast<int>(slot) == 0 && (row < 0 || g_sheet.lines[static_cast<std::size_t>(row)].cells.empty()))
+				{
+					if (press)
+					{
+						double x = 1000.0;
+						NumberMember(*a_params.thisPtr, "_xmouse", x);
+						auto* view = static_cast<RE::GFxMovieView*>(a_params.movie);
+						RE::GFxValue inControls, remapFlag;
+						if (PageInControls(view, inControls) && !(inControls.GetMember("bRemapMode", &remapFlag) && remapFlag.IsBool() && remapFlag.GetBool()))
+						{
+							SwitchBlock(column == 0 && x < 40.0 ? -1 : 1);
+						}
+					}
+					return;
+				}
 				if (row < 0 || column < 0 || column >= static_cast<int>(g_sheet.lines[static_cast<std::size_t>(row)].cells.size())) { return; }
 				auto* movie = static_cast<RE::GFxMovieView*>(a_params.movie);
 				RE::GFxValue page;
@@ -2663,7 +2731,10 @@ namespace controlslist
 			// which block of how many, so it reads as a list that goes on below
 			const std::string topTitle = firstLine.block;
 			const SheetLine& selectedLine = g_sheet.lines[static_cast<std::size_t>(std::clamp(g_sheet.row, 0, static_cast<int>(g_sheet.lines.size()) - 1))];
-			const std::string position = std::format("{}/{}", selectedLine.blockIndex, g_sheet.lines.back().blockIndex);
+			// LB and RB, named as this journal's art draws them, beside which block of how many
+			const bool playStationNames = settings::controls::gamepadFaces == settings::controls::Faces::kPlayStation ||
+			                              (settings::controls::gamepadFaces != settings::controls::Faces::kXbox && unbinder::GamepadButtonName(0x0100).starts_with("PS"));
+			const std::string position = std::format("{}  {}/{}", playStationNames ? "L1 R1" : "LB RB", selectedLine.blockIndex, g_sheet.blocks.size());
 
 			g_sheet.drawn.resize(static_cast<std::size_t>(kSheetCols * kSheetSlots));
 			for (int c = 0; c < kSheetCols; ++c)
@@ -2693,7 +2764,14 @@ namespace controlslist
 					const bool titleSlot = s < g_metrics.slots && c == 0 && (line ? !line->title.empty() : s == 0);
 					const bool positionSlot = s == 0 && c == cols - 1 && cols > 1;
 					std::string titleText;
-					if (titleSlot) { titleText = line ? line->title : topTitle; }
+					if (titleSlot)
+					{
+						// its own translation first: the arrows beside it would stop the field's own $ lookup finding the token
+						titleText = line ? line->title : topTitle;
+						std::string translated;
+						if (titleText.starts_with('$') && SKSE::Translation::Translate(titleText, translated) && !translated.empty()) { titleText = translated; }
+						if (g_sheet.blocks.size() > 1) { titleText = std::format("<   {}   >", titleText); }
+					}
 					else if (positionSlot) { titleText = position; }
 					const bool isTitle = !titleText.empty();
 					RE::GFxValue entry;
@@ -2973,6 +3051,14 @@ namespace controlslist
 
 	// DevBench op=rowclips (journal open, Controls shown): the row clips on stage and their text field - position, size,
 	// alignment, font size and auto-size modes - so a layout change is made against what this journal actually draws.
+	bool SwitchSheetBlock(int a_delta, std::string& a_title)
+	{
+		SwitchBlock(a_delta);
+		if (g_sheet.blocks.empty()) { return false; }
+		a_title = g_sheet.blocks[static_cast<std::size_t>(std::clamp(g_sheet.blockIndex, 0, static_cast<int>(g_sheet.blocks.size()) - 1))];
+		return true;
+	}
+
 	std::string RowClipsJson()
 	{
 		auto* movie = JournalMovie();

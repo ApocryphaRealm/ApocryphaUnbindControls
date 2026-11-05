@@ -2473,25 +2473,44 @@ namespace unbinder
 					out.push_back({ block, std::string(a_event), std::move(label), a_k, a_mod });
 				});
 			}
-			const auto designated = [&](const Bind& a_b) -> std::uint32_t {
-				if (!a_b.useDesignatedModifier) { return a_b.modifier; }
-				for (const auto& m : g_modifiers)
-				{
-					if (m.device == a_device) { return m.key; }
-				}
-				return 0;
-			};
-			for (const auto& b : g_swim)
-			{
-				if (b.device == a_device && b.key != kUnmapped) { out.push_back({ "Swimming", b.event, {}, b.key, designated(b) }); }
-			}
-			for (const auto& b : g_horse)
-			{
-				if (b.device == a_device && b.key != kUnmapped) { out.push_back({ "Horseback", b.event, {}, b.key, designated(b) }); }
-			}
 			for (const auto& m : g_modifiers)
 			{
 				if (m.device == a_device && m.key != kUnmapped) { out.push_back({ "Modifier", kModifierRowName, {}, m.key, 0 }); }
+			}
+		}
+		// The Swimming and Horseback layouts whole: every Gameplay control as it is there, its own line or else what it keeps from land.
+		// LayoutShownKey takes the lock itself.
+		std::vector<BindingRow> land;
+		for (const auto& r : out)
+		{
+			if (r.block == ContextName(kGameplayContext)) { land.push_back(r); }
+		}
+		for (const int layout : { kLayoutWater, kLayoutHorse })
+		{
+			const char* block = layout == kLayoutWater ? "Swimming" : "Horseback";
+			std::vector<Bind> lines;
+			std::uint32_t designatedKey = 0;
+			{
+				std::scoped_lock l(g_lock);
+				lines = LinesLocked(layout);
+				for (const auto& m : g_modifiers)
+				{
+					if (m.device == a_device) { designatedKey = m.key; }
+				}
+			}
+			std::vector<std::string> listed;
+			for (const auto& b : lines)
+			{
+				if (b.device != a_device) { continue; }
+				listed.push_back(b.event);
+				if (b.key != kUnmapped) { out.push_back({ block, b.event, {}, b.key, b.useDesignatedModifier ? designatedKey : b.modifier }); }
+			}
+			for (const auto& r : land)
+			{
+				if (std::any_of(listed.begin(), listed.end(), [&](const std::string& a_e) { return IEquals(a_e, r.event); })) { continue; }
+				if (layout == kLayoutHorse && FreedWhileMounted(r.event)) { continue; }
+				const std::uint16_t key = LayoutShownKey(layout, r.event, a_device);
+				if (key != kUnmapped) { out.push_back({ block, r.event, r.label, key, r.modifier }); }
 			}
 		}
 		for (const auto& f : functions::GetPresentFunctions())
