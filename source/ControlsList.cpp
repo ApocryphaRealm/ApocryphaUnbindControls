@@ -420,14 +420,14 @@ namespace controlslist
 		// THE LAYOUT (the owner, 2026-09-28: "align all the control page rows to the left so that their text is to the left and
 		// that they all have the same font size and that the controls are arranged in blocks that are distinct, like for menus
 		// block and then other blocks"). The list is split into blocks, each opened by a title row - GAMEPLAY over the game's
-		// own controls, EXTRA CONTROLS over this mod's extra rows, then one per menu (MENUS, ITEMS, INVENTORY ...) - and every
+		// own controls and this mod's extra rows (the owner, 2026-11-05: no separate EXTRA CONTROLS title), then one per
+		// menu (MENUS, ITEMS, IN MAP ...) - and every
 		// row's name is drawn left-aligned at the list's own size in a column wide enough that nothing is shrunk to fit.
 		//
 		// A title row is an entry like any other (a row the list draws) with no key; pressing it sets nothing. Inside a menu
 		// block a row is labelled by its action alone ("Cancel"), so names repeat between blocks and a row this mod adds is
 		// identified by _uvcRowKey instead of its text.
 		constexpr const char* kGameplayTitle = "GAMEPLAY";
-		constexpr const char* kExtraTitle = "EXTRA CONTROLS";
 		constexpr double kNameWidth = 212.0;  // the name column: the field starts at 0 and the key tile at 228
 
 		std::string RowKey(const RE::GFxValue& a_entry)
@@ -610,8 +610,10 @@ namespace controlslist
 		}
 
 		// One [Functions] row (a_index in the full list): added, or its key text brought up to date. True when the list changed.
-		bool AddOneFunctionRow(RE::GFxMovieView* a_movie, RE::GFxValue& a_entries, std::vector<std::string>& present, const std::vector<functions::Function>& list, std::size_t f, bool a_gamepad)
+		// a_secondPlace: the row an also= binding has in its second block. Same name and same binding; only its identity on the page differs.
+		bool AddOneFunctionRow(RE::GFxMovieView* a_movie, RE::GFxValue& a_entries, std::vector<std::string>& present, const std::vector<functions::Function>& list, std::size_t f, bool a_gamepad, bool a_secondPlace = false)
 		{
+			const std::string rowId = a_secondPlace ? functions::SecondPlaceKey(list[f].name) : list[f].name;
 			// The mod this row points at is not installed: no row, and nothing written on its behalf.
 			if (!functions::IsPresentAt(f)) { return false; }
 			const auto shown = functions::ShownBinding(f, a_gamepad);
@@ -640,7 +642,7 @@ namespace controlslist
 					}
 				}
 			}
-			const auto at = std::find(present.begin(), present.end(), list[f].name);
+			const auto at = std::find(present.begin(), present.end(), rowId);
 			if (at != present.end())
 			{
 				// Already a row: only its key text can have changed.
@@ -667,6 +669,7 @@ namespace controlslist
 				hasSort = NumberMember(last, "sortIndex", sortIndex);
 			}
 			value.SetMember("text", RE::GFxValue(list[f].name.c_str()));
+			if (a_secondPlace) { value.SetMember("_uvcRowKey", RE::GFxValue(rowId.c_str())); }
 			value.SetMember("buttonName", RE::GFxValue(keyText.c_str()));
 			value.SetMember("buttonID", RE::GFxValue(static_cast<double>(kUnmappedID)));
 			// Appended, so it sorts after everything already there.
@@ -680,13 +683,13 @@ namespace controlslist
 			const auto size = a_entries.GetArraySize();
 			a_entries.SetArraySize(size + 1);
 			a_entries.SetElement(size, value);
-			present.push_back(list[f].name);
+			present.push_back(rowId);
 			logger::info("controls list: extra row \"{}\" added at the end of the {} list (key \"{}\")", list[f].name,
 						 a_gamepad ? "gamepad" : "keyboard", keyText.empty() ? "none" : keyText);
 			return true;
 		}
 
-		// The extra rows ([Functions]) go at the END of the list, after every vanilla control. They are not user events,
+		// The extra rows ([Functions]) go after every vanilla control, in GAMEPLAY, before any other block's title. They are not user events,
 		// so controlmap.txt gives them no place in its order, and appending is the one position that cannot push a
 		// vanilla row out of the order the player already knows. Their key text is written on every pass rather than
 		// once: the row's binding changes while the page is open (the player just bound it), and the game never
@@ -728,15 +731,6 @@ namespace controlslist
 				}
 				else
 				{
-					{
-						std::vector<std::string> keys;
-						for (std::uint32_t i = 0; i < a_entries.GetArraySize(); ++i)
-						{
-							RE::GFxValue v;
-							keys.push_back(a_entries.GetElement(i, &v) && v.IsObject() ? RowKey(v) : std::string());
-						}
-						if (AppendTitle(a_movie, a_entries, keys, kExtraTitle)) { ++added; }
-					}
 					RE::GFxValue value;
 					a_movie->CreateObject(&value);
 					RE::GFxValue last;
@@ -766,7 +760,7 @@ namespace controlslist
 
 			for (std::size_t f = 0; f < list.size(); ++f)
 			{
-				// A row listed in a block of its own (Map Selector, in IN MAP) is added with that block (AddDelinkedRows).
+				// A row listed in a block of its own (Map Selector in IN MAP, Back Pocket in ITEMS) is added with that block (AddDelinkedRows).
 				if (!list[f].target.block.empty()) { continue; }
 				if (AddOneFunctionRow(a_movie, a_entries, present, list, f, a_gamepad)) { ++added; }
 			}
@@ -825,9 +819,11 @@ namespace controlslist
 			const auto addBlockFunctions = [&](const std::string& a_title) {
 				for (std::size_t f = 0; f < functionList.size(); ++f)
 				{
-					if (functionList[f].target.block != a_title || !functions::IsPresentAt(f)) { continue; }
+					const bool here = functionList[f].target.block == a_title;
+					const bool second = functionList[f].target.alsoBlock == a_title;
+					if ((!here && !second) || !functions::IsPresentAt(f)) { continue; }
 					if (AppendTitle(a_movie, a_entries, present, a_title)) { ++added; }
-					if (AddOneFunctionRow(a_movie, a_entries, present, functionList, f, a_gamepad)) { ++added; }
+					if (AddOneFunctionRow(a_movie, a_entries, present, functionList, f, a_gamepad, !here)) { ++added; }
 				}
 			};
 			const auto addRow = [&](const unbinder::DelinkedAction& d) {
@@ -882,7 +878,10 @@ namespace controlslist
 			for (const auto& fn : functionList)
 			{
 				// HORSEBACK's come with that block's pass; the other blocks with the last pass.
-				if (!fn.target.block.empty() && (a_layout == unbinder::kLayoutHorse) == IEqualsView(fn.target.block, functions::kHorseBlock)) { addBlockFunctions(fn.target.block); }
+				for (const auto* block : { &fn.target.block, &fn.target.alsoBlock })
+				{
+					if (!block->empty() && (a_layout == unbinder::kLayoutHorse) == IEqualsView(*block, functions::kHorseBlock)) { addBlockFunctions(*block); }
+				}
 			}
 			return added > 0;
 		}
@@ -1322,11 +1321,12 @@ namespace controlslist
 			if (!g_remapActive.load())
 			{
 				changed = AddMissingRows(a_movie, entries, gamepad);
-				// Both are asked, and the order matters: the vanilla rows this mod puts back are placed by
-				// controlmap.txt order, and the extra rows go after all of them.
+				// All are asked, and the order matters: the vanilla rows this mod puts back are placed by
+				// controlmap.txt order, the extra rows go after all of them and so stay in GAMEPLAY, and the other
+				// blocks' titles come after those (the owner, 2026-11-05: no block of their own).
+				changed = AddFunctionRows(a_movie, entries, gamepad) || changed;
 				changed = AddDelinkedRows(a_movie, entries, gamepad, unbinder::kLayoutWater) || changed;
 				changed = AddDelinkedRows(a_movie, entries, gamepad, unbinder::kLayoutHorse) || changed;
-				changed = AddFunctionRows(a_movie, entries, gamepad) || changed;
 				changed = AddDelinkedRows(a_movie, entries, gamepad, unbinder::kLayoutLand) || changed;
 				changed = AddGameplayTitle(a_movie, entries) || changed;
 			}
@@ -1471,7 +1471,7 @@ namespace controlslist
 		//
 		// The game's list stays the source of every row - its entries are what the game remaps, and this mod already adds
 		// its own rows and block titles to them - but it is no longer drawn. The sheet draws the same entries one block under
-		// another, top to bottom: GAMEPLAY, SWIMMING, HORSEBACK, EXTRA CONTROLS, then one block per menu, each with its rows
+		// another, top to bottom: GAMEPLAY (with the extra rows), SWIMMING, HORSEBACK, then one block per menu, each with its rows
 		// side by side in as many columns as the frame holds (the owner, 2026-11-03: "instead of scrolling left to right, I'd
 		// rather scroll top to bottom to access the different contexts of controls"). Up and down walk every row of every
 		// block and the sheet scrolls to keep the selection on screen, with the block's title held at the top while scrolled
@@ -1744,7 +1744,7 @@ namespace controlslist
 					g_sheet.capture = true;
 					a_page.SetMember("bRemapMode", RE::GFxValue(true));  // the page keeps every input to itself meanwhile
 					SheetMessage(a_page, "$Press a button to map to this action.");
-					g_remapEvent = key;
+					g_remapEvent = functions::RowNameOf(key);  // an also= row's second place binds the row itself
 					for (auto& b : g_before) { b.clear(); }
 					g_beforeAll = unbinder::SnapshotGameplay();
 					{

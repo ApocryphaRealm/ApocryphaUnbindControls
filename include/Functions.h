@@ -90,7 +90,7 @@ namespace functions
 		//               SKSE\Plugins\BFCO NG\Settings.json:PowerAttackActionIDs) is CHECKED against the row's named action:
 		//               when its first id no longer names that action, the log says so (the mod would fire on whatever now
 		//               sits at that position). Nothing is written from it, and nothing is written to the mod's file.
-		//   block=<title> (1.3.0) - the row is listed in that block of the Controls page instead of EXTRA CONTROLS, and only
+		//   block=<title> (1.3.0) - the row is listed in that block of the Controls page instead of GAMEPLAY, and only
 		//               another row of the same block can hold a key against it (the blocks are different contexts: D-pad up
 		//               on the world map is not D-pad up in gameplay).
 		//   native (1.3.0) - the target's numbers are the game's own codes written in hex (a DX scan code, the controller's
@@ -99,10 +99,13 @@ namespace functions
 		//   readonly (1.3.0) - a LISTED row: it says what a key does and who owns it, and nothing here can change it. It is never
 		//               adopted, written or captured. Key, when it is not empty, names an on/off setting of that mod (File,
 		//               Section, Key, defaults=): the row is shown only while that setting is on.
+		//   also=<title> (1.3.0) - one binding shown in a second block as well (Call Horse / Horse Inventory: GAMEPLAY and
+		//               HORSEBACK, like The Witcher 3's controls). Both rows are the same key: a bind from either moves it.
 		//   follows=<Gameplay control> (1.3.0, with readonly) - the mod acts on that control's user event, so the row shows the
 		//               key the control has in the row's block. Without it the row shows "MCM": the key is in that mod's own menu.
 		bool gamepadFirst = false;
 		std::string block;
+		std::string alsoBlock;
 		bool nativeCodes = false;
 		bool readOnly = false;
 		std::string follows;
@@ -166,6 +169,9 @@ namespace functions
 	// True when a_name is one of the function rows (the Controls list asks this once per visible row per frame, so it
 	// must not copy the vector). a_index gets its position in the list.
 	bool IsFunctionRow(std::string_view a_name, std::size_t* a_index = nullptr);
+	// The page's identity of an also= row's second place, and the row's own name back from either.
+	std::string SecondPlaceKey(std::string_view a_name);
+	std::string RowNameOf(std::string_view a_rowKey);
 	// The binding a function row shows for the family the Controls page is showing. Keyboard and mouse are one family:
 	// the keyboard binding is preferred, the mouse one used when the keyboard has none.
 	Binding ShownBinding(std::size_t a_index, bool a_gamepad);

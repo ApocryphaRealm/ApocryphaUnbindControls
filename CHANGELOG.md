@@ -10,6 +10,7 @@ Rule 61: this mod's own history, kept beside the code it describes.
 ## 1.3.0 - 2026-11-03 - untested
 
 ### Changed
+- The Controls page has no EXTRA CONTROLS title any more (the owner, 2026-11-05). The rows it held - Stance, Wheel Menu, Dodge, Power Attack, Target Lock, Scavenger Sense and Call Horse - and the Modifier row sit at the end of GAMEPLAY; what applies only while riding stays under HORSEBACK. **Call Horse / Horse Inventory** is the new name of the horse key's row and it is one binding listed in both GAMEPLAY and HORSEBACK, like The Witcher 3's shared binds (a new adapter option `also=<title>`, the owner, 2026-11-05): a bind from either place moves the same key and the other place shows it. The name says what the key does in Simplest Horses and Press H to Horse; a saved row keeps its keys and takes the new name. Back Pocket is in ITEMS, where the Inventory's own Charge Item is, since it acts only in the item menus. A saved INI keeps its keys and its rows take the new place at load.
 - **The Controls page shows one block at a time** (the owner, 2026-11-04, like The Witcher 3's controls screen). The block's name is at the top with which of how many; LB and RB change it, wrapping round, as do PgUp and PgDn and a click on the title line (its left end goes back). Up and down walk that block only. Rows and rebinding are as they were, and while a row waits for its key LB and RB bind as usual.
 
 ### Added

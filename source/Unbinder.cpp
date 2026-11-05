@@ -2516,7 +2516,11 @@ namespace unbinder
 		for (const auto& f : functions::GetPresentFunctions())
 		{
 			const auto& bind = f.bind[static_cast<std::size_t>(a_device)];
-			if (bind.key != kUnmapped) { out.push_back({ f.target.block.empty() ? "Mod" : f.target.block, f.name, f.name, bind.key, bind.modifier }); }
+			if (bind.key != kUnmapped)
+			{
+				out.push_back({ f.target.block.empty() ? "Mod" : f.target.block, f.name, f.name, bind.key, bind.modifier });
+				if (!f.target.alsoBlock.empty()) { out.push_back({ f.target.alsoBlock, f.name, f.name, bind.key, bind.modifier }); }
+			}
 		}
 		return out;
 	}

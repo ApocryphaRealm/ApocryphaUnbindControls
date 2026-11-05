@@ -91,8 +91,8 @@ with it. This mod gives each of those menu buttons a key of its own, in its own 
 control map gives it out of the box - so changing a gameplay control never changes a menu button.
 
 THE CONTROLS PAGE
-Journal > System > Controls shows one block at a time: GAMEPLAY, SWIMMING, HORSEBACK, then EXTRA CONTROLS (the rows this
-mod adds), then one block per menu - MENUS, ITEMS and IN MAP. LB and RB change the block and go round, as do PgUp and PgDn or
+Journal > System > Controls shows one block at a time: GAMEPLAY (with the rows this mod adds), SWIMMING, HORSEBACK, then
+one block per menu - MENUS, ITEMS and IN MAP. LB and RB change the block and go round, as do PgUp and PgDn or
 a click on the title at the top (its left end goes back). Up and down (the D-pad, the arrow keys or the mouse wheel) walk the
 block's rows; left and right move along a line. Which block of how many is at the top right.
 Select a row and press Accept (or click it), then press the new key. A key another gameplay control uses
@@ -118,18 +118,21 @@ written as its name. It changes only the pictures: your controls, gamepad.txt an
 never touched. Norden UI's journal draws its own button art and keeps it whatever this says.
 
 ROWS FOR OTHER MODS' KEYS
-EXTRA CONTROLS also holds rows for keys that other mods keep in their own settings. Binding one there
+GAMEPLAY also holds rows for keys that other mods keep in their own settings. Binding one there
 writes the key into that mod's settings file, so the player sets it once, on the game's own page. Each
 row shows only while its mod is installed, is named after it, and at first shows the key that mod
 already uses:
-  Call Horse    Simplest Horses (hold to call, tap: follow / wait), Press H to Horse
+  Call Horse / Horse Inventory  One key, listed in GAMEPLAY and in HORSEBACK. Simplest Horses (hold: call; tap
+                at your mount or while riding: its inventory; any other tap: follow / wait), Press H to Horse
+                (tap at your horse: its inventory; tap on foot aimed at nothing: call)
   Dodge         TK Dodge RE / TK Dodge NG, TK Dodge RE Addon, TK Dodge AIO, Dodge - MCO (DMCO),
                 Dodge for All
   Power Attack  One Click Power Attack, BFCO, BFCO NG, Simple Power Attack (Power Attack, Left Power
                 Attack and Dual Power Attack rows)
   Target Lock   True Directional Movement (also its Target Lock Extension), Simple Lock-On
   Scavenger Sense  Sense Sweep (Y and A out of the box), Trail Key, Mark, Show Trails, Wipe Trails
-  Also: Stance (Stances NG), Wheel Menu (Wheeler) and Back Pocket (Back Pocket for Controller)
+  Also: Stance (Stances NG), Wheel Menu (Wheeler)
+Back Pocket (Back Pocket for Controller) is in ITEMS, Map Selector in IN MAP.
 On a controller, a Target Lock (True Directional Movement) button also stops the lock following the
 Toggle POV button, and clearing the row gives it back to Toggle POV. Binding Dodge (DMCO) turns its
 dodge-on-Sprint off; clearing the row turns it back on. BFCO NG and Dodge for All keep their keys in

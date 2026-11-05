@@ -108,7 +108,7 @@ def check_input_manager_row(instance, name, file, key, none, requires, opts=""):
     if key.lower().startswith("ids=") or any(x.strip().isdigit() for x in key.split(",")):
         bad.append("Key %r names Input Manager ids - they are positions that move; name the actions" % key)
     idcheck = next((o.split("=", 1)[1] for o in opts.split(";") if o.startswith("idcheck=")), "")
-    fx = keys_in(os.path.join(FIX, name, "inputmanager.ini"))
+    fx = keys_in(os.path.join(FIX, name.replace(" / ", " - "), "inputmanager.ini"))
     if fx is None:
         bad.append("no fixture %s" % os.path.join("tools", "adapter-fixtures", name, "inputmanager.ini"))
     else:
@@ -118,7 +118,7 @@ def check_input_manager_row(instance, name, file, key, none, requires, opts=""):
             bad.append("the fixture says the mod is %r, the row requires %r" % (fx.get(("actions", "requires")), requires))
         if fx.get(("actions", "idcheck"), "").lower() != idcheck.lower():
             bad.append("the fixture's idcheck is %r, the row's %r" % (fx.get(("actions", "idcheck"), ""), idcheck))
-    nk = keys_in(os.path.join(FIX, name, "no-key.ini"))
+    nk = keys_in(os.path.join(FIX, name.replace(" / ", " - "), "no-key.ini"))
     if nk is None or nk.get(("", "none")) != str(none) or none != 0:
         bad.append("no-key must be Input Manager's 0 (row says %d)" % none)
     live = "not installed here"
@@ -135,7 +135,7 @@ def check_input_manager_row(instance, name, file, key, none, requires, opts=""):
 def check_forks(name, file, section, key, requires, opts):
     """adapter-fixtures/<Name>/forks.ini lists mods that REPLACE the row's mod (staalo18's TDM fork, Nexus 160556): each
     must ship the same DLL and keep the same file, section, key and switch settings, or the row would not catch it."""
-    path = os.path.join(FIX, name, "forks.ini")
+    path = os.path.join(FIX, name.replace(" / ", " - "), "forks.ini")
     if not os.path.isfile(path):
         return []
     bad, forks, sec = [], {}, None
@@ -181,7 +181,7 @@ def main():
             continue
         bad = []
         bad += check_forks(name, file, section, key, requires, opts)
-        fx = os.path.join(FIX, name, file.replace("\\", os.sep))
+        fx = os.path.join(FIX, name.replace(" / ", " - "), file.replace("\\", os.sep))
         k = keys_in(fx)
         if k is None:
             bad.append("no fixture %s" % os.path.relpath(fx, REPO))
@@ -194,7 +194,7 @@ def main():
                     ps, pk = o.split("=", 1)[1].split(":", 1)
                     if (ps.lower(), pk.lower()) not in k:
                         bad.append("fixture lacks the gamepad key [%s] %s" % (ps, pk))
-            nk = keys_in(os.path.join(FIX, name, "no-key.ini"))
+            nk = keys_in(os.path.join(FIX, name.replace(" / ", " - "), "no-key.ini"))
             if nk is None or nk.get(("", "none")) != str(none):
                 bad.append("fixture no-key.ini does not say none=%d" % none)
             for o in filter(None, opts.split(";")):
@@ -242,7 +242,7 @@ def main():
     # and the shipped order still has an absent-mod row BEFORE an installed one somewhere (the case that exposed it):
     # in Njordlinger, Press H to Horse's ESP is not in Data while TK Dodge AIO and TDM are installed
     names = [a[0] for a in ads]
-    order_ok = names.index("Call Horse (Press H to Horse)") < names.index("Dodge (TK Dodge AIO)") < \
+    order_ok = names.index("Call Horse / Horse Inventory (Press H to Horse)") < names.index("Dodge (TK Dodge AIO)") < \
         names.index("Target Lock (True Directional Movement)")
     print(("ok  " if order_ok else "note") + " the built-in order keeps an absent-mod row ahead of installed ones (the batch-11 shape)")
     return 1 if fails or bad else 0

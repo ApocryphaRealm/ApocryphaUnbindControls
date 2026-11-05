@@ -247,6 +247,7 @@ namespace functions
 		if (!api.empty()) { out += std::format("{}api={}", out.empty() ? "" : ";", api); }
 		if (!idCheck.empty()) { out += std::format("{}idcheck={}", out.empty() ? "" : ";", idCheck); }
 		if (!block.empty()) { out += std::format("{}block={}", out.empty() ? "" : ";", block); }
+		if (!alsoBlock.empty()) { out += std::format("{}also={}", out.empty() ? "" : ";", alsoBlock); }
 		if (nativeCodes) { out += std::format("{}native", out.empty() ? "" : ";"); }
 		if (readOnly) { out += std::format("{}readonly", out.empty() ? "" : ";"); }
 		if (!follows.empty()) { out += std::format("{}follows={}", out.empty() ? "" : ";", follows); }
@@ -280,6 +281,12 @@ namespace functions
 			const auto startsWith = [&](std::string_view a_prefix) {
 				return token.size() > a_prefix.size() && IEquals(std::string_view(token).substr(0, a_prefix.size()), a_prefix);
 			};
+			constexpr std::string_view kAlso = "also=";
+			if (startsWith(kAlso))
+			{
+				alsoBlock = Trim(token.substr(kAlso.size()));
+				continue;
+			}
 			constexpr std::string_view kFollows = "follows=";
 			if (startsWith(kFollows))
 			{
@@ -383,17 +390,21 @@ namespace functions
 
 		// CALL HORSE. Simplest Horses: hold the key (0.7 s) and let go to call the horse, tap to make it follow or wait
 		// (MCM Helper; RegisterForKey takes SKSE codes, so a pad button works). Press H to Horse: its horse key (MCM
-		// Helper; hold 0.9 s for the treat / horse menu). Listed in HORSEBACK (the owner, 2026-11-03); the key itself is the
-		// mod's own and works on foot as well.
+		// Helper; hold 0.9 s for the treat / horse menu). One binding listed in GAMEPLAY and HORSEBACK (the owner, 2026-11-05: "it
+		// should be in both horseback and gameplay, just like in The Witcher 3. Some keybinds are tied to multiple contexts").
+		// Named for what the key does. Simplest Horses (its OnKeyUp, read from the script): a tap with the crosshair on your
+		// mount, or while riding it, opens its inventory; any other tap toggles wait and follow; a hold calls it. Press H to
+		// Horse: a tap at your horse opens its inventory, a tap on foot aimed at nothing calls it. A row name is the row's
+		// identity on the page, so the second mod's row keeps its mod's name.
 		{
 			Target t = target("MCM\\Settings\\SimplestHorses.ini", "Main", "iHorse_hotkey", "", -1, "SimplestHorses.esp");
-			t.block = std::string(kHorseBlock);
-			add("Call Horse (Simplest Horses)", std::move(t));
+			t.alsoBlock = std::string(kHorseBlock);
+			add("Call Horse / Horse Inventory", std::move(t));
 		}
 		{
 			Target t = target("MCM\\Settings\\H2Horse.ini", "General", "iHorseKey", "", -1, "H2Horse.esp");
-			t.block = std::string(kHorseBlock);
-			add("Call Horse (Press H to Horse)", std::move(t));
+			t.alsoBlock = std::string(kHorseBlock);
+			add("Call Horse / Horse Inventory (Press H to Horse)", std::move(t));
 		}
 
 		// LISTED ROWS IN HORSEBACK (the owner, 2026-11-03: "that should be listed in the horse context"). Each is something a
@@ -567,6 +578,16 @@ namespace functions
 	int MergeBuiltIns(std::vector<Function>& a_list)
 	{
 		int added = 0;
+		// Back Pocket is a shipped [Functions] line, not a built-in, and acts only in the item menus: listed in ITEMS, where the
+		// Inventory's own Charge Item is (the owner, 2026-11-05). An INI saved before that keeps its keys and takes the block.
+		for (auto& f : a_list)
+		{
+			if (IEquals(f.name, "Back Pocket") && f.target.block.empty())
+			{
+				logger::info("[Functions]: \"{}\" is listed in ITEMS now", f.name);
+				f.target.block = "ITEMS";
+			}
+		}
 		for (auto& b : BuiltInAdapters())
 		{
 			// A 1.2.0 test INI saved the BFCO NG row with "ids=..." as its Key: ids are positions (Functions.h), so the row
@@ -581,14 +602,21 @@ namespace functions
 					f.target.idCheck = b.target.idCheck;
 				}
 			}
-			// A row saved before it moved to a block of the page (Call Horse into HORSEBACK) keeps its keys and takes the block.
+			// A row saved before it moved to another block of the page (Call Horse out of HORSEBACK, 2026-11-05) keeps its keys and takes the block.
 			for (auto& f : a_list)
 			{
-				if (!b.target.block.empty() && f.target.block.empty() && IEquals(f.name, b.name))
+				// Call Horse's rows took a new name with their second place (2026-11-05): the saved row is the same setting of the same mod.
+				if (!IEquals(f.name, b.name) && f.name.rfind("Call Horse (", 0) == 0 && IEquals(f.target.file, b.target.file) && IEquals(f.target.key, b.target.key))
 				{
-					logger::info("[Functions]: \"{}\" is listed in {} now", f.name, b.target.block);
+					logger::info("[Functions]: \"{}\" is \"{}\" now", f.name, b.name);
+					f.name = b.name;
+				}
+				if (!IEquals(f.target.block, b.target.block) && IEquals(f.name, b.name))
+				{
+					logger::info("[Functions]: \"{}\" is listed in {} now", f.name, b.target.block.empty() ? "GAMEPLAY" : b.target.block);
 					f.target.block = b.target.block;
 				}
+				if (IEquals(f.name, b.name)) { f.target.alsoBlock = b.target.alsoBlock; }
 			}
 			const bool have = std::any_of(a_list.begin(), a_list.end(), [&](const Function& a_f) {
 				return IEquals(a_f.name, b.name) ||
@@ -601,8 +629,21 @@ namespace functions
 		return added;
 	}
 
-	bool IsFunctionRow(std::string_view a_name, std::size_t* a_index)
+	namespace
 	{
+		constexpr std::string_view kSecondPlace = "also:";
+	}
+
+	std::string SecondPlaceKey(std::string_view a_name) { return std::string(kSecondPlace) + std::string(a_name); }
+
+	std::string RowNameOf(std::string_view a_rowKey)
+	{
+		return std::string(a_rowKey.starts_with(kSecondPlace) ? a_rowKey.substr(kSecondPlace.size()) : a_rowKey);
+	}
+
+	bool IsFunctionRow(std::string_view a_rowKey, std::size_t* a_index)
+	{
+		const std::string a_name = RowNameOf(a_rowKey);
 		std::scoped_lock l(g_lock);
 		for (std::size_t i = 0; i < g_functions.size(); ++i)
 		{
