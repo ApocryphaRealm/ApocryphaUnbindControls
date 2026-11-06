@@ -7,6 +7,21 @@ Rule 61: this mod's own history, kept beside the code it describes.
 > number; at `.9` the MINOR rolls. The next number is LAST WORKING + 1; failed/scratch/
 > untested numbers are reused. Numbers come from version-gate.ps1.
 
+## 1.4.0 - 2026-11-06 - untested
+
+### Added
+- The controller graphic, folded in from UVC Controller Layout (never released on its own): on the Controls page (Journal, System, Controls) X, or Square, draws a rendered controller with a pointer from each button to a box saying what the button does now, read from this mod's bindings each time it opens.
+- One context at a time, like The Witcher 3's controls screen: its name at the top, LB and RB step through every context with something bound (Gameplay, Swimming, On Horseback, Map, then the menus), wrapping round. D-pad left and right, PgUp and PgDn, or a click on the name do the same. A combination shows its modifier: L2 + Shout.
+- Three pads, each a rendered picture of its own: PlayStation, Xbox and the 2026 Steam Controller. GamepadFaces in [Controls] picks one (Steam is a new value; the Controls page draws Xbox buttons for it); a value picked there always wins.
+- Auto picks the graphic's pad from Steam's own files first (the pad its log says is connected, then the type in this game's Steam Input config), then what the game says. The files are only read; any failure falls to the next with one log line.
+- On the Steam picture a button's line follows the player's Steam Input config: a trackpad set to send D-pad up gets the D-pad up line. Trackpads get their own box on the Steam Controller and the PlayStation touchpad, showing what Steam Input has them doing, or Not bound by the game.
+- Controls read by what they do: the game's own word where it has one (Show on Map, Drop), otherwise a word of this mod's (Switch Tab, Turn Pick, Camera Up). A mod's row reads without the mod's name in brackets. All of it in the eleven languages.
+- DevBench tool uvcl.control: the graphic's state, what each box holds, open, close, context, faces, hint.
+
+### Known
+- The controller graphic does not list keys a mod reads for itself with no row on the Controls page, nor the debug and console contexts. X on the Controls page is fixed, like the page's own buttons.
+- From a Steam Input config only a full press in an active group is read: mode shifts, chords, long presses and action layers keep the button's usual line. A 2015 Steam Controller on its dongle gets the 2026 picture under Auto.
+
 ## 1.3.0 - 2026-11-03 - untested
 
 ### Changed

@@ -66,6 +66,7 @@ namespace settings
 			if (v == "auto" || v == "0") { a_out = controls::Faces::kAuto; return true; }
 			if (v == "xbox" || v == "1") { a_out = controls::Faces::kXbox; return true; }
 			if (v == "playstation" || v == "ps" || v == "2") { a_out = controls::Faces::kPlayStation; return true; }
+			if (v == "steam" || v == "3") { a_out = controls::Faces::kSteam; return true; }
 			return false;
 		}
 
@@ -680,6 +681,7 @@ namespace settings
 		{
 		case Faces::kXbox: return "Xbox";
 		case Faces::kPlayStation: return "PlayStation";
+		case Faces::kSteam: return "Steam";
 		default: return "Auto";
 		}
 	}

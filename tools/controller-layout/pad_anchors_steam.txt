@@ -1,0 +1,35 @@
+// steam: the picture 1529x1071, drawn at 620x434.3 at (330, 140.9) in the 1280x720 design
+case rows::kLT: return { 381.5, 165.3, 0.0 };  // x, y, rim
+case rows::kLB: return { 374.3, 206.9, 0.0 };  // x, y, rim
+case rows::kRT: return { 832.4, 156.9, 0.0 };  // x, y, rim
+case rows::kRB: return { 828.1, 200.1, 0.0 };  // x, y, rim
+case rows::kBack: return { 487.6, 250.2, 17.1 };  // x, y, rim
+case rows::kStart: return { 708.5, 247.8, 17.5 };  // x, y, rim
+case rows::kDUp: return { 401.0, 261.3, 0.0 };  // x, y, rim
+case rows::kDDown: return { 412.6, 325.5, 0.0 };  // x, y, rim
+case rows::kDLeft: return { 372.7, 293.8, 0.0 };  // x, y, rim
+case rows::kDRight: return { 444.2, 303.8, 0.0 };  // x, y, rim
+case rows::kLStick: return { 504.4, 329.3, 18.3 };  // x, y, rim
+case rows::kRStick: return { 701.1, 328.5, 18.8 };  // x, y, rim
+case rows::kY: return { 802.4, 257.3, 16.9 };  // x, y, rim
+case rows::kA: return { 810.2, 326.6, 16.6 };  // x, y, rim
+case rows::kX: return { 768.2, 292.4, 16.7 };  // x, y, rim
+case rows::kB: return { 844.8, 291.9, 16.9 };  // x, y, rim
+// also: LeftPad 506.4, 429.5
+// also: LeftPadUp 506.6, 393.0
+// also: LeftPadDown 506.2, 465.6
+// also: LeftPadLeft 465.5, 423.6
+// also: LeftPadRight 547.5, 435.5
+// also: RightPad 743.5, 430.7
+// also: RightPadUp 732.2, 393.4
+// also: RightPadDown 754.8, 467.6
+// also: RightPadLeft 702.7, 436.4
+// also: RightPadRight 784.7, 425.0
+// also: Centre 603.3, 291.9
+// also: QuickAccess 623.6, 430.3
+// also: L4 354.2, 393.8
+// also: L5 361.6, 459.5
+// also: R4 904.6, 394.9
+// also: R5 917.1, 463.8
+// box order, top to bottom: left kLT, kLB, kDUp, kDLeft, kDDown, kDRight, kBack, kLStick
+//                          right kRT, kRB, kY, kB, kX, kA, kStart, kRStick

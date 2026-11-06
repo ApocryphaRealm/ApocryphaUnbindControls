@@ -1,5 +1,5 @@
 Unbind Vanilla Controls
-Version 1.3.0
+Version 1.4.0
 
 Skyrim's own Controls menu can only move a control to another key. It cannot leave a control with no
 key at all. This mod can: every control listed in its INI has no key while you play, so pressing the
@@ -108,14 +108,32 @@ columns as its width holds. It works on the game's own journal (no SkyUI needed)
 
 CONTROLLER BUTTON PICTURES
 The pictures are the journal's own - the game's journal and SkyUI's carry Xbox, PlayStation 3 and
-PlayStation 5 buttons; this mod ships no art. GamepadFaces in the INI's [Controls] section picks them:
+PlayStation 5 buttons. GamepadFaces in the INI's [Controls] section picks them, and the controller
+graphic's pad too (see THE CONTROLLER GRAPHIC):
   Auto         the Xbox buttons, even when a UI mod's gamepad.txt (such as Norden UI's) names them
                PlayStation, unless the game says a PlayStation 5 pad is in use
   Xbox         always the Xbox buttons
   PlayStation  always the PlayStation buttons (the PS5 set when the game says a PS5 pad is in use)
+  Steam        the Steam Controller in the graphic; the page draws Xbox buttons
 A button with no picture in the chosen set keeps its usual one; a button with no picture at all is
 written as its name. It changes only the pictures: your controls, gamepad.txt and the control map are
 never touched. Norden UI's journal draws its own button art and keeps it whatever this says.
+
+THE CONTROLLER GRAPHIC
+On the Controls page press X (Square on a PlayStation pad) and a rendered controller is shown, with a
+line from each button to a box that says what the button does now, read from this mod's bindings each
+time it opens - what you set on the page is what you see.
+- One context at a time: Gameplay, Swimming, On Horseback, Map, then the menus. LB and RB (or D-pad
+  left and right, PgUp and PgDn, or a click on the name at the top) step through them and go round.
+  A combination shows its modifier: "L2 + Shout".
+- Three pads, each a picture of its own: PlayStation, Xbox and the 2026 Steam Controller.
+  GamepadFaces in [Controls] picks one, and a value picked there always wins. Auto goes by the pad
+  Steam says is connected, then the type in this game's Steam Input config, then what the game says.
+  Steam's files are only read, and only to draw this.
+- Trackpads have boxes of their own on the Steam Controller and the PlayStation touchpad: what Steam
+  Input has them doing. The game binds no touchpad, so with nothing to read the box says so.
+- B, Circle, X again or Esc closes it. While it is up nothing reaches the page beneath.
+- Mods' keys that this mod has a row for are listed. Keys a mod keeps to itself are not.
 
 ROWS FOR OTHER MODS' KEYS
 GAMEPLAY also holds rows for keys that other mods keep in their own settings. Binding one there
@@ -178,6 +196,13 @@ Send the log for any bug you find:
 Documents\My Games\Skyrim Special Edition\SKSE\UnbindControls.log
 
 WHAT CHANGED
+
+Version 1.4.0
+Added the controller graphic on the Controls page (X, or Square): a rendered PlayStation, Xbox or Steam
+Controller pad with a box beside each button saying what it does now, one context at a time, LB and RB
+to step through them (see THE CONTROLLER GRAPHIC). It was being made as a separate add-on, UVC
+Controller Layout; it is part of this mod now, so there is nothing else to install.
+Added Steam to GamepadFaces in [Controls]: the graphic draws the Steam Controller, the page Xbox buttons.
 
 Version 1.3.0
 Added a SWIMMING block on the Controls page: buttons that apply only while you are in water ([Swimming] in the INI). Everything goes back the moment you are out of the water.

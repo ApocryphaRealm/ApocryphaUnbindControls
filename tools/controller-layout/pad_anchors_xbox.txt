@@ -1,0 +1,19 @@
+// xbox: the picture 1539x949, drawn at 620x382.3 at (330, 130.8) in the 1280x720 design
+case rows::kLT: return { 395.5, 151.8, 0.0 };  // x, y, rim
+case rows::kLB: return { 390.2, 194.7, 0.0 };  // x, y, rim
+case rows::kRT: return { 810.0, 145.0, 0.0 };  // x, y, rim
+case rows::kRB: return { 803.5, 189.5, 0.0 };  // x, y, rim
+case rows::kBack: return { 552.4, 313.9, 10.0 };  // x, y, rim
+case rows::kStart: return { 657.3, 313.7, 10.1 };  // x, y, rim
+case rows::kDUp: return { 521.9, 380.6, 10.2 };  // x, y, rim
+case rows::kDDown: return { 530.0, 429.9, 10.0 };  // x, y, rim
+case rows::kDLeft: return { 498.7, 405.2, 10.1 };  // x, y, rim
+case rows::kDRight: return { 561.3, 413.8, 0.0 };  // x, y, rim
+case rows::kLStick: return { 411.2, 316.1, 18.4 };  // x, y, rim
+case rows::kRStick: return { 706.0, 416.3, 18.5 };  // x, y, rim
+case rows::kY: return { 790.5, 271.3, 18.2 };  // x, y, rim
+case rows::kA: return { 798.4, 340.7, 17.9 };  // x, y, rim
+case rows::kX: return { 756.0, 306.3, 17.9 };  // x, y, rim
+case rows::kB: return { 833.3, 306.1, 18.1 };  // x, y, rim
+// box order, top to bottom: left kLT, kLB, kBack, kLStick, kDUp, kDLeft, kDRight, kDDown
+//                          right kRT, kRB, kY, kB, kX, kA, kStart, kRStick

@@ -27,7 +27,7 @@ namespace settings
 		// names the buttons, unless the game says a PS5 pad is in use (then the art the game's names ask for, PS5_ for
 		// PS3_ names); Xbox / PlayStation: that set, whatever the names say. Read only: never written
 		// back, so the player's line stays exactly as typed. gamepad.txt and the control map are never touched.
-		enum class Faces : std::uint32_t { kAuto = 0, kXbox = 1, kPlayStation = 2 };
+		enum class Faces : std::uint32_t { kAuto = 0, kXbox = 1, kPlayStation = 2, kSteam = 3 };  // Steam: the controller graphic's 2026 Steam Controller; the sheet draws Xbox buttons for it
 		inline Faces gamepadFaces = Faces::kAuto;
 		const char* FacesName(Faces a_faces);
 	}

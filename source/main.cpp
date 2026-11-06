@@ -4,6 +4,8 @@
 // HUD's for the swimming and horseback contexts' state read), no ESP, no scripts.
 // Since 1.0.7 a remap made in the game's Controls menu is kept in this mod's INI and the game's ControlMap_Custom.txt is removed
 // (bKeepRemapsInIni).
+// Since 1.4.0 the controller graphic (X on the Controls page; source/layout, was the separate UVC Controller Layout) is part of this
+// DLL. It still reads the bindings through the request API's UVC_ForEachBinding, the same export other mods use.
 #include "PCH.h"
 
 #include "ControlsList.h"
@@ -12,6 +14,10 @@
 #include "Settings.h"
 #include "TweenWait.h"
 #include "Unbinder.h"
+#include "layout/Layout.h"
+#include "layout/LayoutDevBenchTool.h"
+#include "layout/LayoutSettings.h"
+#include "layout/LayoutStrings.h"
 
 #include "utils/AddressLibraryGuard.h"
 #include "utils/Logger.h"
@@ -24,6 +30,7 @@ namespace
 		{
 		case SKSE::MessagingInterface::kPostLoad:
 			DevBenchTool::Init(false);
+			LayoutDevBenchTool::Init(false);
 			break;
 		case SKSE::MessagingInterface::kDataLoaded:
 			unbinder::Install();
@@ -41,6 +48,11 @@ namespace
 			functions::Deliver("data loaded", false);
 			unbinder::RequestsAtDataLoaded();  // what other mods asked before now is decided, after the player's lists and rows are read
 			DevBenchTool::Init(true);
+			// The controller graphic: its JournalMenu::AdvanceMovie wrap goes on after controlslist's (installed at load), so it is
+			// the outer one and sees the page after the sheet each frame, as it did as a DLL of its own.
+			uvcl::Strings::Load();
+			layout::Install();
+			LayoutDevBenchTool::Init(true);
 			break;
 		case SKSE::MessagingInterface::kPostLoadGame:
 			unbinder::ApplyAll("game loaded");
@@ -73,6 +85,7 @@ SKSEPluginLoad(const SKSE::LoadInterface* a_skse)
 	logger::info("Unbind Vanilla Controls {} loading",
 				 SKSE::PluginDeclaration::GetSingleton()->GetVersion().string("."));
 
+	layoutsettings::Load();
 	controlslist::Install();
 	unbinder::InstallSwimWatch();
 

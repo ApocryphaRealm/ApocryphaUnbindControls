@@ -2514,6 +2514,7 @@ namespace controlslist
 				switch (settings::controls::gamepadFaces)
 				{
 				case settings::controls::Faces::kXbox:
+				case settings::controls::Faces::kSteam:  // the Steam Controller's face buttons are lettered as Xbox's
 					add("360_" + rest);
 					break;
 				case settings::controls::Faces::kPlayStation:
@@ -2733,7 +2734,7 @@ namespace controlslist
 			const SheetLine& selectedLine = g_sheet.lines[static_cast<std::size_t>(std::clamp(g_sheet.row, 0, static_cast<int>(g_sheet.lines.size()) - 1))];
 			// LB and RB, named as this journal's art draws them, beside which block of how many
 			const bool playStationNames = settings::controls::gamepadFaces == settings::controls::Faces::kPlayStation ||
-			                              (settings::controls::gamepadFaces != settings::controls::Faces::kXbox && unbinder::GamepadButtonName(0x0100).starts_with("PS"));
+			                              (settings::controls::gamepadFaces != settings::controls::Faces::kXbox && settings::controls::gamepadFaces != settings::controls::Faces::kSteam && unbinder::GamepadButtonName(0x0100).starts_with("PS"));
 			const std::string position = std::format("{}  {}/{}", playStationNames ? "L1 R1" : "LB RB", selectedLine.blockIndex, g_sheet.blocks.size());
 
 			g_sheet.drawn.resize(static_cast<std::size_t>(kSheetCols * kSheetSlots));

@@ -1,0 +1,19 @@
+// playstation: the picture 1523x947, drawn at 620x385.5 at (330, 129.2) in the 1280x720 design
+case rows::kLT: return { 408.8, 146.6, 0.0 };  // x, y, rim
+case rows::kLB: return { 402.2, 189.7, 0.0 };  // x, y, rim
+case rows::kRT: return { 787.2, 140.0, 0.0 };  // x, y, rim
+case rows::kRB: return { 782.9, 184.5, 0.0 };  // x, y, rim
+case rows::kBack: return { 452.5, 248.9, 10.8 };  // x, y, rim
+case rows::kStart: return { 734.9, 246.6, 11.2 };  // x, y, rim
+case rows::kDUp: return { 398.7, 268.8, 12.1 };  // x, y, rim
+case rows::kDDown: return { 410.3, 332.4, 11.9 };  // x, y, rim
+case rows::kDLeft: return { 370.4, 300.9, 12.0 };  // x, y, rim
+case rows::kDRight: return { 450.1, 310.8, 0.0 };  // x, y, rim
+case rows::kLStick: return { 511.0, 383.6, 17.6 };  // x, y, rim
+case rows::kRStick: return { 701.6, 384.4, 18.1 };  // x, y, rim
+case rows::kY: return { 796.0, 263.6, 18.8 };  // x, y, rim
+case rows::kA: return { 804.0, 335.1, 18.4 };  // x, y, rim
+case rows::kX: return { 760.3, 299.8, 18.5 };  // x, y, rim
+case rows::kB: return { 840.0, 299.5, 18.7 };  // x, y, rim
+// box order, top to bottom: left kLT, kLB, kBack, kDUp, kDLeft, kDDown, kDRight, kLStick
+//                          right kRT, kRB, kStart, kY, kB, kX, kA, kRStick
