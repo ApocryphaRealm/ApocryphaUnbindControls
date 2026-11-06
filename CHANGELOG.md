@@ -7,7 +7,7 @@ Rule 61: this mod's own history, kept beside the code it describes.
 > number; at `.9` the MINOR rolls. The next number is LAST WORKING + 1; failed/scratch/
 > untested numbers are reused. Numbers come from version-gate.ps1.
 
-## 1.4.0 - 2026-11-06 - untested
+## 1.4.0 - 2026-11-06 - working
 
 ### Added
 - The controller graphic, folded in from UVC Controller Layout (never released on its own): on the Controls page (Journal, System, Controls) X, or Square, draws a rendered controller with a pointer from each button to a box saying what the button does now, read from this mod's bindings each time it opens.
@@ -22,7 +22,7 @@ Rule 61: this mod's own history, kept beside the code it describes.
 - The controller graphic does not list keys a mod reads for itself with no row on the Controls page, nor the debug and console contexts. X on the Controls page is fixed, like the page's own buttons.
 - From a Steam Input config only a full press in an active group is read: mode shifts, chords, long presses and action layers keep the button's usual line. A 2015 Steam Controller on its dongle gets the 2026 picture under Auto.
 
-## 1.3.0 - 2026-11-03 - untested
+## 1.3.0 - 2026-11-03 - working
 
 ### Changed
 - The Controls page has no EXTRA CONTROLS title any more (the owner, 2026-11-05). The rows it held - Stance, Wheel Menu, Dodge, Power Attack, Target Lock, Scavenger Sense and Call Horse - and the Modifier row sit at the end of GAMEPLAY; what applies only while riding stays under HORSEBACK. **Call Horse / Horse Inventory** is the new name of the horse key's row and it is one binding listed in both GAMEPLAY and HORSEBACK, like The Witcher 3's shared binds (a new adapter option `also=<title>`, the owner, 2026-11-05): a bind from either place moves the same key and the other place shows it. The name says what the key does in Simplest Horses and Press H to Horse; a saved row keeps its keys and takes the new name. Back Pocket is in ITEMS, where the Inventory's own Charge Item is, since it acts only in the item menus. A saved INI keeps its keys and its rows take the new place at load.
