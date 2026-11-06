@@ -1420,7 +1420,7 @@ namespace unbinder
 		std::vector<ModRequest> g_requests;            // under g_lock
 		std::vector<RequestChoice> g_requestChoices;   // [ModRequests]; under g_lock
 		std::atomic<bool> g_requestsReady{ false };    // UVC's own first apply has run
-		std::atomic<std::thread::id> g_gameThread{};   // the thread ApplyAll last ran on
+		std::atomic<std::thread::id> g_gameThread{};   // the game's main thread, noted once at kDataLoaded (RequestsAtDataLoaded) and never changed
 		constexpr int kRequestSheetContext = 1000;     // a request's row goes after the other rows of its pass
 
 		// A function row's key, read before g_lock is taken (the Functions list has its own lock).
@@ -2317,7 +2317,7 @@ namespace unbinder
 
 	void RequestsAtDataLoaded()
 	{
-		g_gameThread.store(std::this_thread::get_id());
+		g_gameThread.store(std::this_thread::get_id());  // kDataLoaded is dispatched on the main thread: the one place it is noted
 		g_requestsReady.store(true);
 		DecidePendingRequests();
 	}
@@ -2632,7 +2632,9 @@ namespace unbinder
 	{
 		auto* map = RE::ControlMap::GetSingleton();
 		if (!map) { logger::warn("apply ({}): the ControlMap singleton is null; nothing applied", a_reason); return; }
-		g_gameThread.store(std::this_thread::get_id());
+		// g_gameThread is NOT set here (1.3.0, combined run B-20261105-231553-63a6): kPostLoadGame runs this on the save
+		// loader's thread after a load from the main menu, and storing that made UVC_ForEachBinding return nothing on the
+		// real main thread (UVC Controller Layout's graphic came up empty) and made requests answer "queued".
 		std::scoped_lock l(g_lock);
 		// The lists are written over the land layout; a water or horseback layout returns on the next HUD frame.
 		RestoreLandLocked(map, a_reason);
