@@ -1420,7 +1420,7 @@ namespace unbinder
 		std::vector<ModRequest> g_requests;            // under g_lock
 		std::vector<RequestChoice> g_requestChoices;   // [ModRequests]; under g_lock
 		std::atomic<bool> g_requestsReady{ false };    // UVC's own first apply has run
-		std::atomic<std::thread::id> g_gameThread{};   // the game's main thread, noted once at kDataLoaded (RequestsAtDataLoaded) and never changed
+		std::atomic<std::thread::id> g_gameThread{};   // the game's main thread, noted once from the first SKSE task after kDataLoaded (RequestsAtDataLoaded) and never changed
 		constexpr int kRequestSheetContext = 1000;     // a request's row goes after the other rows of its pass
 
 		// A function row's key, read before g_lock is taken (the Functions list has its own lock).
@@ -2317,7 +2317,10 @@ namespace unbinder
 
 	void RequestsAtDataLoaded()
 	{
-		g_gameThread.store(std::this_thread::get_id());  // kDataLoaded is dispatched on the main thread: the one place it is noted
+		// The main thread is the one SKSE runs its tasks on - the thread the journal, the HUD wraps and TestBench run on too.
+		// kDataLoaded itself can arrive on another (combined run B-20261106-000532-7e48: noting it here left every
+		// ForEachBinding empty), so it is noted from the first task, once, and never changed.
+		if (auto* tasks = SKSE::GetTaskInterface()) { tasks->AddTask([]() { g_gameThread.store(std::this_thread::get_id()); }); }
 		g_requestsReady.store(true);
 		DecidePendingRequests();
 	}
