@@ -1420,7 +1420,6 @@ namespace unbinder
 		std::vector<ModRequest> g_requests;            // under g_lock
 		std::vector<RequestChoice> g_requestChoices;   // [ModRequests]; under g_lock
 		std::atomic<bool> g_requestsReady{ false };    // UVC's own first apply has run
-		std::atomic<std::thread::id> g_gameThread{};   // the game's main thread, noted once from the first SKSE task after kDataLoaded (RequestsAtDataLoaded) and never changed
 		constexpr int kRequestSheetContext = 1000;     // a request's row goes after the other rows of its pass
 
 		// A function row's key, read before g_lock is taken (the Functions list has its own lock).
@@ -1753,9 +1752,13 @@ namespace unbinder
 			return std::any_of(g_requests.begin(), g_requests.end(), [&](const ModRequest& a_r) { return a_r.context == kGameplayContext && a_r.device == a_device && IEquals(a_r.action, a_event); });
 		}
 
+		// The game's own main thread, as the engine records it (RE::Main::threadID). Two earlier ways of noting it (the
+		// thread the last apply ran on; then the thread of the first SKSE task after kDataLoaded) both picked a loader
+		// thread after a load from the main menu (combined runs B-20261105-231553-63a6 and B-20261106-000532-7e48).
 		bool OnGameThread()
 		{
-			return g_gameThread.load() == std::this_thread::get_id();
+			const auto* main = RE::Main::GetSingleton();
+			return main && main->threadID != 0 && main->threadID == REX::W32::GetCurrentThreadId();
 		}
 
 		struct MapRow
@@ -2317,10 +2320,6 @@ namespace unbinder
 
 	void RequestsAtDataLoaded()
 	{
-		// The main thread is the one SKSE runs its tasks on - the thread the journal, the HUD wraps and TestBench run on too.
-		// kDataLoaded itself can arrive on another (combined run B-20261106-000532-7e48: noting it here left every
-		// ForEachBinding empty), so it is noted from the first task, once, and never changed.
-		if (auto* tasks = SKSE::GetTaskInterface()) { tasks->AddTask([]() { g_gameThread.store(std::this_thread::get_id()); }); }
 		g_requestsReady.store(true);
 		DecidePendingRequests();
 	}
@@ -2456,7 +2455,9 @@ namespace unbinder
 	{
 		std::vector<BindingRow> out;
 		auto* map = RE::ControlMap::GetSingleton();
-		if (!map || a_device < 0 || a_device > 2 || !OnGameThread()) { return out; }
+		// Read-only, under g_lock, from whatever thread the caller is on: UVC Controller Layout asks from the journal's
+		// AdvanceMovie, which is not always the engine's main thread, and a thread check here left its graphic empty.
+		if (!map || a_device < 0 || a_device > 2) { return out; }
 		{
 			std::scoped_lock l(g_lock);
 			for (int context = 0; context < ContextCount(); ++context)
@@ -2635,9 +2636,8 @@ namespace unbinder
 	{
 		auto* map = RE::ControlMap::GetSingleton();
 		if (!map) { logger::warn("apply ({}): the ControlMap singleton is null; nothing applied", a_reason); return; }
-		// g_gameThread is NOT set here (1.3.0, combined run B-20261105-231553-63a6): kPostLoadGame runs this on the save
-		// loader's thread after a load from the main menu, and storing that made UVC_ForEachBinding return nothing on the
-		// real main thread (UVC Controller Layout's graphic came up empty) and made requests answer "queued".
+		// No thread is noted here (1.3.0): kPostLoadGame runs this on the save loader's thread after a load from the main
+		// menu, and noting that made UVC_ForEachBinding return nothing and requests answer "queued". See OnGameThread.
 		std::scoped_lock l(g_lock);
 		// The lists are written over the land layout; a water or horseback layout returns on the next HUD frame.
 		RestoreLandLocked(map, a_reason);
