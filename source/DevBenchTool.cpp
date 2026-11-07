@@ -432,7 +432,16 @@ namespace DevBenchTool
 			if (op == "reload")
 			{
 				bool ok = false;
-				const bool ran = RunOnMainThread([&]() { unbinder::RestoreAll("tool reload"); ok = settings::Reload(); unbinder::RedecideRequests(); unbinder::ApplyAll("tool reload"); });
+				const bool ran = RunOnMainThread([&]() {
+					unbinder::RestoreAll("tool reload");
+					ok = settings::Reload();
+					// An INI line holds ONE device's binding of an extra row, so a row bound on both families (Wheel Menu: B and D-pad
+					// down) has its other key only from adopting it from the target at data load. A reload re-reads the lines, so it
+					// adopts again, as the data load does - without it Wheel Menu and Sense Sweep lost their gamepad keys (1.5.0 test).
+					if (functions::Adopt("tool reload") > 0) { settings::Save(); }
+					unbinder::RedecideRequests();
+					unbinder::ApplyAll("tool reload");
+				});
 				a_write(a_sink, std::format("{{\"ok\":{},\"op\":\"reload\"}}", (ran && ok) ? "true" : "false").c_str());
 				return;
 			}

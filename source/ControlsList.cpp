@@ -7,6 +7,7 @@
 #include "Settings.h"
 #include "SystemMenu.h"
 #include "Unbinder.h"
+#include "layout/LayoutStrings.h"
 #include "utils/Logger.h"
 
 #include <algorithm>
@@ -1684,7 +1685,16 @@ namespace controlslist
 			if (!a_page.GetMember("ErrorText", &error) || !error.IsDisplayObject()) { return; }
 			if (a_text && a_text[0])
 			{
-				RE::GFxValue arg(a_text);
+				// This mod's own messages are translated here, from its own Interface\Translations file (uvcl::Strings), which the
+				// controller graphic already reads that way: left to the movie's translator, "$Gamepad++ uses that button..." reached
+				// the page with its "$" although the key is in the file (1.5.0 test, batch B-20261107-000625-368b). A token that file does not have - the game's own, such as
+				// "$That button is reserved." - is passed on as it is, for the movie's translator.
+				std::string shown = a_text;
+				if (shown.size() > 1 && shown.front() == '$')
+				{
+					if (std::string own = uvcl::Strings::Get(std::string_view(shown).substr(1), ""); !own.empty()) { shown = std::move(own); }
+				}
+				RE::GFxValue arg(shown.c_str());
 				error.Invoke("SetText", nullptr, &arg, 1);
 			}
 			else { a_page.Invoke("HideErrorText", nullptr, nullptr, 0); }

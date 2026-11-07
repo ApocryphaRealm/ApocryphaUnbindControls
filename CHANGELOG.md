@@ -18,6 +18,10 @@ Rule 61: this mod's own history, kept beside the code it describes.
 ### Known
 - Without Gamepad++ nothing changes from 1.4.0. Requests from other mods (the request API) do not take Gamepad++'s buttons into account: they are decided when the game starts, before a save tells which buttons Gamepad++ uses. A remap made through the game's own Controls list when UVC's sheet is not drawn is not checked either.
 
+### Fixed
+- DevBench uvc.control op=reload left an extra row bound on both families with only the key its INI line holds (Wheel Menu and Sense Sweep lost their controller buttons until the next game start): the reload now takes the other key from the target mod again, as the game start does.
+- The Controls page's own messages showed their translation key with a leading "$" ("$Gamepad++ uses that button..."): this mod's messages are now looked up in its own translation file before they are shown; the game's own messages are passed on as before.
+
 ## 1.4.0 - 2026-11-06 - working
 
 ### Added
