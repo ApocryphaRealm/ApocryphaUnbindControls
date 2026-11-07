@@ -112,6 +112,9 @@ namespace functions
 		// 1.5.0: a Gamepad++ row (GamepadPP.h) - listed only, its button is the one Gamepad++'s slot holds (0-7: A1-A4, C1-C4).
 		// Made at runtime, never read from or written to the INI; shown on the gamepad page while that slot reserves a button.
 		int gppSlot = -1;
+		// 1.6.0: Sprint or Sneak for Controller's row - listed only, it follows the Gameplay Sprint control (that mod makes the
+		// Sprint button crouch too). Made at runtime, never read from or written to the INI; gamepad page only.
+		bool sprintOrSneak = false;
 		std::vector<Switch> switches;
 		std::string defaultsFile;
 		std::string api;      // "" or "InputManager"
@@ -163,6 +166,11 @@ namespace functions
 	// HorsePower's Manual Horseback Petting: on, its pet follows the Sneak user event while mounted, so Sneak means something
 	// on a horse (HorsePower.dll there and bManualPetting on).
 	bool ManualPettingOn();
+	// 1.6.0: Sprint or Sneak for Controller (its DLL in SKSE/Plugins) is installed. Its row's name is a translation key without the
+	// '$'; the Controls page lists it on the gamepad page, and the controller graphic puts it on Sprint's button.
+	inline constexpr std::string_view kSprintOrSneakRow = "Sneak (hold while still) (Sprint or Sneak)";
+	inline constexpr std::string_view kSprintOrSneakFile = "SKSE\\Plugins\\SprintOrSneakForController.dll";
+	bool SprintOrSneakPresent();
 	// True when the row at this index is a listed row (Target::readOnly).
 	bool IsReadOnlyRow(std::size_t a_index);
 	// Adds each built-in adapter the list does not already have - by name, or by a row that already writes the same

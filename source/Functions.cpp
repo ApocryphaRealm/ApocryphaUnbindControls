@@ -177,6 +177,13 @@ namespace functions
 		return TargetPresent(copy);
 	}
 
+	bool SprintOrSneakPresent()
+	{
+		if (g_dataPath.empty()) { return false; }
+		std::error_code ec;
+		return std::filesystem::exists(std::filesystem::path(g_dataPath) / kSprintOrSneakFile, ec) && !ec;
+	}
+
 	std::vector<Function> GetPresentFunctions()
 	{
 		std::vector<Function> out;
@@ -207,6 +214,18 @@ namespace functions
 			f.target.none = -1;
 			f.target.readOnly = true;
 			f.target.gppSlot = slot;
+			a_functions.push_back(std::move(f));
+		}
+		// Sprint or Sneak for Controller's row (1.6.0), made the same way: last, never saved, shown while its DLL is installed.
+		std::erase_if(a_functions, [](const Function& a_f) { return a_f.target.sprintOrSneak || a_f.name == kSprintOrSneakRow; });
+		{
+			Function f;
+			f.name = std::string(kSprintOrSneakRow);
+			f.target.requiresFile = std::string(kSprintOrSneakFile);
+			f.target.none = -1;
+			f.target.readOnly = true;
+			f.target.follows = "Sprint";
+			f.target.sprintOrSneak = true;
 			a_functions.push_back(std::move(f));
 		}
 		std::scoped_lock l(g_lock);

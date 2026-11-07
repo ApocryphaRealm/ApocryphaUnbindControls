@@ -620,6 +620,8 @@ namespace controlslist
 			if (!functions::IsPresentAt(f)) { return false; }
 			// A Gamepad++ row (1.5.0) is a controller button only: no row on the keyboard page.
 			if (list[f].target.gppSlot >= 0 && !a_gamepad) { return false; }
+			// So is Sprint or Sneak's (1.6.0): that mod acts on the controller's Sprint button only.
+			if (list[f].target.sprintOrSneak && !a_gamepad) { return false; }
 			const auto shown = functions::ShownBinding(f, a_gamepad);
 			const int fnDevice = a_gamepad ? 2 : 0;
 			// The tile shows the BUTTON; a modifier is spelled in front of it, the way a bound control's row is.
@@ -639,7 +641,9 @@ namespace controlslist
 				{
 					for (const int device : a_gamepad ? std::vector<int>{ 2 } : std::vector<int>{ 0, 1 })
 					{
-						const std::uint16_t k = unbinder::LayoutShownKey(unbinder::kLayoutHorse, list[f].target.follows, device);
+						// Sprint or Sneak's row follows the on-foot Sprint control; the other listed rows are HORSEBACK rows.
+						const int layout = list[f].target.sprintOrSneak ? unbinder::kLayoutLand : unbinder::kLayoutHorse;
+						const std::uint16_t k = unbinder::LayoutShownKey(layout, list[f].target.follows, device);
 						if (k != kUnmappedID)
 						{
 							keyText = RowButtonName(k, device);
@@ -1749,7 +1753,9 @@ namespace controlslist
 				// A listed row has nothing to set: it says so and takes no key.
 				if (std::size_t functionIndex = 0; functions::IsFunctionRow(key, &functionIndex) && functions::IsReadOnlyRow(functionIndex))
 				{
-					SheetMessage(a_page, gpp::SlotOfRow(key) >= 0 ? "$Gamepad++ uses this button. Change it in Gamepad++'s own menu." : "$Set by the mod it names, not here.");
+					SheetMessage(a_page, gpp::SlotOfRow(key) >= 0 ? "$Gamepad++ uses this button. Change it in Gamepad++'s own menu." :
+											 key == functions::kSprintOrSneakRow       ? "$This is the Sprint button. Rebind Sprint to move it." :
+																						 "$Set by the mod it names, not here.");
 					g_sheet.listedMessage = true;
 					logger::debug("controls list: sheet cell \"{}\" is a listed row; no key taken", key);
 					return;

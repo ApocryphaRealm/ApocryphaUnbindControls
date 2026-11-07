@@ -7,6 +7,11 @@ Rule 61: this mod's own history, kept beside the code it describes.
 > number; at `.9` the MINOR rolls. The next number is LAST WORKING + 1; failed/scratch/
 > untested numbers are reused. Numbers come from version-gate.ps1.
 
+## 1.6.0 - 2026-11-07 - untested
+
+### Added
+- Sprint or Sneak for Controller compatibility (the owner, 2026-11-07: UVC shows that its Sprint button is also the crouch button). While SKSE/Plugins/SprintOrSneakForController.dll is installed, the Controls page (controller page) lists 'Sneak (hold while still) (Sprint or Sneak)' at the end of GAMEPLAY with the button the on-foot Sprint control has; it is a listed row, and selecting it says it is the Sprint button and to rebind Sprint to move it. The controller graphic puts 'Sneak (hold while still)' on Sprint's button in Gameplay. Made at runtime and never written to the INI, like the Gamepad++ rows. New text in all eleven languages. Without that mod nothing changes from 1.5.0.
+
 ## 1.5.0 - 2026-11-06 - untested
 
 ### Added

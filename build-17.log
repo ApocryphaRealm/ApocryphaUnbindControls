@@ -1,0 +1,57 @@
+'vswhere.exe' is not recognized as an internal or external command,
+operable program or batch file.
+[0/2] Re-checking globbed directories...
+[1/2] Re-running CMake...
+-- Running vcpkg install
+Detecting compiler hash for triplet x64-windows...
+Compiler found: C:/Program Files/Microsoft Visual Studio/18/Community/VC/Tools/MSVC/14.51.36231/bin/Hostx64/x64/cl.exe
+Detecting compiler hash for triplet x64-windows-static-md...
+Compiler found: C:/Program Files/Microsoft Visual Studio/18/Community/VC/Tools/MSVC/14.51.36231/bin/Hostx64/x64/cl.exe
+The following packages are already installed:
+    commonlibsse-ng:x64-windows-static-md@7.2.0
+  * directxmath:x64-windows-static-md@2026-06-12
+  * directxtk:x64-windows-static-md@2026-05-07#1
+  * fmt:x64-windows-static-md@12.2.0#1
+  * nlohmann-json:x64-windows-static-md@3.12.0#2
+  * rapidcsv:x64-windows-static-md@8.99
+  * simpleini:x64-windows-static-md@4.26
+    spdlog[core,tz-offset,fmt]:x64-windows-static-md@1.17.0#1
+  * toml11:x64-windows-static-md@4.4.0
+  * vcpkg-cmake:x64-windows@2025-08-07
+  * vcpkg-cmake-config:x64-windows@2026-07-21
+  * xbyak:x64-windows-static-md@7.28
+The package spdlog provides CMake targets:
+
+    find_package(spdlog CONFIG REQUIRED)
+    target_link_libraries(main PRIVATE spdlog::spdlog)
+
+    # Or use the header-only version
+    find_package(spdlog CONFIG REQUIRED)
+    target_link_libraries(main PRIVATE spdlog::spdlog_header_only)
+
+commonlibsse-ng provides CMake targets:
+
+  # this is heuristically generated, and may not be correct
+  find_package(CommonLibSSE CONFIG REQUIRED)
+  target_link_libraries(main PRIVATE CommonLibSSE::CommonLibSSE)
+
+All requested installations completed successfully in: 190 us
+-- Running vcpkg install - done
+Parsing commonlibsse_plugin_version 1.6.0
+Setting major version to 1
+Setting minor version to 6
+Parsing ADD_COMMONLIBSSE_PLUGIN_MINIMUM_SKSE_VERSION 0
+-- Configuring done (3.0s)
+-- Generating done (0.0s)
+-- Build files have been written to: D:/Claude output/6. current wip mods/UnbindControls/build/relwithdebinfo-17
+[0/4] Re-checking globbed directories...
+[1/13] Building RC object CMakeFiles\UnbindControls.dir\version.rc.res
+[2/13] Building CXX object CMakeFiles\UnbindControls.dir\__UnbindControlsPlugin.cpp.obj
+[3/13] Building CXX object CMakeFiles\UnbindControls.dir\source\main.cpp.obj
+[4/13] Building CXX object CMakeFiles\UnbindControls.dir\source\layout\LayoutRows.cpp.obj
+[5/13] Building CXX object CMakeFiles\UnbindControls.dir\source\DevBenchTool.cpp.obj
+[6/13] Building CXX object CMakeFiles\UnbindControls.dir\source\Settings.cpp.obj
+[7/13] Building CXX object CMakeFiles\UnbindControls.dir\source\Functions.cpp.obj
+[8/13] Building CXX object CMakeFiles\UnbindControls.dir\source\ControlsList.cpp.obj
+[9/13] Building CXX object CMakeFiles\UnbindControls.dir\source\Unbinder.cpp.obj
+[10/13] Linking CXX shared library UnbindControls.dll

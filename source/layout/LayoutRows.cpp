@@ -4,7 +4,9 @@
 #include "layout/LayoutRows.h"
 
 #include "layout/LayoutStrings.h"
+#include "Functions.h"
 #include "GamepadPP.h"
+#include "Unbinder.h"
 #include "UVCRequestAPI.h"
 #include "utils/Logger.h"
 
@@ -314,6 +316,19 @@ namespace rows
 			const std::string text = Translated(slot.row);
 			for (const std::size_t context : { std::size_t{ 0 }, std::size_t{ 1 }, std::size_t{ 2 } }) { AddLine(tables[context], *button, text, true); }
 			logger::debug("rows: Gamepad++ {} on {} listed as \"{}\"", slot.id, ButtonId(*button), text);
+		}
+		// Sprint or Sneak for Controller (1.6.0): the button the on-foot Sprint control has also crouches, so it gets that mod's line
+		// in Gameplay, wherever the player has put Sprint.
+		if (functions::SprintOrSneakPresent())
+		{
+			const std::uint16_t key = unbinder::LayoutShownKey(unbinder::kLayoutLand, "Sprint", kGamepad);
+			if (const auto button = ButtonOfKey(key))
+			{
+				const std::string text = WithoutModName(Translated(std::string(functions::kSprintOrSneakRow)));
+				AddLine(tables[0], *button, text, true);
+				logger::debug("rows: Sprint or Sneak's line on {} as \"{}\"", ButtonId(*button), text);
+			}
+			else { logger::debug("rows: Sprint or Sneak is installed, but Sprint has no gamepad button (0x{:X})", key); }
 		}
 		std::vector<Context> out;
 		for (std::size_t i = 0; i < kContexts.size(); ++i)

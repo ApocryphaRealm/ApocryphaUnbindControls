@@ -1,5 +1,5 @@
 Unbind Vanilla Controls
-Version 1.5.0
+Version 1.6.0
 
 Skyrim's own Controls menu can only move a control to another key. It cannot leave a control with no
 key at all. This mod can: every control listed in its INI has no key while you play, so pressing the
@@ -184,6 +184,14 @@ after a game loads and each time the journal opens, and changes nothing of Gamep
   be unbound by pressing it. Combo buttons are not refused: Gamepad++ uses them only held together with
   an action button, so they stay shared with the game's own controls.
 Without Gamepad++ nothing here changes.
+
+SPRINT OR SNEAK FOR CONTROLLER
+With Sprint or Sneak for Controller installed, the controller's Sprint button also crouches and stands
+(hold it while standing still). This mod shows that wherever Sprint is:
+- The Controls page (controller page) lists "Sneak (hold while still) (Sprint or Sneak)" at the end of
+  GAMEPLAY with Sprint's button. It is a listed row: rebind Sprint to move it.
+- The controller graphic puts "Sneak (hold while still)" on Sprint's button, in Gameplay.
+Without Sprint or Sneak for Controller nothing here changes.
 
 WHAT IT CHANGES
 The mod writes the engine's own "unmapped" value into the control map while the game runs, and
