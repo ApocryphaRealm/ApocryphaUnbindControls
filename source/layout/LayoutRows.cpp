@@ -4,6 +4,7 @@
 #include "layout/LayoutRows.h"
 
 #include "layout/LayoutStrings.h"
+#include "GamepadPP.h"
 #include "UVCRequestAPI.h"
 #include "utils/Logger.h"
 
@@ -304,6 +305,16 @@ namespace rows
 		Reader reader{ a_faces, &tables };
 		const auto api = UVCRequestAPI::GetAPI();
 		if (api.forEachBinding) { api.forEachBinding(kGamepad, &OnRow, &reader); }
+		// Gamepad++'s buttons (1.5.0): it acts on them in the world, so they are listed where the Gameplay buttons are, as a mod's line.
+		for (const auto& slot : gpp::Slots())
+		{
+			if (!slot.registered) { continue; }
+			const auto button = ButtonOfKey(slot.pad);
+			if (!button) { continue; }
+			const std::string text = Translated(slot.row);
+			for (const std::size_t context : { std::size_t{ 0 }, std::size_t{ 1 }, std::size_t{ 2 } }) { AddLine(tables[context], *button, text, true); }
+			logger::debug("rows: Gamepad++ {} on {} listed as \"{}\"", slot.id, ButtonId(*button), text);
+		}
 		std::vector<Context> out;
 		for (std::size_t i = 0; i < kContexts.size(); ++i)
 		{

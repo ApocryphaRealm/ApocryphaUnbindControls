@@ -599,6 +599,7 @@ namespace settings
 		std::vector<std::string> functionLines;
 		for (const auto& f : functions::GetFunctions())
 		{
+			if (f.target.gppSlot >= 0) { continue; }  // Gamepad++'s rows (1.5.0) are made at runtime from what it uses, never saved
 			std::string device, keyText, modText;
 			// The line holds one device's binding: the one the target takes (padfirst: the gamepad), so a reload
 			// delivers the same key it did before the save.

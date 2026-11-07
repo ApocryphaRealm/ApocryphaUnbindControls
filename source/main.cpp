@@ -11,6 +11,7 @@
 #include "ControlsList.h"
 #include "DevBenchTool.h"
 #include "Functions.h"
+#include "GamepadPP.h"
 #include "Settings.h"
 #include "TweenWait.h"
 #include "Unbinder.h"
@@ -34,6 +35,7 @@ namespace
 			break;
 		case SKSE::MessagingInterface::kDataLoaded:
 			unbinder::Install();
+			gpp::AtDataLoaded();  // 1.5.0: is Gamepad++ loaded - the one info line; its buttons are read once a game is running
 			controlslist::InstallInputSink();
 			tweenwait::Install();  // Tween Menu Overhaul 1.2's Wait option with keyboard Wait unbound (TweenWait.h)
 			unbinder::OwnRemapsAtDataLoad();  // before the apply: a leftover ControlMap_Custom.txt moves into the INI first
@@ -56,11 +58,13 @@ namespace
 			break;
 		case SKSE::MessagingInterface::kPostLoadGame:
 			unbinder::ApplyAll("game loaded");
+			gpp::Refresh("game loaded");  // Gamepad++ keeps its buttons in the save
 			// Input Manager fills its action list in its own kDataLoaded handler, which may come after ours (1.2.0)
 			if (functions::ApiRowsAtFirstLoad("game loaded") > 0) { settings::Save(); }
 			break;
 		case SKSE::MessagingInterface::kNewGame:
 			unbinder::ApplyAll("new game");
+			gpp::Refresh("new game");
 			if (functions::ApiRowsAtFirstLoad("new game") > 0) { settings::Save(); }
 			break;
 		default:

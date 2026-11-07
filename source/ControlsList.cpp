@@ -3,6 +3,7 @@
 #include "ControlsList.h"
 
 #include "Functions.h"
+#include "GamepadPP.h"
 #include "Settings.h"
 #include "SystemMenu.h"
 #include "Unbinder.h"
@@ -616,6 +617,8 @@ namespace controlslist
 			const std::string rowId = a_secondPlace ? functions::SecondPlaceKey(list[f].name) : list[f].name;
 			// The mod this row points at is not installed: no row, and nothing written on its behalf.
 			if (!functions::IsPresentAt(f)) { return false; }
+			// A Gamepad++ row (1.5.0) is a controller button only: no row on the keyboard page.
+			if (list[f].target.gppSlot >= 0 && !a_gamepad) { return false; }
 			const auto shown = functions::ShownBinding(f, a_gamepad);
 			const int fnDevice = a_gamepad ? 2 : 0;
 			// The tile shows the BUTTON; a modifier is spelled in front of it, the way a bound control's row is.
@@ -629,6 +632,8 @@ namespace controlslist
 			if (list[f].target.readOnly)
 			{
 				keyText = list[f].target.follows.empty() ? std::string("MCM") : std::string();
+				// A Gamepad++ row: the button Gamepad++ uses for that slot.
+				if (list[f].target.gppSlot >= 0) { keyText = RowButtonName(gpp::SlotPad(list[f].target.gppSlot), 2); }
 				if (!list[f].target.follows.empty())
 				{
 					for (const int device : a_gamepad ? std::vector<int>{ 2 } : std::vector<int>{ 0, 1 })
@@ -1734,7 +1739,7 @@ namespace controlslist
 				// A listed row has nothing to set: it says so and takes no key.
 				if (std::size_t functionIndex = 0; functions::IsFunctionRow(key, &functionIndex) && functions::IsReadOnlyRow(functionIndex))
 				{
-					SheetMessage(a_page, "$Set by the mod it names, not here.");
+					SheetMessage(a_page, gpp::SlotOfRow(key) >= 0 ? "$Gamepad++ uses this button. Change it in Gamepad++'s own menu." : "$Set by the mod it names, not here.");
 					g_sheet.listedMessage = true;
 					logger::debug("controls list: sheet cell \"{}\" is a listed row; no key taken", key);
 					return;
@@ -2095,6 +2100,44 @@ namespace controlslist
 				}
 			}
 			if (changed) { a_field.SetMember("htmlText", RE::GFxValue(text.c_str())); }
+		}
+
+		// Does the row being set already hold a_code on the gamepad? Pressing a control's own button unbinds it, and that must
+		// stay possible on a button Gamepad++ uses (D-pad up is Favorites' AND Gamepad++'s action 3 out of the box).
+		bool CaptureRowHoldsPad(std::uint16_t a_code)
+		{
+			const auto has = [&](const std::vector<std::uint16_t>& a_keys) { return std::find(a_keys.begin(), a_keys.end(), a_code) != a_keys.end(); };
+			if (g_sheet.captureContext >= 0) { return has(unbinder::LiveKeysIn(g_sheet.captureContext, g_sheet.captureEvent, 2)); }
+			const std::string& event = g_remapEvent;
+			if (IEqualsView(event, unbinder::kModifierRowName)) { return unbinder::ModifierFor(2) == a_code; }
+			if (unbinder::DelinkedAction row; unbinder::FindDelinkedRow(event, row))
+			{
+				if (row.modRequest) { return unbinder::RequestRowKey(row.row, 2) == a_code; }
+				if (row.layout != unbinder::kLayoutLand) { return unbinder::LayoutShownKey(row.layout, row.event, 2) == a_code; }
+				return has(unbinder::LiveKeysIn(row.context, row.event, 2));
+			}
+			if (std::size_t index = 0; functions::IsFunctionRow(event, &index)) { return functions::HoldsKey(index, 2, a_code); }
+			return has(unbinder::LiveKeys(event, 2));
+		}
+
+		// Gamepad++ (1.5.0): a controller button it uses as an ACTION key is refused to every row of the sheet - a control there would
+		// act as well as Gamepad++'s action on every press. Refusing is the plainer choice: the same "reserved" answer the page gives for
+		// a button another control holds, with a note that names Gamepad++. The row's own button pressed again still unbinds it. Its
+		// combo keys are not refused: they act only held together with an action key (GamepadPP.h).
+		bool GppRefuses(const PressedKey& a_key, bool a_combo, std::string& a_text)
+		{
+			if (a_key.device != 2) { return false; }
+			const int slot = gpp::SlotFor(a_key.code);
+			if (slot < 0) { return false; }
+			const auto code = static_cast<std::uint16_t>(a_key.code);
+			const std::string row = g_sheet.captureContext >= 0 ? g_sheet.captureEvent : g_remapEvent;
+			if (!a_combo && CaptureRowHoldsPad(code))
+			{
+				logger::debug("controls list: \"{}\": gamepad 0x{:02x} is Gamepad++'s ({}), but the row already holds it - its own button, so it goes through", row, code, gpp::SlotRow(slot));
+				return false;
+			}
+			a_text = std::format("\"{}\": gamepad 0x{:02x}{} refused - Gamepad++ uses it (\"{}\")", row, code, a_combo ? " + Modifier" : "", gpp::SlotRow(slot));
+			return true;
 		}
 
 		// A key captured on the sheet for a game control or a menu action, applied as a [Bound] line in that control's context:
@@ -2673,8 +2716,16 @@ namespace controlslist
 					const bool combo = firstIsModifier && hasSecond && second.device == first.device;
 					const PressedKey key = combo ? second : first;
 					bool refused = false;
+					bool gppRefused = false;
 					std::string result;
-					if (g_sheet.captureContext >= 0 && key.device >= 0 && key.device <= 2)
+					if (GppRefuses(key, combo, result))
+					{
+						refused = true;
+						gppRefused = true;
+						SetRemapResult(result);
+						logger::info("controls list: {}", result);
+					}
+					else if (g_sheet.captureContext >= 0 && key.device >= 0 && key.device <= 2)
 					{
 						result = ApplySheetBind(g_sheet.captureContext, g_sheet.captureEvent, key.device, static_cast<std::uint16_t>(key.code), combo, refused);
 						settings::Save();
@@ -2692,7 +2743,7 @@ namespace controlslist
 						refused = result.find("refused") != std::string::npos;
 					}
 					g_beforeAll = {};
-					SheetMessage(page, refused ? "$That button is reserved." : "");
+					SheetMessage(page, gppRefused ? "$Gamepad++ uses that button. Change it in Gamepad++ first." : (refused ? "$That button is reserved." : ""));
 					g_sheet.releaseAtMs = SteadyNowMs() + 200;  // the key's own release must not reach the page
 					g_sheet.drawn.clear();
 				}

@@ -2,6 +2,8 @@
 
 #include "Functions.h"
 
+#include "GamepadPP.h"
+
 #include "IniLineCore.h"
 #include "InputManagerApi.h"
 #include "JsonValueCore.h"
@@ -140,6 +142,8 @@ namespace functions
 	// to install without Wheeler, Stances NG or One Click Power Attack (2026-09-16).
 	bool TargetPresent(const Function& a_function)
 	{
+		// A Gamepad++ row: while Gamepad++ is loaded and that slot holds a button it registers.
+		if (a_function.target.gppSlot >= 0) { return gpp::SlotPad(a_function.target.gppSlot) != kUnbound; }
 		if (g_dataPath.empty()) { return false; }
 		const std::string& probe = a_function.target.requiresFile.empty() ? a_function.target.file : a_function.target.requiresFile;
 		if (probe.empty()) { return false; }
@@ -192,6 +196,19 @@ namespace functions
 
 	void SetFunctions(std::vector<Function> a_functions)
 	{
+		// Gamepad++'s rows (1.5.0) go last, after every row the INI declared, so no INI row's position moves. They are made
+		// here every time, never saved (Settings.cpp skips them), and shown only while Gamepad++ reserves that button.
+		std::erase_if(a_functions, [](const Function& a_f) { return a_f.target.gppSlot >= 0 || gpp::SlotOfRow(a_f.name) >= 0; });
+		for (int slot = 0; slot < gpp::kSlotCount; ++slot)
+		{
+			Function f;
+			f.name = gpp::SlotRow(slot);
+			f.target.requiresFile = "Gamepad++.esp";
+			f.target.none = -1;
+			f.target.readOnly = true;
+			f.target.gppSlot = slot;
+			a_functions.push_back(std::move(f));
+		}
 		std::scoped_lock l(g_lock);
 		g_functions = std::move(a_functions);
 	}

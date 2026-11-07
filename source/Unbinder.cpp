@@ -2,6 +2,8 @@
 
 #include "Unbinder.h"
 
+#include "GamepadPP.h"
+
 #include "ControlsList.h"
 #include "Functions.h"
 #include "Settings.h"
@@ -793,6 +795,8 @@ namespace unbinder
 				OnJournalForSwim(a_event->opening);
 				if (a_event->opening)
 				{
+					// Gamepad++'s buttons (1.5.0) may have changed in its own menu since the last read: read before the Controls page shows them.
+					gpp::Refresh("journal opened");
 					// The Controls list draws an unbound control's row with no key (ControlsList.h).
 					controlslist::OnJournalOpen();
 					systemmenu::OnJournalOpen();  // [SystemMenu] rows are looked for again in this open

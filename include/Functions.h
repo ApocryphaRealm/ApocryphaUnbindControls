@@ -109,6 +109,9 @@ namespace functions
 		bool nativeCodes = false;
 		bool readOnly = false;
 		std::string follows;
+		// 1.5.0: a Gamepad++ row (GamepadPP.h) - listed only, its button is the one Gamepad++'s slot holds (0-7: A1-A4, C1-C4).
+		// Made at runtime, never read from or written to the INI; shown on the gamepad page while that slot reserves a button.
+		int gppSlot = -1;
 		std::vector<Switch> switches;
 		std::string defaultsFile;
 		std::string api;      // "" or "InputManager"

@@ -7,6 +7,17 @@ Rule 61: this mod's own history, kept beside the code it describes.
 > number; at `.9` the MINOR rolls. The next number is LAST WORKING + 1; failed/scratch/
 > untested numbers are reused. Numbers come from version-gate.ps1.
 
+## 1.5.0 - 2026-11-06 - untested
+
+### Added
+- Gamepad++ compatibility (the owner, 2026-11-06: UVC works alongside Gamepad++ rather than replacing it). When Gamepad++.esp is loaded, UVC reads which controller buttons Gamepad++ uses - its four action keys and its combo keys, from Gamepad++'s own key handler in the running game - after a game loads and each time the journal opens. Nothing of Gamepad++'s is changed.
+- The Controls page lists each of those buttons at the end of GAMEPLAY as its own row (Gamepad++ Action 1-4, Gamepad++ Combo 1-4) showing the button, on the controller page only. They are listed rows: selecting one says Gamepad++ uses the button and that it is changed in Gamepad++'s own menu. The controller graphic lists them too, in Gameplay, Swimming and On Horseback.
+- A bind made on the Controls page onto a button Gamepad++ uses as an action key is refused, with the note "Gamepad++ uses that button. Change it in Gamepad++ first." A control already on that button can still be unbound by pressing it. Combo keys are not refused: Gamepad++ uses them only held together with an action key, so they stay shared with the game's own controls (B, LB and RB out of the box).
+- The log says once whether Gamepad++ was found, each value read is logged at debug, and a game control sharing an action key with Gamepad++ is named once. DevBench uvc.control op=gamepadpp [refresh=1] reports what was read: where from, each slot's button and whether it refuses binds. New text in all eleven languages.
+
+### Known
+- Without Gamepad++ nothing changes from 1.4.0. Requests from other mods (the request API) do not take Gamepad++'s buttons into account: they are decided when the game starts, before a save tells which buttons Gamepad++ uses. A remap made through the game's own Controls list when UVC's sheet is not drawn is not checked either.
+
 ## 1.4.0 - 2026-11-06 - working
 
 ### Added

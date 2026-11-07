@@ -1,5 +1,5 @@
 Unbind Vanilla Controls
-Version 1.4.0
+Version 1.5.0
 
 Skyrim's own Controls menu can only move a control to another key. It cannot leave a control with no
 key at all. This mod can: every control listed in its INI has no key while you play, so pressing the
@@ -172,6 +172,19 @@ and one left over from before is moved into the INI the next time the game start
 the INI is saved inside this mod's folder, so nothing lands in overwrite. bKeepRemapsInIni=0 in [General]
 lets the game keep its own ControlMap_Custom.txt instead.
 
+GAMEPAD++
+With Gamepad++ installed, this mod works alongside it. Gamepad++ does not use the control map: it listens
+to controller buttons of its own choosing. This mod reads which ones from Gamepad++ in the running game,
+after a game loads and each time the journal opens, and changes nothing of Gamepad++'s.
+- The Controls page (controller page) lists them at the end of GAMEPLAY: Gamepad++ Action 1-4 and
+  Gamepad++ Combo 1-4, each with its button. They are set in Gamepad++'s own menu, not here.
+- The controller graphic lists them in Gameplay, Swimming and On Horseback.
+- Binding a control on the Controls page to one of Gamepad++'s action buttons is refused with the note
+  "Gamepad++ uses that button. Change it in Gamepad++ first." A control already on that button can still
+  be unbound by pressing it. Combo buttons are not refused: Gamepad++ uses them only held together with
+  an action button, so they stay shared with the game's own controls.
+Without Gamepad++ nothing here changes.
+
 WHAT IT CHANGES
 The mod writes the engine's own "unmapped" value into the control map while the game runs, and
 re-applies its lists when a game loads, on a new game and whenever the journal closes. Hidden System
@@ -196,6 +209,10 @@ Send the log for any bug you find:
 Documents\My Games\Skyrim Special Edition\SKSE\UnbindControls.log
 
 WHAT CHANGED
+
+Version 1.5.0
+Added Gamepad++ compatibility (see GAMEPAD++): its buttons are listed on the Controls page and in the
+controller graphic, and a bind onto one of its action buttons is refused with a note naming it.
 
 Version 1.4.0
 Added the controller graphic on the Controls page (X, or Square): a rendered PlayStation, Xbox or Steam

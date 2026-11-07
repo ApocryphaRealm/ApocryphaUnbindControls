@@ -2,6 +2,8 @@
 
 #include "DevBenchTool.h"
 
+#include "GamepadPP.h"
+
 #include "DevBench/DevBenchAPI.h"
 #include "ControlsList.h"
 #include "Functions.h"
@@ -400,6 +402,18 @@ namespace DevBenchTool
 				a_write(a_sink, std::format(R"({{"ok":{},"op":"requesttest","answers":[{}]}})", ran ? "true" : "false", out).c_str());
 				return;
 			}
+			if (op == "gamepadpp")
+			{
+				// 1.5.0: what was read from Gamepad++ (refresh=1 reads it again first, on the main thread).
+				std::string out;
+				const bool refresh = Get(args, "refresh") == "1";
+				if (!RunOnMainThread([&]() {
+						if (refresh) { gpp::Refresh("DevBench"); }
+						out = gpp::StateJson();
+					})) { a_write(a_sink, R"({"ok":false,"op":"gamepadpp","error":"main thread did not run the task in time"})"); return; }
+				a_write(a_sink, std::format(R"({{"ok":true,"op":"gamepadpp",{}}})", out).c_str());
+				return;
+			}
 			if (op == "apply")
 			{
 				const bool ran = RunOnMainThread([]() { unbinder::ApplyAll("tool"); });
@@ -450,8 +464,8 @@ namespace DevBenchTool
 			"keys captured this session, last apply. op=dump [context]: every mapping of the live ControlMap (event, key, modifier, "
 			"remappable) per context and device. op=unbind / op=rebind with context (name or index), event, device "
 			"(keyboard|mouse|gamepad): add to or remove from the list, applied and written to the INI. op=apply re-applies the list; "
-			"op=reload gives the keys back, re-reads the INI and applies. op=rows (journal open): every row of the game's Controls list - event, the buttonName and buttonID the game sent, whether this mod draws it blank and why. op=listen [seconds, default 20, 1-120]: log every button event - device, code, the user event the game attached, value, held time - to the mod's log. op=systemrows (journal open): the System page - whether it picks rows by name, every row it knows (canonical), the rows it shows, the [SystemMenu] list and the rows removed this open. op=own: controls with no INI line whose live keys differ from controlmap.txt are written into the INI, and ControlMap_Custom.txt is removed from the game folder; op=state reports customMap, lastOwn and ownLines. op=function with event (the extra row's name), device and key (a button name or code, or \"none\" to unbind): binds an extra [Functions] row and writes its value into the target mod's settings file. op=deliver writes every extra row's value to its target file now. op=opencontrols opens the System page's Controls panel (journal open, System tab) by setting the page's own state, never by driving keys. op=state lists the extra rows with the SKSE input code each one delivers. op=tweenwait: Tween Menu Overhaul Wait requests seen, answered (keyboard Wait had no key) and the last result; fire=1 (tween menu open) sends the request its Wait option sends. op=requests: every request other mods made, its answer and why, and the player's saved choices. op=request (plugin, event, label, context, device, key, alt), op=release, op=query (plugin, event, context, device): the request API through its public header, as another mod calls it. op=requesttest [release=1]: refused, granted and alternative answers in one call on the keyboard, with two rows left on the Controls page until release=1. op=why [event, default Sneak]: the game's switches for Sneak, movement and fighting, and the control's default and live keys, modifier and group flags per device.\","
-			"\"inputSchema\":{\"type\":\"object\",\"properties\":{\"op\":{\"type\":\"string\"},\"context\":{\"type\":\"string\"},\"event\":{\"type\":\"string\"},\"device\":{\"type\":\"string\"},\"key\":{\"type\":\"string\"},\"seconds\":{\"type\":\"string\"},\"fire\":{\"type\":\"string\"},\"plugin\":{\"type\":\"string\"},\"label\":{\"type\":\"string\"},\"alt\":{\"type\":\"string\"},\"release\":{\"type\":\"string\"}}},"
+			"op=reload gives the keys back, re-reads the INI and applies. op=rows (journal open): every row of the game's Controls list - event, the buttonName and buttonID the game sent, whether this mod draws it blank and why. op=listen [seconds, default 20, 1-120]: log every button event - device, code, the user event the game attached, value, held time - to the mod's log. op=systemrows (journal open): the System page - whether it picks rows by name, every row it knows (canonical), the rows it shows, the [SystemMenu] list and the rows removed this open. op=own: controls with no INI line whose live keys differ from controlmap.txt are written into the INI, and ControlMap_Custom.txt is removed from the game folder; op=state reports customMap, lastOwn and ownLines. op=function with event (the extra row's name), device and key (a button name or code, or \"none\" to unbind): binds an extra [Functions] row and writes its value into the target mod's settings file. op=deliver writes every extra row's value to its target file now. op=opencontrols opens the System page's Controls panel (journal open, System tab) by setting the page's own state, never by driving keys. op=state lists the extra rows with the SKSE input code each one delivers. op=tweenwait: Tween Menu Overhaul Wait requests seen, answered (keyboard Wait had no key) and the last result; fire=1 (tween menu open) sends the request its Wait option sends. op=requests: every request other mods made, its answer and why, and the player's saved choices. op=request (plugin, event, label, context, device, key, alt), op=release, op=query (plugin, event, context, device): the request API through its public header, as another mod calls it. op=requesttest [release=1]: refused, granted and alternative answers in one call on the keyboard, with two rows left on the Controls page until release=1. op=why [event, default Sneak]: the game's switches for Sneak, movement and fighting, and the control's default and live keys, modifier and group flags per device. op=gamepadpp [refresh=1]: Gamepad++ - whether it is loaded, where its buttons were read from (script or globals), each slot (A1-A4 action, C1-C4 combo) with its SKSE code, pad code and whether it is reserved; refresh=1 reads them again first.\","
+			"\"inputSchema\":{\"type\":\"object\",\"properties\":{\"op\":{\"type\":\"string\"},\"context\":{\"type\":\"string\"},\"event\":{\"type\":\"string\"},\"device\":{\"type\":\"string\"},\"key\":{\"type\":\"string\"},\"seconds\":{\"type\":\"string\"},\"fire\":{\"type\":\"string\"},\"plugin\":{\"type\":\"string\"},\"label\":{\"type\":\"string\"},\"alt\":{\"type\":\"string\"},\"release\":{\"type\":\"string\"},\"refresh\":{\"type\":\"string\"}}},"
 			"\"readOnly\":false"
 			"}";
 
