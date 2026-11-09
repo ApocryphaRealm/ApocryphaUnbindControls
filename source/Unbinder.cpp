@@ -56,6 +56,8 @@ namespace unbinder
 			{ "Start", 0x0010 }, { "Back", 0x0020 }, { "LeftStick", 0x0040 }, { "RightStick", 0x0080 },
 			{ "LB", 0x0100 }, { "RB", 0x0200 }, { "A", 0x1000 }, { "B", 0x2000 }, { "X", 0x4000 }, { "Y", 0x8000 },
 			{ "LT", 0x0009 }, { "RT", 0x000a },
+			// Other spellings read on the way in (1.7.0); a code is always written back by the first name above.
+			{ "LeftThumb", 0x0040 }, { "RightThumb", 0x0080 }, { "L3", 0x0040 }, { "R3", 0x0080 },
 		};
 
 		// DirectInput scan codes, for NAMING a keyboard key in the log and in the Controls list. The game's own
@@ -1005,6 +1007,7 @@ namespace unbinder
 			{ "Gameplay", "Right Attack/Block", 2 },
 			{ "Gameplay", "Left Attack/Block", 2 },
 			{ "Gameplay", "Favorites", 2 },
+			{ "Gameplay", "Auto-Move", 2 },  // 1.7.0: the game gives Auto-Move no controller button and no row on the controller page
 		};
 	}
 
@@ -1035,6 +1038,7 @@ namespace unbinder
 			{ "Sprint", 0x2000 },
 			{ "Toggle POV", 0x0001 },
 			{ "Favorites", 0x0002 },
+			{ "Auto-Move", 0x0040 },  // 1.7.0 (the owner, 2026-11-09: "I want it bound to left stick"): the left stick click
 		};
 		std::vector<Bind> out;
 		for (const auto& [event, key] : kDefaults)

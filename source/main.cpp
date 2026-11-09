@@ -12,6 +12,7 @@
 #include "DevBenchTool.h"
 #include "Functions.h"
 #include "GamepadPP.h"
+#include "InputLock.h"
 #include "Settings.h"
 #include "TweenWait.h"
 #include "Unbinder.h"
@@ -29,6 +30,9 @@ namespace
 	{
 		switch (a_msg->type)
 		{
+		case SKSE::MessagingInterface::kInputLoaded:
+			inputlock::Install();  // 1.7.0: the input dispatch ([PadToKey], the toggles) and, with the lock on, the using-controller answer
+			break;
 		case SKSE::MessagingInterface::kPostLoad:
 			DevBenchTool::Init(false);
 			LayoutDevBenchTool::Init(false);
@@ -91,6 +95,8 @@ SKSEPluginLoad(const SKSE::LoadInterface* a_skse)
 				 SKSE::PluginDeclaration::GetSingleton()->GetVersion().string("."));
 
 	layoutsettings::Load();
+	inputlock::Load(settings::GetIniPath());  // [InputLock] and [PadToKey] (1.7.0)
+	SKSE::AllocTrampoline(64);                // the input dispatch call and the two using-controller entries
 	controlslist::Install();
 	unbinder::InstallSwimWatch();
 
