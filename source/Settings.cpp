@@ -75,7 +75,7 @@ namespace settings
 		// Scalars go into the key:section map; each [Unbound] line - "Context|Control|Device", an "=..."
 		// after it is accepted and ignored - becomes an entry.
 		// Each [Bound] line - "Context|Control|Device|Button" - becomes a bind; a_sawBound says the section exists.
-		void ReadFile(std::map<std::string, std::string>& a_keys, std::vector<unbinder::Entry>& a_entries, std::vector<unbinder::Bind>& a_binds, std::vector<unbinder::Bind>& a_swim, std::vector<unbinder::Bind>& a_horse, bool& a_sawBound, std::vector<std::string>& a_rows, bool& a_sawSystemMenu, std::vector<functions::Function>& a_functions, bool& a_sawFunctions, std::vector<unbinder::Remappable>& a_remappable, bool& a_sawRemappable, std::vector<unbinder::ModifierKey>& a_modifiers, bool& a_sawModifier, std::vector<unbinder::RequestChoice>& a_requestChoices, int& a_badLines)
+		void ReadFile(std::map<std::string, std::string>& a_keys, std::vector<unbinder::Entry>& a_entries, std::vector<unbinder::Bind>& a_binds, std::vector<unbinder::Bind>& a_swim, std::vector<unbinder::Bind>& a_horse, std::vector<unbinder::Bind>& a_boat, bool& a_sawBound, std::vector<std::string>& a_rows, bool& a_sawSystemMenu, std::vector<functions::Function>& a_functions, bool& a_sawFunctions, std::vector<unbinder::Remappable>& a_remappable, bool& a_sawRemappable, std::vector<unbinder::ModifierKey>& a_modifiers, bool& a_sawModifier, std::vector<unbinder::RequestChoice>& a_requestChoices, int& a_badLines)
 		{
 			std::vector<std::string> a_seenRows;  // tokens of every [SystemMenu] row already read
 			std::ifstream in(iniPath);
@@ -165,13 +165,14 @@ namespace settings
 					a_requestChoices.push_back(std::move(c));
 					continue;
 				}
-				if (section == "swimming" || section == "horseback")
+				if (section == "swimming" || section == "horseback" || section == "boat")
 				{
-					// Swimming|Control|Device|Button or Horseback|Control|Device|Button, Button "none" for no key in that state: the
-					// control's key while the player is in water, or mounted.
+					// Swimming|Control|Device|Button, Horseback|Control|Device|Button or Boat|Control|Device|Button, Button "none" for
+					// no key in that state: the control's key while the player is in water, mounted, or in a boat.
 					const bool horse = section == "horseback";
-					auto& list = horse ? a_horse : a_swim;
-					const char* block = horse ? "Horseback" : "Swimming";
+					const bool boat = section == "boat";
+					auto& list = boat ? a_boat : (horse ? a_horse : a_swim);
+					const char* block = boat ? "Boat" : (horse ? "Horseback" : "Swimming");
 					std::vector<std::string> parts;
 					std::size_t from = 0;
 					while (true)
@@ -369,8 +370,9 @@ namespace settings
 			int bad = 0;
 			std::vector<unbinder::Bind> swim;
 			std::vector<unbinder::Bind> horse;
+			std::vector<unbinder::Bind> boat;
 			std::vector<unbinder::RequestChoice> requestChoices;
-			ReadFile(k, entries, binds, swim, horse, sawBound, rows, sawSystemMenu, funcs, sawFunctions, remappable, sawRemappable, modifiers, sawModifier, requestChoices, bad);
+			ReadFile(k, entries, binds, swim, horse, boat, sawBound, rows, sawSystemMenu, funcs, sawFunctions, remappable, sawRemappable, modifiers, sawModifier, requestChoices, bad);
 			auto get = [&](const char* a_key, auto& a_out, auto a_parse) {
 				const auto it = k.find(a_key);
 				if (it == k.end()) { logger::debug("INI key {} missing; keeping current value", a_key); return; }
@@ -390,6 +392,33 @@ namespace settings
 			unbinder::SetSwimBinds(std::move(swim));
 			logger::info("horseback context: {} [Horseback] line(s)", horse.size());
 			unbinder::SetHorseBinds(std::move(horse));
+			logger::info("boat context: {} [Boat] line(s)", boat.size());
+			unbinder::SetBoatBinds(std::move(boat));
+			{
+				// [BoatDetection]: a missing key keeps the shipped default (an INI from before 1.6.0 has none of them)
+				const auto list = [&](const char* a_key, std::vector<std::string> a_default) {
+					const auto it = k.find(a_key);
+					if (it == k.end()) { return a_default; }
+					std::vector<std::string> out;
+					std::size_t from = 0;
+					const std::string& v = it->second;
+					while (from <= v.size())
+					{
+						const auto comma = v.find(',', from);
+						std::string part = Trim(v.substr(from, comma == std::string::npos ? std::string::npos : comma - from));
+						if (!part.empty()) { out.push_back(std::move(part)); }
+						if (comma == std::string::npos) { break; }
+						from = comma + 1;
+					}
+					return out;
+				};
+				bool seatedRide = true;
+				get("bseatedride:boatdetection", seatedRide, ParseBool);
+				auto plugins = list("splugins:boatdetection", { "OarsAndSails.esl", "Longship.esp" });
+				auto keywords = list("skeywords:boatdetection", {});
+				logger::info("boat context: [BoatDetection] {} plugin(s), {} keyword(s), seated ride {}", plugins.size(), keywords.size(), seatedRide ? "on" : "off");
+				unbinder::SetBoatDetection(std::move(plugins), std::move(keywords), seatedRide);
+			}
 			logger::info("mod requests: {} [ModRequests] choice(s) of the player's", requestChoices.size());
 			unbinder::SetRequestChoices(std::move(requestChoices));
 			// An INI from before 1.0.6 has no [SystemMenu] section: it gets the shipped hidden rows.
@@ -587,6 +616,13 @@ namespace settings
 			horseLines.push_back(std::format("Horseback|{}|{}|{}", b.event, unbinder::DeviceName(b.device), name[0] ? std::string(name) : std::format("0x{:02x}", b.key)));
 		}
 		WriteSection(lines, "[Horseback]", horseLines);
+		std::vector<std::string> boatLines;
+		for (const auto& b : unbinder::GetBoatBinds())
+		{
+			const char* name = b.key == 0xFF ? "none" : unbinder::ButtonName(b.key, b.device);
+			boatLines.push_back(std::format("Boat|{}|{}|{}", b.event, unbinder::DeviceName(b.device), name[0] ? std::string(name) : std::format("0x{:02x}", b.key)));
+		}
+		WriteSection(lines, "[Boat]", boatLines);
 		std::vector<std::string> requestLines;
 		for (const auto& c : unbinder::GetRequestChoices())
 		{

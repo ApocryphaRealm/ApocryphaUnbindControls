@@ -24,14 +24,14 @@ mod's exports at run time, and with this mod absent IsAvailable() is false and y
 That asks for X on the controller, or D-pad down if X is taken, for an action of your own in the
 Gameplay context. The press reaches your input sink as a button event whose user event is "MyMod Dash".
 Also: Release takes the key back and removes the row, Query reads what an action has now.
-- Contexts: Gameplay, Swimming, Horseback, and the game's others (Menu Mode, Map, Item Menus ...).
+- Contexts: Gameplay, Swimming, Horseback, Boat, and the game's others (Menu Mode, Map, Item Menus ...).
 - Keys: the codes controlmap.txt uses, per device. No modifier combinations in this version.
 - A user event of the game's own works too, on a device where it has no key (Hotkey3, say).
 - The answer: granted, alternative, playerChoice, refused, queued, released, notRequested, badRequest
   or displaced, the key, and a sentence saying why, naming what holds the key.
 - The player always wins. A key a control, one of this mod's rows or another mod's request holds is not
   given. An accepted request is a row on the Controls page, "Dash (My Mod)", under MOD REQUESTS or in
-  the SWIMMING or HORSEBACK block. What the player sets there stays in the INI's [ModRequests], above
+  the SWIMMING, HORSEBACK or BOAT block. What the player sets there stays in the INI's [ModRequests], above
   whatever you ask next, and if they later give your key to something else your answer says displaced.
 - Ask at every game start, from kDataLoaded onward on the main thread. Earlier or from another thread the
   answer is queued: it is decided at the next chance and Query gives the result.
@@ -91,7 +91,7 @@ with it. This mod gives each of those menu buttons a key of its own, in its own 
 control map gives it out of the box - so changing a gameplay control never changes a menu button.
 
 THE CONTROLS PAGE
-Journal > System > Controls shows one block at a time: GAMEPLAY (with the rows this mod adds), SWIMMING, HORSEBACK, then
+Journal > System > Controls shows one block at a time: GAMEPLAY (with the rows this mod adds), SWIMMING, HORSEBACK, BOAT, then
 one block per menu - MENUS, ITEMS and IN MAP. LB and RB change the block and go round, as do PgUp and PgDn or
 a click on the title at the top (its left end goes back). Up and down (the D-pad, the arrow keys or the mouse wheel) walk the
 block's rows; left and right move along a line. Which block of how many is at the top right.
@@ -123,7 +123,7 @@ THE CONTROLLER GRAPHIC
 On the Controls page press X (Square on a PlayStation pad) and a rendered controller is shown, with a
 line from each button to a box that says what the button does now, read from this mod's bindings each
 time it opens - what you set on the page is what you see.
-- One context at a time: Gameplay, Swimming, On Horseback, Map, then the menus. LB and RB (or D-pad
+- One context at a time: Gameplay, Swimming, On Horseback, In a Boat, Map, then the menus. LB and RB (or D-pad
   left and right, PgUp and PgDn, or a click on the name at the top) step through them and go round.
   A combination shows its modifier: "L2 + Shout".
 - Three pads, each a picture of its own: PlayStation, Xbox and the 2026 Steam Controller.
@@ -216,7 +216,21 @@ DEBUGGING
 Send the log for any bug you find:
 Documents\My Games\Skyrim Special Edition\SKSE\UnbindControls.log
 
+IN A BOAT
+The BOAT block on the Controls page holds buttons that apply only while you row, steer or sit in a boat
+([Boat] in the INI). Every row starts on its on-foot button, so nothing changes until you set one. Walking
+about on a ship's deck is on foot; swimming keeps its own SWIMMING block. Which boats count is set in
+[BoatDetection]: Oars and Sails' rowboat (at the oars or the helm) and our Longship out of the box, any
+seat or mount from a plugin listed there or carrying a keyword listed there, and no boat mod is required.
+A boat mod that reads the game's own controls follows the BOAT block too: in Oars and Sails, Forward, Back
+and the strafe keys row and steer, Activate stands you up and Auto-Move rows on.
+
 WHAT CHANGED
+
+Version 1.6.0
+Added a BOAT block on the Controls page and "In a Boat" in the controller graphic: buttons of their own while
+you row, steer or sit in a boat (see IN A BOAT). With no [Boat] lines nothing changes.
+Added Sprint or Sneak for Controller compatibility: its crouch button is shown on Sprint's button.
 
 Version 1.5.0
 Added Gamepad++ compatibility (see GAMEPAD++): its buttons are listed on the Controls page and in the

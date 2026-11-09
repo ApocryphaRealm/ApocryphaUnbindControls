@@ -1322,8 +1322,10 @@ namespace unbinder
 	{
 		std::vector<Bind> g_swim;                          // [Swimming]; under g_lock
 		std::vector<Bind> g_horse;                         // [Horseback]; under g_lock
+		std::vector<Bind> g_boat;                          // [Boat]; under g_lock
 		std::atomic<bool> g_haveSwimLines{ false };
 		std::atomic<bool> g_haveHorseLines{ false };
+		std::atomic<bool> g_haveBoatLines{ false };
 		std::atomic<int> g_layoutOn{ kLayoutLand };        // which layout is on the live map (written under g_lock)
 		std::atomic<int> g_stateStable{ kLayoutLand };     // the player's swimming or mounted state, once it has settled
 		std::atomic<bool> g_swimJournal{ false };          // the journal is open: the Controls page works on the land layout
@@ -1356,8 +1358,8 @@ namespace unbinder
 		constexpr int kGameplayContext = 0;
 		constexpr std::int64_t kSwimSettleMs = 150;  // the state must hold this long: wading at the waterline flickers
 
-		std::vector<Bind>& LinesLocked(int a_layout) { return a_layout == kLayoutHorse ? g_horse : g_swim; }
-		const char* LayoutSection(int a_layout) { return a_layout == kLayoutHorse ? "Horseback" : "Swimming"; }
+		std::vector<Bind>& LinesLocked(int a_layout) { return a_layout == kLayoutBoat ? g_boat : (a_layout == kLayoutHorse ? g_horse : g_swim); }
+		const char* LayoutSection(int a_layout) { return a_layout == kLayoutBoat ? "Boat" : (a_layout == kLayoutHorse ? "Horseback" : "Swimming"); }
 
 		// The layout the player's state asks for. The journal's Controls page always works on the land layout.
 		int WantedLayout()
@@ -1366,6 +1368,7 @@ namespace unbinder
 			const int state = g_stateStable.load();
 			if (state == kLayoutWater && g_haveSwimLines.load()) { return kLayoutWater; }
 			if (state == kLayoutHorse && g_haveHorseLines.load()) { return kLayoutHorse; }
+			if (state == kLayoutBoat && g_haveBoatLines.load()) { return kLayoutBoat; }
 			return kLayoutLand;
 		}
 		constexpr std::int64_t kHeldForgetMs = 300;  // a held button repeats every frame; silence means its release was lost
@@ -1397,6 +1400,17 @@ namespace unbinder
 		// HorsePower pets the horse on the Sneak user event while mounted, so with its Manual Horseback Petting on, Sneak has a job
 		// on a horse: this row is that control under the name of what it does there. Its key is a real [Horseback] Sneak line.
 		constexpr SwimRow kHorsePetRow[] = { { "Sneak", true, "Pet Horse (HorsePower)" } };
+		// The BOAT block (1.6.0): every Gameplay control a player might want elsewhere while rowing, steering or seated in a
+		// boat. Each row starts on its on-foot key; nothing is freed. A boat mod reads some of these itself (Oars and Sails:
+		// Forward/Back/Strafe and the left stick row and steer, Activate stands you up, Auto-Move rows on), so a key moved here
+		// moves that too.
+		constexpr SwimRow kBoatRows[] = {
+			{ "Jump", true }, { "Sprint", true }, { "Sneak", true }, { "Activate", true }, { "Ready Weapon", true },
+			{ "Right Attack/Block", true }, { "Left Attack/Block", true }, { "Shout", true }, { "Toggle POV", true }, { "Auto-Move", true },
+			{ "Tween Menu", true }, { "Favorites", true }, { "Wait", true }, { "Journal", true }, { "Pause", true },
+			{ "Forward", false }, { "Back", false }, { "Strafe Left", false }, { "Strafe Right", false }, { "Run", false }, { "Toggle Always Run", false },
+			{ "Quick Inventory", false }, { "Quick Magic", false }, { "Quick Stats", false }, { "Quick Map", false },
+		};
 
 		// A control the HORSEBACK layout takes off its keys while it is on, so they are free while riding. A line of its own wins.
 		bool FreedWhileMounted(std::string_view a_event)
@@ -1478,6 +1492,7 @@ namespace unbinder
 			a_layout = kLayoutLand;
 			if (IEquals(a_name, "Swimming")) { a_layout = kLayoutWater; return true; }
 			if (IEquals(a_name, "Horseback")) { a_layout = kLayoutHorse; return true; }
+			if (IEquals(a_name, "Boat")) { a_layout = kLayoutBoat; return true; }
 			a_context = ContextIndex(a_name);
 			return a_context >= 0;
 		}
@@ -1660,7 +1675,7 @@ namespace unbinder
 					d.event = r.action;
 					d.row = row;
 					d.block = "Mod Requests";
-					d.title = r.layout == kLayoutWater ? "SWIMMING" : (r.layout == kLayoutHorse ? "HORSEBACK" : "MOD REQUESTS");
+					d.title = r.layout == kLayoutWater ? "SWIMMING" : (r.layout == kLayoutHorse ? "HORSEBACK" : (r.layout == kLayoutBoat ? "BOAT" : "MOD REQUESTS"));
 					d.action = std::format("{} ({})", r.label, r.plugin);
 					d.layout = r.layout;
 					d.sheetContext = kRequestSheetContext;
@@ -1683,6 +1698,7 @@ namespace unbinder
 		{
 			g_haveSwimLines.store(!g_swim.empty() || RequestWantsLayoutLocked(kLayoutWater));
 			g_haveHorseLines.store(!g_horse.empty() || RequestWantsLayoutLocked(kLayoutHorse));
+			g_haveBoatLines.store(!g_boat.empty() || RequestWantsLayoutLocked(kLayoutBoat));
 		}
 
 		// A mapping of the request's action exists on its device from here on: a mod's own action is a new user event on the
@@ -1778,7 +1794,7 @@ namespace unbinder
 			{ "Up", true, false }, { "Down", true, false }, { "Left", true, false }, { "Right", true, false },
 		};
 
-		// The SWIMMING, HORSEBACK and IN MAP rows join the menu rows' list once per session (caller holds g_lock). A row is
+		// The SWIMMING, HORSEBACK, BOAT and IN MAP rows join the menu rows' list once per session (caller holds g_lock). A row is
 		// listed only for a control the map in force really has. The map's actions are not links in every control map, so
 		// IN MAP cannot depend on the link conversion: the owner's map and the shipped Fixed and Cleaned one have few or none.
 		void RecordContextRows(RE::ControlMap* a_map)
@@ -1814,6 +1830,7 @@ namespace unbinder
 			addRows(kSwimRows, kLayoutWater, "Swimming", "SWIMMING");
 			addRows(kHorseRows, kLayoutHorse, "Horseback", "HORSEBACK");
 			if (functions::ManualPettingOn()) { addRows(kHorsePetRow, kLayoutHorse, "Horseback", "HORSEBACK"); }
+			addRows(kBoatRows, kLayoutBoat, "Boat", "BOAT");
 
 			// IN MAP (the owner, 2026-11-03: "if there's not already a map context ... we need to add"). The engine's Map
 			// context has always been there and [Bound] lines already reach it; what was missing is rows for it.
@@ -2093,6 +2110,141 @@ namespace unbinder
 			return !mount->HasKeywordString("ActorTypeDragon");
 		}
 
+		// ---- The boat context's detection (Unbinder.h, THE BOAT CONTEXT) ----
+		std::mutex g_boatCfgLock;
+		std::vector<std::string> g_boatPluginNames{ "OarsAndSails.esl", "Longship.esp" };  // [BoatDetection] sPlugins
+		std::vector<std::string> g_boatKeywordNames;                                      // [BoatDetection] sKeywords
+		std::atomic<bool> g_boatSeatedRide{ true };                                       // [BoatDetection] bSeatedRide
+		std::vector<const RE::TESFile*> g_boatFiles;      // the listed plugins that are loaded; under g_boatCfgLock
+		std::vector<RE::BGSKeyword*> g_boatKeywords;      // the listed keywords that exist; under g_boatCfgLock
+		std::atomic<bool> g_boatArmed{ false };           // a listed plugin is loaded (or a listed keyword exists)
+		std::atomic<bool> g_boatDataLoaded{ false };
+		std::atomic<int> g_boatHow{ 0 };                  // 0 none, 1 furniture, 2 mount, 3 seated ride: the last reading, for op=boat
+		std::atomic<std::uint32_t> g_boatFormID{ 0 };     // the furniture or mount it read, 0 for a seated ride
+
+		const char* BoatHowName(int a_how)
+		{
+			switch (a_how)
+			{
+			case 1: return "furniture";
+			case 2: return "mount";
+			case 3: return "seated ride";
+			default: return "none";
+			}
+		}
+
+		void ResolveBoatDetection(const char* a_when)
+		{
+			auto* dh = RE::TESDataHandler::GetSingleton();
+			if (!dh) { return; }
+			std::scoped_lock l(g_boatCfgLock);
+			g_boatFiles.clear();
+			g_boatKeywords.clear();
+			std::string found, missing;
+			for (const auto& name : g_boatPluginNames)
+			{
+				const RE::TESFile* file = dh->LookupModByName(name);
+				if (file && file->compileIndex != 0xFF)
+				{
+					g_boatFiles.push_back(file);
+					found += std::format("{}{}", found.empty() ? "" : ", ", name);
+				}
+				else { missing += std::format("{}{}", missing.empty() ? "" : ", ", name); }
+			}
+			for (const auto& name : g_boatKeywordNames)
+			{
+				auto* keyword = RE::TESForm::LookupByEditorID<RE::BGSKeyword>(name);
+				if (keyword)
+				{
+					g_boatKeywords.push_back(keyword);
+					found += std::format("{}keyword {}", found.empty() ? "" : ", ", name);
+				}
+				else { missing += std::format("{}keyword {}", missing.empty() ? "" : ", ", name); }
+			}
+			g_boatArmed.store(!g_boatFiles.empty() || !g_boatKeywords.empty());
+			logger::info("boat context ({}): {}; loaded: {}; not loaded: {}; seated ride {}", a_when, g_boatArmed.load() ? "armed" : "off (no listed boat plugin or keyword is loaded)",
+				found.empty() ? "none" : found, missing.empty() ? "none" : missing, g_boatSeatedRide.load() ? "counts" : "does not count");
+		}
+
+		// A form whose first file is a listed plugin, or that carries a listed keyword. Caller holds g_boatCfgLock.
+		bool IsBoatFormLocked(RE::TESForm* a_form)
+		{
+			if (!a_form) { return false; }
+			if (const auto* file = a_form->GetFile(0))
+			{
+				if (std::find(g_boatFiles.begin(), g_boatFiles.end(), file) != g_boatFiles.end()) { return true; }
+			}
+			if (!g_boatKeywords.empty())
+			{
+				if (const auto* keywords = a_form->As<RE::BGSKeywordForm>())
+				{
+					for (auto* k : g_boatKeywords)
+					{
+						if (keywords->HasKeyword(k)) { return true; }
+					}
+				}
+			}
+			return false;
+		}
+
+		// How far the player is above (+) or below (-) the water of the cell they are in; false where there is no water.
+		bool WaterGap(RE::PlayerCharacter* a_player, float& a_gap)
+		{
+			auto* cell = a_player->GetParentCell();
+			if (!cell) { return false; }
+			float water = 0.0f;
+			const RE::NiPoint3 at = a_player->GetPosition();
+			if (!cell->GetWaterHeight(at, water) || water < -1.0e6f || water > 1.0e6f) { return false; }
+			a_gap = at.z - water;
+			return true;
+		}
+
+		// Oars and Sails' seat (RowRim SitDown / SetControls, read from its source): for the whole ride it switches off the
+		// movement, fighting, jumping, sneaking and activate controls and leaves looking and the menus on (a scene's
+		// DisablePlayerControls takes the menus too), and the seat is on the water. The player's collision, which it also
+		// turns off, is not readable from the reference's flags (1.6.0's first test: HasCollision stayed true while seated).
+		bool SeatedRideSignature(RE::PlayerCharacter* a_player)
+		{
+			using F = RE::UserEvents::USER_EVENT_FLAG;
+			const auto* map = RE::ControlMap::GetSingleton();
+			if (!map || map->IsMovementControlsEnabled() || map->IsActivateControlsEnabled() || map->AreControlsEnabled(F::kJumping) ||
+				map->AreControlsEnabled(F::kSneaking) || !map->IsMenuControlsEnabled() || !map->IsLookingControlsEnabled())
+			{
+				return false;
+			}
+			float gap = 0.0f;
+			return WaterGap(a_player, gap) && gap > -60.0f && gap < 200.0f;  // seated in a hull: a little above the water
+		}
+
+		// Is the player rowing, steering or seated in a boat? Cheap: a flag check and at most two form lookups a frame.
+		int BoatReading(RE::PlayerCharacter* a_player, std::uint32_t& a_formID)
+		{
+			a_formID = 0;
+			if (!g_boatArmed.load(std::memory_order_relaxed)) { return 0; }
+			std::scoped_lock l(g_boatCfgLock);
+			if (const auto furniture = a_player->GetOccupiedFurniture().get())
+			{
+				if (IsBoatFormLocked(furniture->GetBaseObject()) || IsBoatFormLocked(furniture.get()))
+				{
+					a_formID = furniture->GetFormID();
+					return 1;
+				}
+				return 0;  // a chair on a ship's deck is a chair
+			}
+			if (a_player->IsOnMount())
+			{
+				RE::NiPointer<RE::Actor> mount;
+				if (a_player->GetMount(mount) && mount && (IsBoatFormLocked(mount->GetActorBase()) || IsBoatFormLocked(mount.get())))
+				{
+					a_formID = mount->GetFormID();
+					return 2;
+				}
+				return 0;
+			}
+			if (g_boatSeatedRide.load(std::memory_order_relaxed) && !g_boatFiles.empty() && SeatedRideSignature(a_player)) { return 3; }
+			return 0;
+		}
+
 		// Every frame the HUD advances. Reads the player's real swimming and mounted state, the ones the game's own conditions
 		// read, and only those some line needs. Runs on the UI job, so the control map itself is only changed from the task it
 		// queues (as the journal's close does).
@@ -2100,19 +2252,30 @@ namespace unbinder
 		{
 			const bool haveSwim = g_haveSwimLines.load(std::memory_order_relaxed);
 			const bool haveHorse = g_haveHorseLines.load(std::memory_order_relaxed);
-			if (!haveSwim && !haveHorse && g_layoutOn.load(std::memory_order_relaxed) == kLayoutLand) { return; }
+			const bool haveBoat = g_haveBoatLines.load(std::memory_order_relaxed);
+			if (!haveSwim && !haveHorse && !haveBoat && g_layoutOn.load(std::memory_order_relaxed) == kLayoutLand) { return; }
 			auto* player = RE::PlayerCharacter::GetSingleton();
 			const auto* state = player ? player->AsActorState() : nullptr;
 			if (!state) { return; }
 			static int s_last = kLayoutLand;
 			static std::int64_t s_changedAt = 0;
-			const int current = haveHorse && OnHorseback(player) ? kLayoutHorse : (haveSwim && state->IsSwimming() ? kLayoutWater : kLayoutLand);
+			std::uint32_t boatForm = 0;
+			const int boatHow = haveBoat ? BoatReading(player, boatForm) : 0;
+			const int current = boatHow != 0 ? kLayoutBoat :
+			                    (haveHorse && OnHorseback(player) ? kLayoutHorse : (haveSwim && state->IsSwimming() ? kLayoutWater : kLayoutLand));
 			const auto now = NowMs();
 			if (current != s_last)
 			{
+				if (current == kLayoutBoat || s_last == kLayoutBoat)
+				{
+					logger::info("boat context: the player is {} ({}{})", current == kLayoutBoat ? "in a boat" : "out of the boat", BoatHowName(current == kLayoutBoat ? boatHow : g_boatHow.load()),
+						boatForm ? std::format(", {:08X}", boatForm) : std::string());
+				}
 				s_last = current;
 				s_changedAt = now;
 			}
+			g_boatHow.store(boatHow, std::memory_order_relaxed);
+			g_boatFormID.store(boatForm, std::memory_order_relaxed);
 			if (now - s_changedAt >= kSwimSettleMs) { g_stateStable.store(s_last); }
 			if (WantedLayout() == g_layoutOn.load() || g_swimTaskQueued.exchange(true)) { return; }
 			if (auto* tasks = SKSE::GetTaskInterface()) { tasks->AddTask([]() { SwimSync(); }); }
@@ -2150,7 +2313,7 @@ namespace unbinder
 
 	void NoteButton(int a_device, std::uint32_t a_code, bool a_up)
 	{
-		if (!g_haveSwimLines.load(std::memory_order_relaxed) && !g_haveHorseLines.load(std::memory_order_relaxed)) { return; }
+		if (!g_haveSwimLines.load(std::memory_order_relaxed) && !g_haveHorseLines.load(std::memory_order_relaxed) && !g_haveBoatLines.load(std::memory_order_relaxed)) { return; }
 		const auto now = NowMs();
 		std::scoped_lock h(g_heldLock);
 		const auto it = std::find_if(g_held.begin(), g_held.end(), [&](const HeldButton& a_h) { return a_h.device == a_device && a_h.code == a_code; });
@@ -2188,9 +2351,44 @@ namespace unbinder
 		RefreshHaveLinesLocked();
 	}
 
+	void SetBoatDetection(std::vector<std::string> a_plugins, std::vector<std::string> a_keywords, bool a_seatedRide)
+	{
+		{
+			std::scoped_lock l(g_boatCfgLock);
+			g_boatPluginNames = std::move(a_plugins);
+			g_boatKeywordNames = std::move(a_keywords);
+		}
+		g_boatSeatedRide.store(a_seatedRide);
+		if (g_boatDataLoaded.load()) { ResolveBoatDetection("INI read again"); }
+	}
+
+	void BoatAtDataLoaded()
+	{
+		g_boatDataLoaded.store(true);
+		ResolveBoatDetection("data loaded");
+	}
+
+	std::vector<Bind> GetBoatBinds()
+	{
+		std::scoped_lock l(g_lock);
+		return g_boat;
+	}
+
+	void SetBoatBinds(std::vector<Bind> a_binds)
+	{
+		std::scoped_lock l(g_lock);
+		g_boat = std::move(a_binds);
+		RefreshHaveLinesLocked();
+	}
+
 	const char* LayoutWhere(int a_layout)
 	{
-		return a_layout == kLayoutHorse ? "on horseback" : "in water";
+		return a_layout == kLayoutBoat ? "in a boat" : (a_layout == kLayoutHorse ? "on horseback" : "in water");
+	}
+
+	const char* LayoutSectionName(int a_layout)
+	{
+		return LayoutSection(a_layout);
 	}
 
 	std::uint16_t LayoutShownKey(int a_layout, std::string_view a_event, int a_device)
@@ -2262,8 +2460,37 @@ namespace unbinder
 			b.key = a_key;
 			lines.push_back(std::move(b));
 		}
-		(a_layout == kLayoutHorse ? g_haveHorseLines : g_haveSwimLines).store(true);
+		(a_layout == kLayoutBoat ? g_haveBoatLines : (a_layout == kLayoutHorse ? g_haveHorseLines : g_haveSwimLines)).store(true);
 		return true;
+	}
+
+	namespace
+	{
+		// The boat block of op=swim/horse/boat: what each signal reads now, so a wrong answer shows which one. Caller holds g_lock.
+		std::string BoatStateJsonLocked(RE::PlayerCharacter* a_player, int a_stable, int a_on, const std::string& a_lines)
+		{
+			std::uint32_t form = 0;
+			const int how = a_player ? BoatReading(a_player, form) : 0;
+			const auto* map = RE::ControlMap::GetSingleton();
+			const auto furniture = a_player ? a_player->GetOccupiedFurniture().get() : nullptr;
+			float gap = -99999.0f;
+			if (a_player) { WaterGap(a_player, gap); }
+			std::string plugins;
+			{
+				std::scoped_lock l(g_boatCfgLock);
+				for (const auto* f : g_boatFiles) { plugins += std::format(R"({}"{}")", plugins.empty() ? "" : ",", EscapeJson(f->GetFilename())); }
+			}
+			return std::format(R"(,"boat":{{"armed":{},"loadedPlugins":[{}],"seatedRideCounts":{},"inBoat":{},"how":"{}","formID":"{:08X}","settled":{},"boatLayoutOn":{},)"
+			                   R"("signals":{{"movementControls":{},"activateControls":{},"jumpingControls":{},"sneakingControls":{},"menuControls":{},"lookingControls":{},"waterGap":{:.0f},"seatedRideSignature":{},"collision":{},"furniture":"{:08X}","onMount":{}}},"lines":[{}]}})",
+				g_boatArmed.load() ? "true" : "false", plugins, g_boatSeatedRide.load() ? "true" : "false", how != 0 ? "true" : "false", BoatHowName(how), form,
+				a_stable == kLayoutBoat ? "true" : "false", a_on == kLayoutBoat ? "true" : "false",
+				map && map->IsMovementControlsEnabled() ? "true" : "false", map && map->IsActivateControlsEnabled() ? "true" : "false",
+				map && map->AreControlsEnabled(RE::UserEvents::USER_EVENT_FLAG::kJumping) ? "true" : "false",
+				map && map->AreControlsEnabled(RE::UserEvents::USER_EVENT_FLAG::kSneaking) ? "true" : "false",
+				map && map->IsMenuControlsEnabled() ? "true" : "false", map && map->IsLookingControlsEnabled() ? "true" : "false",
+				gap, a_player && SeatedRideSignature(a_player) ? "true" : "false",
+				a_player && a_player->HasCollision() ? "true" : "false", furniture ? furniture->GetFormID() : 0u, a_player && a_player->IsOnMount() ? "true" : "false", a_lines);
+		}
 	}
 
 	std::string SwimStateJson()
@@ -2284,7 +2511,8 @@ namespace unbinder
 		return std::format(R"("swimming":{{"isSwimming":{},"settled":{},"waterLayoutOn":{},"journalOpen":{},"swaps":{},"framesWaitedForHeldKey":{},"lines":[{}]}},"horseback":{{"onMount":{},"settled":{},"horseLayoutOn":{},"petting":{},"lines":[{}]}})",
 						   state && state->IsSwimming() ? "true" : "false", stable == kLayoutWater ? "true" : "false", on == kLayoutWater ? "true" : "false",
 						   g_swimJournal.load() ? "true" : "false", g_swimFlips.load(), g_swimWaited.load(), linesJson(g_swim),
-						   player && player->IsOnMount() ? "true" : "false", stable == kLayoutHorse ? "true" : "false", on == kLayoutHorse ? "true" : "false", functions::ManualPettingOn() ? "true" : "false", linesJson(g_horse));
+						   player && player->IsOnMount() ? "true" : "false", stable == kLayoutHorse ? "true" : "false", on == kLayoutHorse ? "true" : "false", functions::ManualPettingOn() ? "true" : "false", linesJson(g_horse)) +
+		       BoatStateJsonLocked(player, stable, on, linesJson(g_boat));
 	}
 
 	void RedecideRequests()
@@ -2493,9 +2721,9 @@ namespace unbinder
 		{
 			if (r.block == ContextName(kGameplayContext)) { land.push_back(r); }
 		}
-		for (const int layout : { kLayoutWater, kLayoutHorse })
+		for (const int layout : { kLayoutWater, kLayoutHorse, kLayoutBoat })
 		{
-			const char* block = layout == kLayoutWater ? "Swimming" : "Horseback";
+			const char* block = LayoutSection(layout);
 			std::vector<Bind> lines;
 			std::uint32_t designatedKey = 0;
 			{

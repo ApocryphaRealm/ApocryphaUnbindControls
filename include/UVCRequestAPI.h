@@ -16,9 +16,9 @@
 //     button->QUserEvent() == "MyMod Dash"
 // So you do not need to know which key the player gave it. Each device is its own request.
 //
-// CONTEXT. A name from UVC's own list: "Gameplay", "Swimming", "Horseback", or an engine context ("Menu Mode", "Item Menus",
-// "Inventory", "Favorites", "Map", "Stats", "Cursor", "Book", "Journal", "TFC", "Lockpicking", "Favor"...). Swimming and
-// Horseback hold only while the player is swimming or mounted.
+// CONTEXT. A name from UVC's own list: "Gameplay", "Swimming", "Horseback", "Boat" (1.6.0), or an engine context ("Menu Mode", "Item Menus",
+// "Inventory", "Favorites", "Map", "Stats", "Cursor", "Book", "Journal", "TFC", "Lockpicking", "Favor"...). Swimming,
+// Horseback and Boat hold only while the player is swimming, mounted, or rowing / steering / seated in a boat.
 //
 // KEYS. The codes controlmap.txt uses: a DirectInput scan code on the keyboard (0x25 = K), a mouse button number, an XInput
 // mask on the gamepad (0x1000 = A, 0x0009 = LT, 0x000a = RT). kNoKey asks for a row with no key yet. No modifier combinations
@@ -99,7 +99,7 @@ namespace UVCRequestAPI
 	// EVERY BINDING, FOR A MOD THAT SHOWS THEM (UVC's own controller graphic uses it too). One call per row UVC knows on that device, on the calling
 	// thread, before ForEachBinding returns. Main thread only; from another thread there are no calls. As set, whatever the player is
 	// doing now. Rows with no key are left out. The strings last only for the call.
-	// block: an engine context ("Gameplay", "Map"...), or "Swimming" or "Horseback" (each whole: every Gameplay control as it is there),
+	// block: an engine context ("Gameplay", "Map"...), or "Swimming", "Horseback" or "Boat" (each whole: every Gameplay control as it is there),
 	// "Modifier" (the designated modifier), or a Controls
 	// page block for another mod's function ("Mod" when it has none). event: the user event; for a function, its row's name. label: the
 	// row's name when it differs from the event (a requested row, a function), else empty. key and modifier: the codes controlmap.txt

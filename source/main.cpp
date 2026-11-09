@@ -40,6 +40,7 @@ namespace
 			tweenwait::Install();  // Tween Menu Overhaul 1.2's Wait option with keyboard Wait unbound (TweenWait.h)
 			unbinder::OwnRemapsAtDataLoad();  // before the apply: a leftover ControlMap_Custom.txt moves into the INI first
 			functions::Install();  // before the apply: the HORSEBACK rows ask whether HorsePower's petting is on
+			unbinder::BoatAtDataLoaded();  // 1.6.0: which of [BoatDetection]'s plugins are loaded - the boat context's one info line
 			unbinder::ApplyAll("data loaded");
 			// The extra Controls-page rows are delivered to the mods that own those functions, so a target file
 			// edited by hand (or by that mod's own menu) is put back to what the Controls page shows.

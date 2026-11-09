@@ -807,7 +807,7 @@ namespace controlslist
 			return {};
 		}
 
-		// a_layout: the SWIMMING or HORSEBACK block, which go straight after GAMEPLAY, or kLayoutLand for every other menu block, after the extra rows.
+		// a_layout: the SWIMMING, HORSEBACK or BOAT block, which go straight after GAMEPLAY, or kLayoutLand for every other menu block, after the extra rows.
 		bool AddDelinkedRows(RE::GFxMovieView* a_movie, RE::GFxValue& a_entries, bool a_gamepad, int a_layout)
 		{
 			auto list = unbinder::GetDelinked();
@@ -816,7 +816,8 @@ namespace controlslist
 			std::erase_if(list, [&](const unbinder::DelinkedAction& a_d) { return a_d.hidden || a_d.layout != a_layout; });
 			// [Functions] rows that belong to a block of their own (Map Selector: the player sets it with the other map
 			// buttons). A function row is not a menu action, so it follows that block's rows.
-			const auto functionList = a_layout == unbinder::kLayoutWater ? std::vector<functions::Function>{} : functions::GetFunctions();
+			// SWIMMING and BOAT have no function rows of other mods.
+			const auto functionList = (a_layout == unbinder::kLayoutWater || a_layout == unbinder::kLayoutBoat) ? std::vector<functions::Function>{} : functions::GetFunctions();
 			if (list.empty() && functionList.empty()) { return false; }
 			std::stable_sort(list.begin(), list.end(), [](const unbinder::DelinkedAction& a_l, const unbinder::DelinkedAction& a_r) { return a_l.sheetContext < a_r.sheetContext; });
 			std::vector<std::string> present;
@@ -1337,6 +1338,7 @@ namespace controlslist
 				changed = AddFunctionRows(a_movie, entries, gamepad) || changed;
 				changed = AddDelinkedRows(a_movie, entries, gamepad, unbinder::kLayoutWater) || changed;
 				changed = AddDelinkedRows(a_movie, entries, gamepad, unbinder::kLayoutHorse) || changed;
+				changed = AddDelinkedRows(a_movie, entries, gamepad, unbinder::kLayoutBoat) || changed;
 				changed = AddDelinkedRows(a_movie, entries, gamepad, unbinder::kLayoutLand) || changed;
 				changed = AddGameplayTitle(a_movie, entries) || changed;
 			}

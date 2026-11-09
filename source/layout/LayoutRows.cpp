@@ -210,6 +210,7 @@ namespace rows
 			ContextDef{ "Gameplay", "UVCL_Gameplay", "Gameplay" },
 			ContextDef{ "Swimming", "UVCL_Swimming", "Swimming" },
 			ContextDef{ "Horseback", "UVCL_Horseback", "On Horseback" },
+			ContextDef{ "Boat", "UVCL_Boat", "In a Boat" },
 			ContextDef{ "Map", "UVCL_MapContext", "Map" },
 			ContextDef{ "Menu Mode", "UVCL_Menus", "Menus" },
 			ContextDef{ "Item Menus", "UVCL_ItemMenus", "Item Menus" },
@@ -224,17 +225,24 @@ namespace rows
 			ContextDef{ "Favor", "UVCL_Favor", "Favors" },
 		};
 
+		int ContextIndexOf(std::string_view a_id)
+		{
+			for (std::size_t i = 0; i < kContexts.size(); ++i)
+			{
+				if (a_id == kContexts[i].id) { return static_cast<int>(i); }
+			}
+			return -1;
+		}
+
 		int ContextOf(const std::string& a_block)
 		{
 			if (a_block == "Modifier" || a_block == "Mod") { return 0; }
-			if (a_block == "HORSEBACK") { return 2; }
-			if (a_block == "IN MAP") { return 3; }
-			if (a_block == "ITEMS") { return 5; }  // Back Pocket's row, in UVC's ITEMS block
-			for (std::size_t i = 0; i < kContexts.size(); ++i)
-			{
-				if (a_block == kContexts[i].id) { return static_cast<int>(i); }
-			}
-			return -1;
+			// UVC's page blocks, by the context they are in (by name: 1.6.0 put Boat in the list, which moved the later indexes)
+			if (a_block == "HORSEBACK") { return ContextIndexOf("Horseback"); }
+			if (a_block == "BOAT") { return ContextIndexOf("Boat"); }
+			if (a_block == "IN MAP") { return ContextIndexOf("Map"); }
+			if (a_block == "ITEMS") { return ContextIndexOf("Item Menus"); }  // Back Pocket's row, in UVC's ITEMS block
+			return ContextIndexOf(a_block);
 		}
 
 		struct Reader

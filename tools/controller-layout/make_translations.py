@@ -15,6 +15,7 @@ T = {
 "UVCL_Gameplay": ["Gameplay", "游戏", "Hra", "Jeu", "Spiel", "Gioco", "ゲームプレイ", "게임플레이", "Rozgrywka", "Игра", "Juego"],
 "UVCL_Swimming": ["Swimming", "游泳", "Plavání", "Nage", "Schwimmen", "Nuoto", "水泳", "수영", "Pływanie", "Плавание", "Nadar"],
 "UVCL_Horseback": ["On Horseback", "骑马时", "Na koni", "À cheval", "Zu Pferd", "A cavallo", "騎乗中", "말 위에서", "Na koniu", "Верхом", "A caballo"],
+"UVCL_Boat": ["In a Boat", "乘船时", "Na lodi", "En bateau", "Im Boot", "In barca", "乗船中", "배 위에서", "W łodzi", "В лодке", "En barco"],
 "UVCL_MapContext": ["Map", "地图", "Mapa", "Carte", "Karte", "Mappa", "マップ", "지도", "Mapa", "Карта", "Mapa"],
 "UVCL_Menus": ["Menus", "菜单", "Nabídky", "Menus", "Menüs", "Menu", "メニュー", "메뉴", "Menu", "Меню", "Menús"],
 "UVCL_ItemMenus": ["Item Menus", "物品菜单", "Nabídky předmětů", "Menus d'objets", "Gegenstandsmenüs", "Menu oggetti", "アイテムメニュー", "아이템 메뉴", "Menu przedmiotów", "Меню предметов", "Menús de objetos"],

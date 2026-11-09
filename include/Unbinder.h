@@ -170,7 +170,7 @@ namespace unbinder
 		bool fixed = false;          // the Favourite button: never changed
 		int sheetContext = 0;        // the context whose column the row is listed in (Charge Item sits with ITEMS)
 		bool hidden = false;         // separate mapping kept, but no row on the Controls page
-		int layout = 0;              // a SWIMMING or HORSEBACK row (kLayoutWater, kLayoutHorse): event is the Gameplay control, its key lives in that block's list
+		int layout = 0;              // a SWIMMING, HORSEBACK or BOAT row (kLayoutWater, kLayoutHorse, kLayoutBoat): event is the Gameplay control, its key lives in that block's list
 		bool modRequest = false;     // a row another mod asked for through the request API; its key lives in the request list
 	};
 	std::vector<DelinkedAction> GetDelinked();
@@ -193,21 +193,43 @@ namespace unbinder
 	// is): a [Horseback] line ("Horseback|Jump|gamepad|LB") gives a Gameplay control another key while mounted. Both are
 	// layouts of the one Gameplay context, one at a time, so they share the saved land layout. Mounted wins over swimming:
 	// a rider in water is on the horse's controls. With no lines for a layout nothing is read for it, and nothing changes.
+	//
+	// THE BOAT CONTEXT (1.6.0; the owner, 2026-11-09: "recognize when you're using a boat versus swimming as a distinction so
+	// that you use separate controls"). A third layout of the Gameplay context, for the state "the player is rowing, steering
+	// or seated in a boat". Walking about on a moving deck is NOT the Boat context: on foot is on foot. A [Boat] line
+	// ("Boat|Wait|keyboard|K") gives a control another key while in a boat; with no lines every control keeps its on-foot key.
+	// No boat mod is required. The player counts as in a boat when one of [BoatDetection]'s plugins is loaded and:
+	//  - the player sits in furniture whose base comes from one of those plugins or carries one of sKeywords (a helm, a
+	//    rowing bench: our own Longship once it has one), or
+	//  - the player's mount comes from one of those plugins or carries one of sKeywords (boats built as a ridden creature), or
+	//  - bSeatedRide: the player is held in a seat with no furniture, the way Oars and Sails does it (read from its GPL
+	//    source, RowRim SitDown / SetControls / StandUp): for the whole ride it switches off the movement, fighting, jumping,
+	//    sneaking and activate controls (ControlMap::ToggleControls) and leaves looking and the menus on, and the seat is on
+	//    the water; all of it goes back when the player stands up.
+	// Boat wins over horseback (a boat built as a mount is a boat) and over swimming.
 	constexpr int kLayoutLand = 0;
 	constexpr int kLayoutWater = 1;
 	constexpr int kLayoutHorse = 2;
+	constexpr int kLayoutBoat = 3;
 	std::vector<Bind> GetSwimBinds();
 	void SetSwimBinds(std::vector<Bind> a_binds);    // from the INI; does not apply. key 0xFF = no key in water
 	std::vector<Bind> GetHorseBinds();
 	void SetHorseBinds(std::vector<Bind> a_binds);   // from the INI; does not apply. key 0xFF = no key while mounted
+	std::vector<Bind> GetBoatBinds();
+	void SetBoatBinds(std::vector<Bind> a_binds);    // from the INI; does not apply. key 0xFF = no key in a boat
+	// [BoatDetection] (from the INI): the plugins and keywords that mark a boat, and whether a seat with no furniture counts.
+	// Resolved against the load order at kDataLoaded (BoatAtDataLoaded), or at once when the INI is read again later.
+	void SetBoatDetection(std::vector<std::string> a_plugins, std::vector<std::string> a_keywords, bool a_seatedRide);
+	void BoatAtDataLoaded();
 	std::uint16_t LayoutShownKey(int a_layout, std::string_view a_event, int a_device);  // the key a control has in that layout; 0xFF for none
-	const char* LayoutWhere(int a_layout);           // "in water" or "on horseback", for the remap's message and the log
-	// A SWIMMING or HORSEBACK row's remap (main thread; the caller saves): false with a_why when the key is refused. Its own
+	const char* LayoutWhere(int a_layout);           // "in water", "on horseback" or "in a boat", for the remap's message and the log
+	const char* LayoutSectionName(int a_layout);     // "Swimming", "Horseback" or "Boat": the INI section and the request API's context name
+	// A SWIMMING, HORSEBACK or BOAT row's remap (main thread; the caller saves): false with a_why when the key is refused. Its own
 	// key again means no key in that layout, as on every other row.
 	bool SetLayoutKey(int a_layout, std::string_view a_event, int a_device, std::uint16_t a_key, std::string& a_why);
 	void InstallSwimWatch();                         // HUDMenu::AdvanceMovie wrapped; call once at plugin load
 	void NoteButton(int a_device, std::uint32_t a_code, bool a_up);  // from the input sink: what is held now
-	std::string SwimStateJson();                     // DevBench op=swim and op=horse
+	std::string SwimStateJson();                     // DevBench op=swim, op=horse and op=boat
 
 	// REQUESTS FROM OTHER MODS (1.3.0; the owner, 2026-11-03: "accepting requests that other mods want to make to the
 	// controlmap.txt"). include/UVCRequestAPI.h is what they call. A request names a plugin, a user event or an action of its
