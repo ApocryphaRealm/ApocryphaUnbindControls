@@ -31,6 +31,8 @@ T = {
 "UVCL_Cross": ["Cross", "叉", "Křížek", "Croix", "Kreuz", "Croce", "バツ", "엑스", "Krzyżyk", "Крест", "Equis"],
 "UVCL_Circle": ["Circle", "圆", "Kolečko", "Rond", "Kreis", "Cerchio", "マル", "동그라미", "Kółko", "Круг", "Círculo"],
 "UVCL_Square": ["Square", "方块", "Čtverec", "Carré", "Quadrat", "Quadrato", "シカク", "네모", "Kwadrat", "Квадрат", "Cuadrado"],
+"UVCL_ShowKeyboard": ["Show keyboard", "显示键盘", "Zobrazit klávesnici", "Afficher le clavier", "Tastatur zeigen", "Mostra tastiera", "キーボードを表示", "키보드 보기", "Pokaż klawiaturę", "Показать клавиатуру", "Mostrar teclado"],
+"UVCL_ShowController": ["Show controller", "显示手柄", "Zobrazit ovladač", "Afficher la manette", "Controller zeigen", "Mostra controller", "コントローラーを表示", "컨트롤러 보기", "Pokaż kontroler", "Показать геймпад", "Mostrar mando"],
 "UVCL_Triangle": ["Triangle", "三角", "Trojúhelník", "Triangle", "Dreieck", "Triangolo", "サンカク", "세모", "Trójkąt", "Треугольник", "Triángulo"],
 "UVCL_DUp": ["D-pad up", "方向键上", "D-pad nahoru", "Croix haut", "Steuerkreuz oben", "Croce su", "方向キー上", "방향 패드 위", "D-pad w górę", "Крестовина вверх", "Cruceta arriba"],
 "UVCL_DDown": ["D-pad down", "方向键下", "D-pad dolů", "Croix bas", "Steuerkreuz unten", "Croce giù", "方向キー下", "방향 패드 아래", "D-pad w dół", "Крестовина вниз", "Cruceta abajo"],

@@ -92,9 +92,15 @@ control map gives it out of the box - so changing a gameplay control never chang
 
 THE CONTROLS PAGE
 Journal > System > Controls shows one block at a time: GAMEPLAY (with the rows this mod adds), SWIMMING, HORSEBACK, BOAT, then
-one block per menu - MENUS, ITEMS and IN MAP. LB and RB change the block and go round, as do PgUp and PgDn or
+one block per menu - MENUS, ITEMS and IN MAP. LB (L1) changes the block and goes round, as do PgUp and PgDn or
 a click on the title at the top (its left end goes back). Up and down (the D-pad, the arrow keys or the mouse wheel) walk the
-block's rows; left and right move along a line. Which block of how many is at the top right.
+block's rows; left and right move along a line. Which block of how many is at the top right. RB (R1) opens the controller
+graphic (see THE CONTROLLER GRAPHIC).
+The page shows the controller's bindings or the keyboard and mouse's, and it stays on the one it opened on until you switch:
+Square (X on an Xbox pad) or a click on "Show keyboard" / "Show controller" at the top right. A key pressed while the
+controller's bindings are shown never flips the page to the keyboard's, and a button never flips it back, so you can bind a
+keyboard key with the controller in your hands. This is only on this page: everywhere else the game (or Auto Input Switch)
+switches between controller and keyboard as it always does, and it does again the moment you leave the page.
 Select a row and press Accept (or click it), then press the new key. A key another gameplay control uses
 is swapped with it, the way the game does it; a key the game reserves is refused. Hold the Modifier (Left
 Trigger on a controller) and press a button to bind a combination, shown as two key pictures.
@@ -120,7 +126,7 @@ written as its name. It changes only the pictures: your controls, gamepad.txt an
 never touched. Norden UI's journal draws its own button art and keeps it whatever this says.
 
 THE CONTROLLER GRAPHIC
-On the Controls page press X (Square on a PlayStation pad) and a rendered controller is shown, with a
+On the Controls page press RB (R1 on a PlayStation pad), or X on the keyboard, and a rendered controller is shown, with a
 line from each button to a box that says what the button does now, read from this mod's bindings each
 time it opens - what you set on the page is what you see.
 - One context at a time: Gameplay, Swimming, On Horseback, In a Boat, Map, then the menus. LB and RB (or D-pad
@@ -132,7 +138,7 @@ time it opens - what you set on the page is what you see.
   Steam's files are only read, and only to draw this.
 - Trackpads have boxes of their own on the Steam Controller and the PlayStation touchpad: what Steam
   Input has them doing. The game binds no touchpad, so with nothing to read the box says so.
-- B, Circle, X again or Esc closes it. While it is up nothing reaches the page beneath.
+- B, Circle, Esc or X on the keyboard closes it. While it is up nothing reaches the page beneath.
 - Mods' keys that this mod has a row for are listed. Keys a mod keeps to itself are not.
 
 ROWS FOR OTHER MODS' KEYS
@@ -231,6 +237,13 @@ Version 1.6.0
 Added a BOAT block on the Controls page and "In a Boat" in the controller graphic: buttons of their own while
 you row, steer or sit in a boat (see IN A BOAT). With no [Boat] lines nothing changes.
 Added Sprint or Sneak for Controller compatibility: its crouch button is shown on Sprint's button.
+Changed the Controls page to stay on the controller's or the keyboard's bindings until you switch with Square (X on Xbox)
+or the switch at the top right: a keyboard key no longer flips the page while you are on the controller's bindings. Only on
+that page; Auto Input Switch works as normal everywhere else.
+Changed the controller graphic to open on RB (R1); Square is the page's switch now. LB still changes the block.
+Added Auto-Move on the controller: a row on the controller page, on the left stick click out of the box once Sneak is off it.
+Added [PadToKey] in the INI: a controller button (optionally with a held modifier) that presses a keyboard key, for mods
+whose hotkeys are keyboard keys only.
 
 Version 1.5.0
 Added Gamepad++ compatibility (see GAMEPAD++): its buttons are listed on the Controls page and in the

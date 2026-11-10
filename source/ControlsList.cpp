@@ -2,6 +2,8 @@
 
 #include "ControlsList.h"
 
+#include "DevicePin.h"
+
 #include "Functions.h"
 #include "GamepadPP.h"
 #include "Settings.h"
@@ -112,6 +114,7 @@ namespace controlslist
 			std::vector<std::string> drawn;  // what each cell last showed, so SetEntry runs only on a change
 			std::vector<std::string> blocks;  // the title of every block with rows, in page order
 			int blockIndex = 0;               // which of them is on the page
+			int positionCol = -1;             // the column of the top-right cell (the section switch), -1 with one column
 		};
 		SheetState g_sheet;  // main thread (the journal's frame and its input both run there)
 		std::array<std::vector<std::uint16_t>, 3> g_before;  // main thread: the control's keys when the remap began
@@ -1843,11 +1846,19 @@ namespace controlslist
 					logger::trace("controls sheet: input value \"{}\" nav \"{}\" code {} (column {}, row {})", value, nav, code, g_sheet.col, g_sheet.row);
 				}
 				if (value != "keyDown" && value != "keyHold") { return false; }
-				// The block: LB and RB, or PgUp and PgDn (33 and 34, the keyboard's codes in these movies). Not on a key held down.
+				// The section: Square on the controller (X on Xbox; the movies' gamepad_X) shows the other device's bindings (the owner,
+				// 2026-11-10). Never on a key: a key pressed on the controller section is the player's, and the page stays put.
+				if (nav == "gamepad_X")
+				{
+					if (value == "keyDown" && devicepin::Toggle("Square on the Controls page")) { g_sheet.drawn.clear(); }
+					return true;
+				}
+				// The block: LB, or PgUp and PgDn (33 and 34, the keyboard's codes in these movies), wrapping round. RB opens the
+				// controller graphic (Layout.cpp), which sees the press first. Not on a key held down.
 				{
 					double code = -1.0;
 					NumberMember(a_details, "code", code);
-					const int asked = nav == "gamepad_L1" || nav == "pageUp" || static_cast<int>(code) == 33 ? -1 : (nav == "gamepad_R1" || nav == "pageDown" || static_cast<int>(code) == 34 ? 1 : 0);
+					const int asked = nav == "gamepad_L1" || nav == "pageUp" || static_cast<int>(code) == 33 ? -1 : (nav == "pageDown" || static_cast<int>(code) == 34 ? 1 : 0);
 					if (asked != 0)
 					{
 						if (value == "keyDown")
@@ -1906,6 +1917,21 @@ namespace controlslist
 				if (!NumberMember(*a_params.thisPtr, "_uvcCol", col) || !NumberMember(*a_params.thisPtr, "_uvcSlot", slot)) { return; }
 				const int column = static_cast<int>(col);
 				const int row = LineAtSlot(static_cast<int>(slot));
+				// The top right of the page is the section switch, as Square is: a click shows the other device's bindings.
+				if (static_cast<int>(slot) == 0 && column == g_sheet.positionCol && column > 0)
+				{
+					if (press)
+					{
+						auto* view = static_cast<RE::GFxMovieView*>(a_params.movie);
+						RE::GFxValue inControls, remapFlag;
+						if (PageInControls(view, inControls) && !(inControls.GetMember("bRemapMode", &remapFlag) && remapFlag.IsBool() && remapFlag.GetBool()) &&
+							devicepin::Toggle("the switch on the Controls page clicked"))
+						{
+							g_sheet.drawn.clear();
+						}
+					}
+					return;
+				}
 				// The top line is the block's title: a click on its left end goes back a block, anywhere else on the line goes on one.
 				if (static_cast<int>(slot) == 0 && (row < 0 || g_sheet.lines[static_cast<std::size_t>(row)].cells.empty()))
 				{
@@ -2697,10 +2723,12 @@ namespace controlslist
 			if (!PageInControls(a_movie, page))
 			{
 				g_sheetOnPage = false;
+				devicepin::OnPage(false);  // the game (or Auto Input Switch) picks the device again
 				HideSheet(list);
 				return;
 			}
 			g_sheetOnPage = true;
+			devicepin::OnPage(true);  // the section shown stays until Square or the switch at the top right
 			InstallSheetInput(a_movie, page);
 			InstallListRedraw(a_movie, list);
 			HideListChrome(list);
@@ -2801,10 +2829,17 @@ namespace controlslist
 			// which block of how many, so it reads as a list that goes on below
 			const std::string topTitle = firstLine.block;
 			const SheetLine& selectedLine = g_sheet.lines[static_cast<std::size_t>(std::clamp(g_sheet.row, 0, static_cast<int>(g_sheet.lines.size()) - 1))];
-			// LB and RB, named as this journal's art draws them, beside which block of how many
+			// At the top right: the section switch (Square, or X on Xbox, or a click here: the other device's bindings), then LB
+			// and which block of how many, the buttons named as this journal's art draws them
 			const bool playStationNames = settings::controls::gamepadFaces == settings::controls::Faces::kPlayStation ||
 			                              (settings::controls::gamepadFaces != settings::controls::Faces::kXbox && settings::controls::gamepadFaces != settings::controls::Faces::kSteam && unbinder::GamepadButtonName(0x0100).starts_with("PS"));
-			const std::string position = std::format("{}  {}/{}", playStationNames ? "L1 R1" : "LB RB", selectedLine.blockIndex, g_sheet.blocks.size());
+			std::string position = std::format("{}  {}/{}", playStationNames ? "L1" : "LB", selectedLine.blockIndex, g_sheet.blocks.size());
+			if (devicepin::Hooked() && devicepin::Pinned())
+			{
+				const std::string other = gamepad ? TR("UVCL_ShowKeyboard", "Show keyboard") : TR("UVCL_ShowController", "Show controller");
+				position = std::format("{}: {}     {}", playStationNames ? TR("UVCL_Square", "Square") : std::string("X"), other, position);
+			}
+			g_sheet.positionCol = cols > 1 ? cols - 1 : -1;
 
 			g_sheet.drawn.resize(static_cast<std::size_t>(kSheetCols * kSheetSlots));
 			for (int c = 0; c < kSheetCols; ++c)
@@ -3076,6 +3111,7 @@ namespace controlslist
 	void OnJournalClose()
 	{
 		g_journalOpen.store(false);
+		devicepin::OnPage(false);
 		g_systemTabPending.store(false);
 		if (g_remapActive.load()) { logger::debug("controls list: the journal closed during a remap of \"{}\"; nothing decided", g_remapEvent); }
 		ResetRemapWatch();

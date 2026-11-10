@@ -12,7 +12,8 @@
 #include "DevBenchTool.h"
 #include "Functions.h"
 #include "GamepadPP.h"
-#include "InputLock.h"
+#include "DevicePin.h"
+#include "PadToKey.h"
 #include "Settings.h"
 #include "TweenWait.h"
 #include "Unbinder.h"
@@ -31,7 +32,8 @@ namespace
 		switch (a_msg->type)
 		{
 		case SKSE::MessagingInterface::kInputLoaded:
-			inputlock::Install();  // 1.7.0: the input dispatch ([PadToKey], the toggles) and, with the lock on, the using-controller answer
+			padtokey::Install();   // [PadToKey]: the input dispatch
+			devicepin::Install();  // the Controls page keeps its section until Square; after Auto Input Switch's own hook (written at its load)
 			break;
 		case SKSE::MessagingInterface::kPostLoad:
 			DevBenchTool::Init(false);
@@ -95,8 +97,8 @@ SKSEPluginLoad(const SKSE::LoadInterface* a_skse)
 				 SKSE::PluginDeclaration::GetSingleton()->GetVersion().string("."));
 
 	layoutsettings::Load();
-	inputlock::Load(settings::GetIniPath());  // [InputLock] and [PadToKey] (1.7.0)
-	SKSE::AllocTrampoline(64);                // the input dispatch call and the two using-controller entries
+	padtokey::Load(settings::GetIniPath());  // [PadToKey]
+	SKSE::AllocTrampoline(64);               // the input dispatch call and the using-controller call
 	controlslist::Install();
 	unbinder::InstallSwimWatch();
 

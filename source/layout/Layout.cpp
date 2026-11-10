@@ -7,8 +7,9 @@
 // - After each journal frame this finds the System page (the same paths as the other two mods). Once UVC has wrapped the page's
 //   handleInput (its member _uvcHandleInput) this wraps it again, so this mod sees input first. While the graphic is up it takes every
 //   input, so nothing reaches the sheet or the journal beneath it.
-// - On the Controls page (SystemPage.INPUT_MAPPING_STATE) with no remap under way, X (the page's own test for that button:
-//   navEquivalent gamepad_X, or code 88 on the keyboard, which the page uses only on the save list) asks for the graphic. The clips are
+// - On the Controls page (SystemPage.INPUT_MAPPING_STATE) with no remap under way, RB / R1 (navEquivalent gamepad_R1), or X on the
+//   keyboard (code 88, which the page uses only on the save list), asks for the graphic. Square (gamepad_X) is the page's section
+//   switch since 1.6.0 (ControlsList.cpp, DevicePin.h) and passes through. The clips are
 //   made on the next frame, not inside the input call.
 // - Curves: nothing here uses curveTo. Dragon's Eye Minimap found that it never renders in that movie while moveTo, lineTo and
 //   beginFill do (source/CompassRing.cpp there), so every round shape is straight segments.
@@ -866,7 +867,8 @@ namespace layout
 			double width = 200.0;
 			if (field.IsDisplayObject()) { (void)Number(field, "textWidth", width); }
 			steamconfig::Refresh();  // Auto's pad, for the Square or X drawn here
-			FaceGlyph(canvas, rows::kX, FacesNow(a_page), { right - width - 24.0, y }, 12.0);
+			const auto faces = FacesNow(a_page);
+			Pill(canvas, { right - width - 30.0, y }, 40.0, 22.0, rows::ShortName(rows::kRB, faces), 13.0);
 			logger::debug("layout: hint built at right {} y {}, text width {}", right, y, width);
 		}
 
@@ -905,7 +907,8 @@ namespace layout
 					{
 						// Every journal's names for Cancel: the game's and SkyUI's movies define gamepad_B and escape, Norden UI's escape-gamepad_B; B and Esc also arrive as tab.
 						const bool cancel = nav == "tab" || nav == "shifttab" || nav == "escape" || nav == "gamepad_B" || nav == "escape-gamepad_B";
-						const bool toggle = nav == "gamepad_X" || static_cast<int>(code) == 88;
+						// RB steps on (below), as it did; keyboard X closes as it opens. Square is the page's section switch: not here.
+						const bool toggle = static_cast<int>(code) == 88 && nav != "gamepad_X";
 						logger::trace("layout: input while open: nav \"{}\" code {}", nav, code);
 						if (cancel || toggle) { g_request = 2; }
 						else if (nav == "gamepad_L1" || nav == "left" || nav == "pageUp" || static_cast<int>(code) == 33) { g_contextStep = -1; }
@@ -918,7 +921,8 @@ namespace layout
 				if (!Number(a_page, "iCurrentState", state) || static_cast<int>(state) != kInputMappingState) { return false; }
 				RE::GFxValue remap;
 				if (a_page.GetMember("bRemapMode", &remap) && remap.IsBool() && remap.GetBool()) { return false; }
-				if (value == "keyDown" && (nav == "gamepad_X" || static_cast<int>(code) == 88))
+				// RB (R1) opens the graphic (the owner's order, 2026-11-10: Square became the page's section switch); X on the keyboard too.
+				if (value == "keyDown" && (nav == "gamepad_R1" || (static_cast<int>(code) == 88 && nav != "gamepad_X")))
 				{
 					logger::debug("layout: asked for by nav \"{}\" code {}", nav, code);
 					g_request = 1;
