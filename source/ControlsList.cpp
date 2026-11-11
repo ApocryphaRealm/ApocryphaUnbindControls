@@ -2302,6 +2302,9 @@ namespace controlslist
 		// The key a cell shows for a row (not while it captures). A game control is read from the live map: the game names a
 		// row's key only when it builds the list, and never learns of a bind this sheet made ("Shout" on LB + Modifier still
 		// read R2).
+		// On the controller section a control with no controller button but a keyboard or mouse key shows that key's tile
+		// (1.6.0, the owner 2026-11-11: a keyboard key bound from the controller side "looks empty, which is deceptive") -
+		// the key works while the controller is in use, so a blank cell would say the control has none.
 		std::string CellKey(const RE::GFxValue& a_entry, bool a_gamepad)
 		{
 			const RowFacts facts = ReadRow(a_entry, a_gamepad);
@@ -2309,7 +2312,7 @@ namespace controlslist
 			if (!IsOwnRow(a_entry))
 			{
 				key.clear();
-				for (const int device : a_gamepad ? std::vector<int>{ 2 } : std::vector<int>{ 0, 1 })
+				for (const int device : a_gamepad ? std::vector<int>{ 2, 0, 1 } : std::vector<int>{ 0, 1 })
 				{
 					std::uint16_t k = kUnmappedID, mod = 0;
 					if (!unbinder::LiveBinding(0, facts.text, device, k, mod) || k == kUnmappedID) { continue; }

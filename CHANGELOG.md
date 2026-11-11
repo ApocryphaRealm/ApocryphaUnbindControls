@@ -22,6 +22,7 @@ Rule 61: this mod's own history, kept beside the code it describes.
 - The game-wide controller-or-keyboard lock ([InputLock]) of the first 1.6.0 build of 2026-11-09 (commit aff6f67, untested): it answered the using-controller check everywhere, so Auto Input Switch stopped working in gameplay and in every menu, which is not what UVC is for (the owner, 2026-11-10: 'The unbind vanilla controls is not supposed to actually prevent auto input switch from working in game'). Its hooks, toggles (Back+Start, F7) and notifications are gone; an [InputLock] section left in a player's INI is not read and does nothing. [PadToKey] keeps the input dispatch hook it shared.
 
 ### Fixed
+- Controls page, controller section: a control with no controller button but a keyboard or mouse key now shows that key's tile instead of an empty cell.
 - The first form of the Controls page section switch (an engine call hook chained after Auto Input Switch's own, at 67320+0xD) crashed SE 1.5.97 at the first loading screen with Auto Input Switch installed (test 3aa4, EXCEPTION_ILLEGAL_INSTRUCTION): the hook kept the address of the 8-byte pointer slot Auto Input Switch's six-byte indirect call reads (what the library's write_call<6> returns) and called that slot as if it were code. The hook is gone (see Added: Auto Input Switch now stands down while the page is open), so the [General] bControlsPagePin switch of the interim build is gone too and the section switch is on for everyone.
 
 ## 1.5.0 - 2026-11-06 - untested
