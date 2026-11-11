@@ -4,28 +4,33 @@
 // which control map you're altering in the control area, so that you can actually press a keyboard key while on the gamepad
 // section without it automatically switching to the keyboard section").
 //
-// The game's Controls page lists the controller's bindings or the keyboard's according to its "is the controller in use"
-// check (BSInputDeviceManager's using-gamepad question, SE 67320 / AE 68622 / 443396 from 1.6.1130). Auto Input Switch
-// answers that check with the device touched last and refreshes every menu when it changes, so a key pressed on the
-// controller section flipped the page to the keyboard section. While UVC's Controls page is open, this answers the check
-// with the section the player chose (it starts on what the game said when the page opened); Square on the controller (X on
-// Xbox) or the switch at the top right of the page changes it. The moment the page closes the check is the game's (or Auto
-// Input Switch's) again and every menu is refreshed. Outside the page nothing here changes anything.
+// The game on its own never switches between controller and keyboard on a key press; Auto Input Switch (Parapets, MIT) does:
+// its input sink on BSInputDeviceManager flips its "using the controller" answer on the device touched last and refreshes
+// every menu, so a key pressed on the controller section flipped the page to the keyboard section (the owner, 2026-11-11: "the
+// UVC issue is with auto input switch, not with the game").
 //
-// The hook: the call inside the check (vanilla "48 8B 01 FF 50 38", the gamepad device's IsEnabled; Auto Input Switch writes
-// a six-byte indirect call there) is replaced with a call to this mod, which passes the question on to whatever was there.
+// So while UVC's Controls page is open, Auto Input Switch's sink is taken off the game's input source (found by its vtable
+// lying in AutoInputSwitch.dll) and put back the moment the page closes. The game and every other mod still get every input
+// event. Square on the controller (X on Xbox) or the switch at the top right of the page hands Auto Input Switch ONE event of
+// the other device - to it alone, never to the game - so it switches section and refreshes the menus as it always does.
+// No engine code is patched. Without Auto Input Switch the page follows the game's device and there is no section switch.
+//
+// 2026-11-11: the first form of this (commit d9afd58) chained a call hook after Auto Input Switch's own six-byte call at
+// 67320+0xD and crashed SE 1.5.97 at the first loading screen: CommonLibSSE-NG's write_call<6> returns the ADDRESS of the
+// indirect call's 8-byte pointer slot (nextOp + disp32), not the function stored in it, and that slot was called as code.
 
 #include <string>
 
 namespace devicepin
 {
-	// kInputLoaded (after Auto Input Switch's own hook, which it writes at plugin load).
+	// kInputLoaded: notes the using-controller check's address (called, never patched) and makes the two switch events.
 	void Install();
-	// Every journal frame: whether UVC's Controls page is the one shown. Opening pins the section shown; closing lets go.
+	// Every journal frame: whether UVC's Controls page is the one shown. Opening stands Auto Input Switch down; closing restores it.
 	void OnPage(bool a_open);
-	// Square / the page's switch: the other section. False when the hook is not there (the page then follows the game).
+	// Square / the page's switch: the other section. False when Auto Input Switch is not standing down for the page.
 	bool Toggle(const char* a_why);
-	bool Hooked();
+	// Auto Input Switch's sink was found (the page then offers the section switch).
+	bool Available();
 	bool Pinned();
 	std::string StateJson();
 }

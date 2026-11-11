@@ -13,51 +13,72 @@ namespace devicepin
 {
 	namespace
 	{
-		using Inner = bool (*)(void*);
+		using Sink = RE::BSTEventSink<RE::InputEvent*>;
 
-		Inner g_inner = nullptr;          // what was at the site: Auto Input Switch's function, or nullptr for the vanilla vfunc
-		std::atomic<bool> g_hooked{ false };
+		Sink* g_ais = nullptr;              // Auto Input Switch's input sink (its InputEventHandler), found by its vtable's module
+		std::uintptr_t g_aisBegin = 0;
+		std::uintptr_t g_aisEnd = 0;
+		bool g_aisLooked = false;
 		std::atomic<bool> g_onPage{ false };
-		std::atomic<bool> g_pinActive{ false };
-		std::atomic<bool> g_pinnedGamepad{ false };
-		std::atomic<int> g_answered{ 0 };  // questions answered by the pin
+		std::atomic<bool> g_standing{ false };  // Auto Input Switch's sink is off the input source while the page is open
 		std::atomic<int> g_toggles{ 0 };
-		std::string g_siteText = "not hooked";
-		std::uintptr_t g_check = 0;        // the using-gamepad check's entry (a member of BSInputDeviceManager)
+		std::string g_status = "not looked for yet (the Controls page has not opened)";
+		std::uintptr_t g_check = 0;          // the game's using-controller check (BSInputDeviceManager), called, never patched
 
-		// The question as it was asked before: Auto Input Switch's answer, or the vanilla call (the gamepad device's IsEnabled,
-		// vtable slot 7: "mov rax,[rcx]; call [rax+38h]").
-		bool Unpinned(void* a_device)
+		// One event per device, made once with the game's own vtable (Auto Input Switch 1.1.x runs skyrim_cast on it) and kept.
+		RE::ButtonEvent* g_keyboardEvent = nullptr;
+		RE::ButtonEvent* g_gamepadEvent = nullptr;
+
+		bool AisModule()
 		{
-			if (g_inner) { return g_inner(a_device); }
-			if (!a_device) { return false; }
-			auto** vtbl = *reinterpret_cast<void***>(a_device);
-			return reinterpret_cast<Inner>(vtbl[7])(a_device);
+			const auto module = reinterpret_cast<std::uintptr_t>(REX::W32::GetModuleHandleA("AutoInputSwitch.dll"));
+			if (!module) { return false; }
+			// PE32+: e_lfanew at 0x3C; SizeOfImage at NT headers + 0x50
+			const auto nt = module + *reinterpret_cast<const std::uint32_t*>(module + 0x3C);
+			const auto size = *reinterpret_cast<const std::uint32_t*>(nt + 0x50);
+			g_aisBegin = module;
+			g_aisEnd = module + size;
+			return size != 0;
 		}
 
-		bool Answer(void* a_device)
+		// The sink of Auto Input Switch's on the game's input source: the one whose vtable lives in AutoInputSwitch.dll.
+		Sink* FindAisSink(RE::BSInputDeviceManager* a_manager)
 		{
-			if (g_pinActive.load(std::memory_order_relaxed))
+			RE::BSSpinLockGuard locker(a_manager->lock);
+			for (auto* sink : a_manager->sinks)
 			{
-				g_answered.fetch_add(1, std::memory_order_relaxed);
-				return g_pinnedGamepad.load(std::memory_order_relaxed);
+				if (!sink) { continue; }
+				const auto vtbl = *reinterpret_cast<const std::uintptr_t*>(sink);
+				if (vtbl >= g_aisBegin && vtbl < g_aisEnd) { return sink; }
 			}
-			return Unpinned(a_device);
+			return nullptr;
 		}
 
-		void RefreshMenus()
+		bool Look(RE::BSInputDeviceManager* a_manager)
 		{
-			if (auto* tasks = SKSE::GetTaskInterface())
+			if (g_ais) { return true; }
+			if (!g_aisLooked)
 			{
-				tasks->AddUITask([]() {
-					auto* ui = RE::UI::GetSingleton();
-					if (!ui) { return; }
-					for (auto& menu : ui->menuStack)
-					{
-						if (menu) { menu->RefreshPlatform(); }
-					}
-				});
+				g_aisLooked = true;
+				if (!AisModule())
+				{
+					g_status = "Auto Input Switch is not loaded - the page follows the game's device, as the game itself never switches it on a key";
+					logger::info("controls page: {}", g_status);
+					return false;
+				}
 			}
+			if (!g_aisEnd) { return false; }
+			g_ais = FindAisSink(a_manager);
+			if (!g_ais)
+			{
+				g_status = "Auto Input Switch is loaded but its input sink is not on the game's input source - nothing is changed";
+				logger::warn("controls page: {}", g_status);
+				return false;
+			}
+			g_status = std::format("Auto Input Switch's input sink found (AutoInputSwitch.dll+0x{:X})",
+								   reinterpret_cast<std::uintptr_t>(g_ais) - g_aisBegin);
+			logger::info("controls page: {}", g_status);
+			return true;
 		}
 
 		bool AskGame()
@@ -70,77 +91,68 @@ namespace devicepin
 
 	void Install()
 	{
-		// The call inside BSInputDeviceManager's using-gamepad check; the same sites Auto Input Switch hooks (its source, MIT).
-		std::uintptr_t site = 0;
+		// Nothing is written into the game: only the address of the using-controller check, to ask which section is shown.
 		std::uint64_t id = 0;
-		std::size_t offset = 0;
-		if (!REL::Module::IsAE()) { id = 67320; offset = 0xD; }
-		else if (REL::Module::get().version().compare(SKSE::RUNTIME_SSE_1_6_1130) == std::strong_ordering::less) { id = 68622; offset = 0xD; }
-		else { id = 443396; offset = 0x20; }  // 1.6.1130 and later: a Steam Deck check in front of the same call
+		if (!REL::Module::IsAE()) { id = 67320; }
+		else if (REL::Module::get().version().compare(SKSE::RUNTIME_SSE_1_6_1130) == std::strong_ordering::less) { id = 68622; }
+		else { id = 443396; }
 		g_check = REL::ID(id).address();
-		site = g_check + offset;
-		const auto rva = site - REL::Module::get().base();
-		auto& trampoline = SKSE::GetTrampoline();
-		if (REL::make_pattern<"FF 15">().match(site))
-		{
-			g_inner = reinterpret_cast<Inner>(trampoline.write_call<6>(site, &Answer));
-			g_siteText = std::format("ID {} +0x{:X} (0x{:X}), after another mod's hook (Auto Input Switch's shape)", id, offset, rva);
-		}
-		else if (REL::make_pattern<"48 8B 01 FF 50 38">().match(site))
-		{
-			g_inner = nullptr;
-			trampoline.write_call<6>(site, &Answer);
-			g_siteText = std::format("ID {} +0x{:X} (0x{:X}), vanilla", id, offset, rva);
-		}
-		else
-		{
-			logger::error("controls page: the using-controller check at ID {} +0x{:X} (0x{:X}) does not look as expected; NOT hooked - the page follows the game's device, and Square does not switch it", id, offset, rva);
-			return;
-		}
-		g_hooked = true;
-		logger::info("controls page: using-controller check hooked at {}; it is answered by the page's own section only while the Controls page is open{}",
-					 g_siteText, REX::W32::GetModuleHandleA("AutoInputSwitch.dll") ? " (Auto Input Switch is loaded and works as normal everywhere else)" : "");
+		g_keyboardEvent = RE::ButtonEvent::Create(RE::INPUT_DEVICE::kKeyboard, RE::BSFixedString{}, 0, 0.0F, 0.0F);
+		g_gamepadEvent = RE::ButtonEvent::Create(RE::INPUT_DEVICE::kGamepad, RE::BSFixedString{}, 0, 0.0F, 0.0F);
+		logger::info("controls page: section switch ready (no engine hook); Auto Input Switch {} - it stands down only while UVC's Controls page is open",
+					 REX::W32::GetModuleHandleA("AutoInputSwitch.dll") ? "is loaded" : "is not loaded");
 	}
 
 	void OnPage(bool a_open)
 	{
 		if (a_open == g_onPage.load()) { return; }
 		g_onPage = a_open;
-		if (!g_hooked.load()) { return; }
+		auto* manager = RE::BSInputDeviceManager::GetSingleton();
+		if (!manager) { return; }
 		if (a_open)
 		{
-			const bool pad = AskGame();  // the pin is not on yet: this is the game's (or Auto Input Switch's) own answer
-			g_pinnedGamepad = pad;
-			g_pinActive = true;
-			logger::info("controls page: opened on the {} section; it stays there until Square or the page's switch", pad ? "controller" : "keyboard and mouse");
+			if (!Look(manager)) { return; }
+			manager->RemoveEventSink(g_ais);
+			g_standing = true;
+			logger::info("controls page: opened on the {} section; Auto Input Switch stands down until the page closes - Square or the page's switch changes the section",
+						 AskGame() ? "controller" : "keyboard and mouse");
 		}
-		else
+		else if (g_standing.exchange(false))
 		{
-			g_pinActive = false;
-			logger::info("controls page: closed; the game picks the device again ({} now)", AskGame() ? "controller" : "keyboard and mouse");
-			RefreshMenus();
+			manager->AddEventSink(g_ais);
+			logger::info("controls page: closed; Auto Input Switch switches as normal again ({} now)", AskGame() ? "controller" : "keyboard and mouse");
 		}
 	}
 
 	bool Toggle(const char* a_why)
 	{
-		if (!g_hooked.load() || !g_pinActive.load()) { return false; }
-		const bool pad = !g_pinnedGamepad.load();
-		g_pinnedGamepad = pad;
+		if (!g_standing.load() || !g_ais) { return false; }
+		auto* manager = RE::BSInputDeviceManager::GetSingleton();
+		if (!manager) { return false; }
+		const bool wasPad = AskGame();
+		RE::ButtonEvent* event = wasPad ? g_keyboardEvent : g_gamepadEvent;
+		if (!event) { return false; }
+		// Auto Input Switch is handed one event of the other device - only it, never the game - so it switches and refreshes the menus.
+		RE::InputEvent* list = event;
+		g_ais->ProcessEvent(&list, manager);
+		const bool nowPad = AskGame();
+		if (nowPad == wasPad)
+		{
+			logger::info("controls page: {} - Auto Input Switch kept the {} section (its platform setting forces one device)", a_why, wasPad ? "controller" : "keyboard and mouse");
+			return false;
+		}
 		g_toggles.fetch_add(1);
-		logger::info("controls page: the {} section ({})", pad ? "controller" : "keyboard and mouse", a_why);
-		RefreshMenus();
+		logger::info("controls page: the {} section ({})", nowPad ? "controller" : "keyboard and mouse", a_why);
 		return true;
 	}
 
-	bool Hooked() { return g_hooked.load(); }
-	bool Pinned() { return g_pinActive.load(); }
+	bool Available() { return g_ais != nullptr; }
+	bool Pinned() { return g_standing.load(); }
 
 	std::string StateJson()
 	{
-		return std::format("\"devicePin\":{{\"hooked\":{},\"site\":\"{}\",\"chained\":{},\"onPage\":{},\"pinned\":{},\"section\":\"{}\",\"answered\":{},\"toggles\":{},\"gameSays\":\"{}\"}}",
-						   g_hooked.load() ? "true" : "false", g_siteText, g_inner ? "true" : "false", g_onPage.load() ? "true" : "false",
-						   g_pinActive.load() ? "true" : "false", g_pinnedGamepad.load() ? "gamepad" : "keyboard", g_answered.load(), g_toggles.load(),
-						   g_pinActive.load() ? "pinned" : (AskGame() ? "gamepad" : "keyboard"));
+		return std::format("\"devicePin\":{{\"engineHook\":false,\"autoInputSwitch\":{},\"status\":\"{}\",\"onPage\":{},\"standingDown\":{},\"section\":\"{}\",\"toggles\":{}}}",
+						   g_ais ? "true" : "false", g_status, g_onPage.load() ? "true" : "false", g_standing.load() ? "true" : "false",
+						   AskGame() ? "gamepad" : "keyboard", g_toggles.load());
 	}
 }

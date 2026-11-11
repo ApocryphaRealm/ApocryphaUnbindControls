@@ -2834,7 +2834,7 @@ namespace controlslist
 			const bool playStationNames = settings::controls::gamepadFaces == settings::controls::Faces::kPlayStation ||
 			                              (settings::controls::gamepadFaces != settings::controls::Faces::kXbox && settings::controls::gamepadFaces != settings::controls::Faces::kSteam && unbinder::GamepadButtonName(0x0100).starts_with("PS"));
 			std::string position = std::format("{}  {}/{}", playStationNames ? "L1" : "LB", selectedLine.blockIndex, g_sheet.blocks.size());
-			if (devicepin::Hooked() && devicepin::Pinned())
+			if (devicepin::Available() && devicepin::Pinned())
 			{
 				const std::string other = gamepad ? TR("UVCL_ShowKeyboard", "Show keyboard") : TR("UVCL_ShowController", "Show controller");
 				position = std::format("{}: {}     {}", playStationNames ? TR("UVCL_Square", "Square") : std::string("X"), other, position);
