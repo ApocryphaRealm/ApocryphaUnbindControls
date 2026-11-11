@@ -33,7 +33,14 @@ namespace
 		{
 		case SKSE::MessagingInterface::kInputLoaded:
 			padtokey::Install();   // [PadToKey]: the input dispatch
-			devicepin::Install();  // the Controls page keeps its section until Square; after Auto Input Switch's own hook (written at its load)
+			// The Controls page keeps its section until Square; after Auto Input Switch's own hook (written at its load).
+			// 2026-11-10: the hook crashed the game at the first loading screen (EXCEPTION_ILLEGAL_INSTRUCTION at the
+			// using-controller check, test 3aa4), so it is OFF unless [General] bControlsPagePin=1 until it is fixed.
+			if (::GetPrivateProfileIntA("General", "bControlsPagePin", 0, settings::GetIniPath().c_str()) != 0) {
+				devicepin::Install();
+			} else {
+				logger::info("device pin: off ([General] bControlsPagePin=0) - the Controls page follows the game's device switching");
+			}
 			break;
 		case SKSE::MessagingInterface::kPostLoad:
 			DevBenchTool::Init(false);

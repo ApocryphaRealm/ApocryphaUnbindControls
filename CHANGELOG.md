@@ -21,6 +21,9 @@ Rule 61: this mod's own history, kept beside the code it describes.
 ### Removed (never posted)
 - The game-wide controller-or-keyboard lock ([InputLock]) of the first 1.6.0 build of 2026-11-09 (commit aff6f67, untested): it answered the using-controller check everywhere, so Auto Input Switch stopped working in gameplay and in every menu, which is not what UVC is for (the owner, 2026-11-10: 'The unbind vanilla controls is not supposed to actually prevent auto input switch from working in game'). Its hooks, toggles (Back+Start, F7) and notifications are gone; an [InputLock] section left in a player's INI is not read and does nothing. [PadToKey] keeps the input dispatch hook it shared.
 
+### Fixed
+- The Controls page's device pin is OFF by default ([General] bControlsPagePin=0): its hook crashed the game at the first loading screen (test 3aa4). The rest of 1.6.0 - your bindings, [PadToKey], the layout graphic on RB - works as before.
+
 ## 1.5.0 - 2026-11-06 - untested
 
 ### Added
