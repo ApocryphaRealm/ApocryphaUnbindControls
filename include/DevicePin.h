@@ -32,5 +32,12 @@ namespace devicepin
 	// Auto Input Switch's sink was found (the page then offers the section switch).
 	bool Available();
 	bool Pinned();
+	// The section the page shows: true for the controller's bindings (the game's using-controller answer, which only the switch
+	// changes while the page is open).
+	bool ControllerSection();
+	// The device the player touched last - a key, a mouse click or move, a pad button, a stick pushed past half - noted by the
+	// Controls list's input sink (main thread). The page's hint names Square / X for a pad and the click for the keyboard and mouse.
+	void NoteInput(const RE::InputEvent* a_event);
+	bool PadInUse();
 	std::string StateJson();
 }

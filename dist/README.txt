@@ -101,6 +101,9 @@ Square (X on an Xbox pad) or a click on "Show keyboard" / "Show controller" at t
 controller's bindings are shown never flips the page to the keyboard's, and a button never flips it back, so you can bind a
 keyboard key with the controller in your hands. This is only on this page: everywhere else the game (or Auto Input Switch)
 switches between controller and keyboard as it always does, and it does again the moment you leave the page.
+The hint at the bottom right says where the switch goes, beside RB Controller Layout: Square (X) with "Keyboard and mouse
+controls" or "Controller controls" while you use the controller, "Click the top right: ..." while you use the keyboard or
+mouse. The switch, and its hint, are there when Auto Input Switch is installed.
 Select a row and press Accept (or click it), then press the new key. A key another gameplay control uses
 is swapped with it, the way the game does it; a key the game reserves is refused. Hold the Modifier (Left
 Trigger on a controller) and press a button to bind a combination, shown as two key pictures.
@@ -239,7 +242,7 @@ you row, steer or sit in a boat (see IN A BOAT). With no [Boat] lines nothing ch
 Added Sprint or Sneak for Controller compatibility: its crouch button is shown on Sprint's button.
 Changed the Controls page to stay on the controller's or the keyboard's bindings until you switch with Square (X on Xbox)
 or the switch at the top right: a keyboard key no longer flips the page while you are on the controller's bindings. Only on
-that page; Auto Input Switch works as normal everywhere else.
+that page; Auto Input Switch works as normal everywhere else. A hint at the bottom right of the page names the switch.
 Changed the controller graphic to open on RB (R1); Square is the page's switch now. LB still changes the block.
 Added Auto-Move on the controller: a row on the controller page, on the left stick click out of the box once Sneak is off it.
 Added [PadToKey] in the INI: a controller button (optionally with a held modifier) that presses a keyboard key, for mods

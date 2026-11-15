@@ -918,6 +918,7 @@ namespace controlslist
 				const bool journalOpen = g_journalOpen.load();
 				for (auto* e = *a_event; e; e = e->next)
 				{
+					devicepin::NoteInput(e);  // the device in the player's hands, for the section switch's hint
 					if (e->GetEventType() != RE::INPUT_EVENT_TYPE::kButton) { continue; }
 					auto* button = e->AsButtonEvent();
 					if (!button) { continue; }

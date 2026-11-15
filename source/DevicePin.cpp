@@ -6,6 +6,8 @@
 #include "utils/Logger.h"
 
 #include <atomic>
+#include <cmath>
+#include <cstdlib>
 #include <format>
 #include <string>
 
@@ -22,6 +24,7 @@ namespace devicepin
 		std::atomic<bool> g_onPage{ false };
 		std::atomic<bool> g_standing{ false };  // Auto Input Switch's sink is off the input source while the page is open
 		std::atomic<int> g_toggles{ 0 };
+		std::atomic<int> g_lastPad{ -1 };  // the device touched last: 1 the pad, 0 the keyboard or mouse, -1 nothing yet
 		std::string g_status = "not looked for yet (the Controls page has not opened)";
 		std::uintptr_t g_check = 0;          // the game's using-controller check (BSInputDeviceManager), called, never patched
 
@@ -148,11 +151,50 @@ namespace devicepin
 
 	bool Available() { return g_ais != nullptr; }
 	bool Pinned() { return g_standing.load(); }
+	bool ControllerSection() { return AskGame(); }
+
+	void NoteInput(const RE::InputEvent* a_event)
+	{
+		if (!a_event) { return; }
+		switch (a_event->GetEventType())
+		{
+		case RE::INPUT_EVENT_TYPE::kButton:
+			{
+				const auto* button = a_event->AsButtonEvent();
+				if (!button || !button->IsDown()) { return; }  // a press: not a release, not a key held
+				break;
+			}
+		case RE::INPUT_EVENT_TYPE::kMouseMove:
+			{
+				const auto* move = a_event->AsMouseMoveEvent();
+				if (!move || std::abs(move->mouseInputX) + std::abs(move->mouseInputY) < 3) { return; }  // a nudge of the desk is not the mouse in use
+				break;
+			}
+		case RE::INPUT_EVENT_TYPE::kThumbstick:
+			{
+				const auto* stick = a_event->AsThumbstickEvent();
+				if (!stick || (std::abs(stick->xValue) < 0.5F && std::abs(stick->yValue) < 0.5F)) { return; }  // drift is not the pad in use
+				break;
+			}
+		default:
+			return;
+		}
+		const auto device = a_event->GetDevice();
+		if (device == RE::INPUT_DEVICE::kGamepad) { g_lastPad = 1; }
+		else if (device == RE::INPUT_DEVICE::kKeyboard || device == RE::INPUT_DEVICE::kMouse) { g_lastPad = 0; }
+	}
+
+	bool PadInUse()
+	{
+		const int last = g_lastPad.load();
+		return last < 0 ? AskGame() : last == 1;  // nothing touched yet: the device the game is on
+	}
 
 	std::string StateJson()
 	{
-		return std::format("\"devicePin\":{{\"engineHook\":false,\"autoInputSwitch\":{},\"status\":\"{}\",\"onPage\":{},\"standingDown\":{},\"section\":\"{}\",\"toggles\":{}}}",
+		const int last = g_lastPad.load();
+		return std::format("\"devicePin\":{{\"engineHook\":false,\"autoInputSwitch\":{},\"status\":\"{}\",\"onPage\":{},\"standingDown\":{},\"section\":\"{}\",\"toggles\":{},\"lastInput\":\"{}\"}}",
 						   g_ais ? "true" : "false", g_status, g_onPage.load() ? "true" : "false", g_standing.load() ? "true" : "false",
-						   AskGame() ? "gamepad" : "keyboard", g_toggles.load());
+						   AskGame() ? "gamepad" : "keyboard", g_toggles.load(), last < 0 ? "none" : (last == 1 ? "gamepad" : "keyboard"));
 	}
 }

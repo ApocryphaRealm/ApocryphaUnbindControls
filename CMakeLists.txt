@@ -8,7 +8,7 @@ project(
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
-set(CMAKE_INTERPROCEDURAL_OPTIMIZATION ON)
+set(CMAKE_INTERPROCEDURAL_OPTIMIZATION OFF)  # /GL + /LTCG under MSVC 14.52 trips an antivirus heuristic (gate row dll-built-without-ltcg)
 set(CMAKE_INTERPROCEDURAL_OPTIMIZATION_DEBUG OFF)
 
 configure_file(

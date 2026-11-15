@@ -24,6 +24,8 @@
 
 #include "layout/Layout.h"
 
+#include "DevicePin.h"
+
 #include "layout/PadTables.h"
 #include "layout/LayoutRows.h"
 #include "layout/SteamConfig.h"
@@ -440,6 +442,7 @@ namespace layout
 			bool apiThere = false;
 			bool open = false;
 			bool hintShown = false;
+			std::string hintSwitch;  // the section switch's text in the hint row, empty when none is shown
 			int rowsSeen = 0;
 			int fields = 0;
 			double scale = 0.0;
@@ -842,7 +845,38 @@ namespace layout
 			if (g_open.exchange(false)) { logger::info("layout: closed"); }
 		}
 
-		// The line on the Controls page that says the graphic is there.
+		// The section switch's part of the hint row (the owner, 2026-11-15: "the player doesn't even know that they're supposed to press X
+		// to switch to keyboard layout"): where the switch goes from the section shown, named for the device in the player's hands. No
+		// text when the page has no switch (Auto Input Switch is not standing down for it - see DevicePin.h).
+		struct SwitchHint
+		{
+			std::string text;
+			bool pad = false;
+			int key = 0;  // what it was made from: a change rebuilds the row
+		};
+
+		SwitchHint SwitchHintNow()
+		{
+			SwitchHint out;
+			if (!devicepin::Pinned()) { return out; }
+			const bool controllerShown = devicepin::ControllerSection();
+			out.pad = devicepin::PadInUse();
+			out.key = 1 + (out.pad ? 2 : 0) + (controllerShown ? 4 : 0);
+			if (out.pad)
+			{
+				out.text = controllerShown ? TR("UVCL_HintToKeyboard", "Keyboard and mouse controls") : TR("UVCL_HintToController", "Controller controls");
+			}
+			else
+			{
+				out.text = controllerShown ? TR("UVCL_HintClickToKeyboard", "Click the top right: Keyboard and mouse controls") :
+				                             TR("UVCL_HintClickToController", "Click the top right: Controller controls");
+			}
+			return out;
+		}
+
+		std::string g_switchHint;  // main thread: the switch's text in the row last built, for the tool
+
+		// The line on the Controls page that says the graphic is there, and the section switch.
 		void BuildHint(RE::GFxMovieView* a_movie, RE::GFxValue& a_page)
 		{
 			RemoveClip(a_movie, kHintName);
@@ -869,7 +903,20 @@ namespace layout
 			steamconfig::Refresh();  // Auto's pad, for the Square or X drawn here
 			const auto faces = FacesNow(a_page);
 			Pill(canvas, { right - width - 30.0, y }, 40.0, 22.0, rows::ShortName(rows::kRB, faces), 13.0);
-			logger::debug("layout: hint built at right {} y {}, text width {}", right, y, width);
+
+			// the section switch, in the same row to the left: Square (X on Xbox) on a pad, the click at the top right on the keyboard
+			const auto hint = SwitchHintNow();
+			g_switchHint = hint.text;
+			double switchWidth = 0.0;
+			if (!hint.text.empty())
+			{
+				const double switchRight = right - width - 50.0 - 36.0;  // the RB pill's left edge, then a gap
+				auto switchField = Text(canvas, switchRight - 440.0, y - 11.0, 440.0, 24.0, hint.text, { 16.0, kText, "right", true });
+				switchWidth = 300.0;
+				if (switchField.IsDisplayObject()) { (void)Number(switchField, "textWidth", switchWidth); }
+				if (hint.pad) { FaceGlyph(canvas, rows::kX, faces, { switchRight - switchWidth - 18.0, y }, 11.0); }
+			}
+			logger::debug("layout: hint built at right {} y {}, text width {}; switch \"{}\" ({}), width {}", right, y, width, hint.text, hint.pad ? "pad" : "keyboard", switchWidth);
 		}
 
 		// The page's handleInput, wrapped outside UVC's wrap.
@@ -1053,6 +1100,17 @@ namespace layout
 				hintMovie = a_movie;
 				hintBuilt = false;
 			}
+			// the switch flipped the section, or the player picked up the other device: the row says the new way across
+			if (onControls)
+			{
+				static int hintKey = -1;
+				const int key = SwitchHintNow().key;
+				if (key != hintKey)
+				{
+					hintKey = key;
+					hintBuilt = false;
+				}
+			}
 			const bool wantHint = onControls && state.wrapped && !state.remap && !g_open.load();
 			if (wantHint && !hintBuilt)
 			{
@@ -1064,6 +1122,7 @@ namespace layout
 			{
 				hint.SetMember("_visible", RE::GFxValue(wantHint));
 				state.hintShown = wantHint;
+				state.hintSwitch = wantHint ? g_switchHint : std::string();
 			}
 			else
 			{
@@ -1114,8 +1173,8 @@ namespace layout
 			s = g_state;
 		}
 		return std::format(
-			R"("faces":"{}","facesDrawn":"{}","facesFrom":"{}","steamInput":{},"configRead":{},"configType":"{}","steamWhy":"{}","pictureWidth":{},"context":"{}","contextIndex":{},"contextCount":{},"apiThere":{},"pageFound":{},"pagePath":"{}","pageState":{},"onControls":{},"remap":{},"uvcWrapSeen":{},"wrapped":{},"open":{},"hintShown":{},"hintRight":{},"hintY":{},"rowsSeen":{},"textFields":{},"scale":{},"originX":{},"originY":{},"font":"{}","boxes":{})",
-			layoutsettings::FacesName(layoutsettings::faces.load()), s.facesDrawn, JsonEscape(s.facesFrom), s.steamInput, s.configRead, JsonEscape(s.configType), JsonEscape(s.steamWhy), s.pictureWidth, s.contextId, s.contextIndex, s.contextCount, s.apiThere, s.pageFound, JsonEscape(s.path), s.pageState, s.pageState == kInputMappingState, s.remap, s.uvcWrapSeen, s.wrapped, s.open, s.hintShown,
+			R"("faces":"{}","facesDrawn":"{}","facesFrom":"{}","steamInput":{},"configRead":{},"configType":"{}","steamWhy":"{}","pictureWidth":{},"context":"{}","contextIndex":{},"contextCount":{},"apiThere":{},"pageFound":{},"pagePath":"{}","pageState":{},"onControls":{},"remap":{},"uvcWrapSeen":{},"wrapped":{},"open":{},"hintShown":{},"hintSwitch":"{}","hintRight":{},"hintY":{},"rowsSeen":{},"textFields":{},"scale":{},"originX":{},"originY":{},"font":"{}","boxes":{})",
+			layoutsettings::FacesName(layoutsettings::faces.load()), s.facesDrawn, JsonEscape(s.facesFrom), s.steamInput, s.configRead, JsonEscape(s.configType), JsonEscape(s.steamWhy), s.pictureWidth, s.contextId, s.contextIndex, s.contextCount, s.apiThere, s.pageFound, JsonEscape(s.path), s.pageState, s.pageState == kInputMappingState, s.remap, s.uvcWrapSeen, s.wrapped, s.open, s.hintShown, JsonEscape(s.hintSwitch),
 			g_hintRight.load(), g_hintY.load(), s.rowsSeen, s.fields, s.scale, s.originX, s.originY, JsonEscape(s.font), s.boxes.empty() ? "{}" : s.boxes);
 	}
 }
